@@ -1,0 +1,17 @@
+resources:
+  pipelines:
+    providers_pipeline:
+      name: "[${bundle.target}] Red Bricks — Providers Pipeline"
+      catalog: ${var.catalog}
+      target: ${var.schema}
+      configuration:
+        source_volume: ${var.source_volume}
+      libraries:
+        - file:
+            path: ../src/pipelines/providers/bronze.sql
+        - file:
+            path: ../src/pipelines/providers/silver.sql
+        - file:
+            path: ../src/pipelines/providers/gold.sql
+      channel: PREVIEW
+      development: true

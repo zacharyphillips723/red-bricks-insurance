@@ -1,0 +1,22 @@
+.databricks/
+.venv/
+__pycache__/
+*.pyc
+.env
+.env.local
+.DS_Store
+*.egg-info/
+dist/
+build/
+
+# Frontend
+app/frontend/node_modules/
+app/frontend/dist/
+
+# Build artifacts served by FastAPI
+app/static/
+
+# IDE
+.idea/
+.vscode/
+*.swp

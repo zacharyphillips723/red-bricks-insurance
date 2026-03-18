@@ -1,0 +1,17 @@
+resources:
+  pipelines:
+    underwriting_pipeline:
+      name: "[${bundle.target}] Red Bricks — Underwriting Pipeline"
+      catalog: ${var.catalog}
+      target: ${var.schema}
+      configuration:
+        source_volume: ${var.source_volume}
+      libraries:
+        - file:
+            path: ../src/pipelines/underwriting/bronze.sql
+        - file:
+            path: ../src/pipelines/underwriting/silver.sql
+        - file:
+            path: ../src/pipelines/underwriting/gold.sql
+      channel: PREVIEW
+      development: true

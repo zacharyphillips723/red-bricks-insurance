@@ -1,0 +1,1585 @@
+{
+  "datasets": [
+    {
+      "name": "ds_dq_domain_counts",
+      "displayName": "DQ Domain Pass/Drop Rates",
+      "queryLines": [
+        "SELECT domain, bronze_count, silver_count,   bronze_count - silver_count AS dropped_count,   ROUND(silver_count * 100.0 / NULLIF(bronze_count, 0), 2) AS pass_rate_pct,   ROUND((bronze_count - silver_count) * 100.0 / NULLIF(bronze_count, 0), 2) AS drop_rate_pct FROM (   SELECT 'Members' AS domain, (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.bronze_members) AS bronze_count, (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.silver_members) AS silver_count   UNION ALL SELECT 'Enrollment', (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.bronze_enrollment), (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.silver_enrollment)   UNION ALL SELECT 'Claims Medical', (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.bronze_claims_medical), (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.silver_claims_medical)   UNION ALL SELECT 'Claims Pharmacy', (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.bronze_claims_pharmacy), (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.silver_claims_pharmacy)   UNION ALL SELECT 'Encounters', (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.bronze_encounters), (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.silver_encounters)   UNION ALL SELECT 'Lab Results', (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.bronze_lab_results), (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.silver_lab_results)   UNION ALL SELECT 'Vitals', (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.bronze_vitals), (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.silver_vitals)   UNION ALL SELECT 'Providers', (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.bronze_providers), (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.silver_providers)   UNION ALL SELECT 'Underwriting', (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.bronze_underwriting), (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.silver_underwriting)   UNION ALL SELECT 'Risk Adj Member', (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.bronze_risk_adjustment_member), (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.silver_risk_adjustment_member)   UNION ALL SELECT 'Risk Adj Provider', (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.bronze_risk_adjustment_provider), (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.silver_risk_adjustment_provider) ) "
+      ]
+    },
+    {
+      "name": "ds_dq_totals",
+      "displayName": "DQ Pipeline Totals",
+      "queryLines": [
+        "SELECT SUM(bronze_count) AS total_ingested, SUM(silver_count) AS total_passed,   SUM(bronze_count) - SUM(silver_count) AS total_dropped,   ROUND(SUM(silver_count) * 100.0 / NULLIF(SUM(bronze_count), 0), 2) AS overall_pass_rate,   ROUND((SUM(bronze_count) - SUM(silver_count)) * 100.0 / NULLIF(SUM(bronze_count), 0), 2) AS overall_drop_rate FROM (   SELECT (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.bronze_members) AS bronze_count, (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.silver_members) AS silver_count   UNION ALL SELECT (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.bronze_enrollment), (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.silver_enrollment)   UNION ALL SELECT (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.bronze_claims_medical), (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.silver_claims_medical)   UNION ALL SELECT (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.bronze_claims_pharmacy), (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.silver_claims_pharmacy)   UNION ALL SELECT (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.bronze_encounters), (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.silver_encounters)   UNION ALL SELECT (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.bronze_lab_results), (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.silver_lab_results)   UNION ALL SELECT (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.bronze_vitals), (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.silver_vitals)   UNION ALL SELECT (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.bronze_providers), (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.silver_providers)   UNION ALL SELECT (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.bronze_underwriting), (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.silver_underwriting)   UNION ALL SELECT (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.bronze_risk_adjustment_member), (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.silver_risk_adjustment_member)   UNION ALL SELECT (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.bronze_risk_adjustment_provider), (SELECT COUNT(*) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.silver_risk_adjustment_provider) ) "
+      ]
+    },
+    {
+      "name": "ds_dq_claims_detail",
+      "displayName": "Claims DQ by Type and Status",
+      "queryLines": [
+        "SELECT claim_type, claim_status,   SUM(total_claims) AS total_claims,   ROUND(AVG(denial_rate) * 100, 2) AS avg_denial_rate_pct FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.gold_claims_summary GROUP BY claim_type, claim_status "
+      ]
+    },
+    {
+      "name": "ds_claims_trend",
+      "displayName": "Claims Trend Over Time",
+      "queryLines": [
+        "SELECT claim_type, service_year_month,   SUM(total_claims) AS total_claims,   SUM(total_paid) AS total_paid,   ROUND(AVG(denial_rate) * 100, 2) AS denial_rate_pct FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.gold_claims_summary WHERE service_year_month >= '2023-01-01' GROUP BY claim_type, service_year_month ORDER BY service_year_month "
+      ]
+    },
+    {
+      "name": "ds_pmpm_trend",
+      "displayName": "PMPM Trend by LOB",
+      "queryLines": [
+        "SELECT line_of_business, service_year_month,   ROUND(pmpm_paid, 2) AS pmpm_paid,   ROUND(pmpm_allowed, 2) AS pmpm_allowed,   member_months FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.gold_pmpm WHERE service_year_month >= '2023-01-01' ORDER BY service_year_month "
+      ]
+    },
+    {
+      "name": "ds_enrollment",
+      "displayName": "Enrollment Summary",
+      "queryLines": [
+        "SELECT line_of_business, plan_type,   active_member_count, total_member_count,   ROUND(avg_premium, 2) AS avg_premium,   ROUND(avg_risk_score, 3) AS avg_risk_score,   ROUND(churn_rate_pct, 2) AS churn_rate_pct FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.gold_enrollment_summary "
+      ]
+    },
+    {
+      "name": "ds_denial_by_category",
+      "displayName": "AI-Classified Denial Analysis",
+      "queryLines": [
+        "SELECT denial_category,   SUM(denial_count) AS denial_count,   ROUND(SUM(total_denied_amount), 2) AS total_denied_amount,   ROUND(AVG(avg_denied_amount), 2) AS avg_denied_amount FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.gold_denial_analysis GROUP BY denial_category "
+      ]
+    },
+    {
+      "name": "ds_denial_by_lob",
+      "displayName": "Denials by LOB and Category",
+      "queryLines": [
+        "SELECT denial_category, line_of_business,   SUM(denial_count) AS denial_count,   ROUND(SUM(total_denied_amount), 2) AS total_denied_amount FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.gold_denial_analysis GROUP BY denial_category, line_of_business "
+      ]
+    },
+    {
+      "name": "ds_exec_kpis",
+      "displayName": "Executive KPIs",
+      "queryLines": [
+        "SELECT   (SELECT SUM(active_member_count) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.gold_enrollment_summary) AS total_active_members,   (SELECT ROUND(SUM(total_paid), 2) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.gold_claims_summary) AS total_claims_paid,   (SELECT COUNT(DISTINCT claim_type) FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.gold_claims_summary) AS claim_types "
+      ]
+    },
+    {
+      "name": "ds_mlr",
+      "displayName": "Medical Loss Ratio by LOB",
+      "queryLines": [
+        "SELECT line_of_business, service_year,   ROUND(medical_claims_paid, 2) AS medical_claims_paid,   ROUND(total_premiums, 2) AS total_premiums,   ROUND(mlr, 4) AS mlr,   CAST(target_mlr AS DOUBLE) AS target_mlr FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.gold_mlr WHERE mlr IS NOT NULL AND total_premiums IS NOT NULL AND total_premiums > 0 "
+      ]
+    },
+    {
+      "name": "ds_risk_adjustment",
+      "displayName": "Risk Adjustment Analysis",
+      "queryLines": [
+        "SELECT line_of_business, model_year, member_count,   ROUND(avg_raf_score, 3) AS avg_raf_score,   ROUND(pct_high_risk * 100, 2) AS pct_high_risk,   ROUND(estimated_annual_revenue, 2) AS estimated_annual_revenue FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.gold_risk_adjustment_analysis "
+      ]
+    },
+    {
+      "name": "ds_member_demographics",
+      "displayName": "Member Demographics",
+      "queryLines": [
+        "SELECT line_of_business, age_band,   SUM(member_count) AS member_count FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.gold_member_demographics GROUP BY line_of_business, age_band "
+      ]
+    },
+    {
+      "name": "ds_ai_risk_narratives",
+      "displayName": "AI-Generated Risk Narratives",
+      "queryLines": [
+        "SELECT member_id, ROUND(raf_score, 2) AS raf_score,   hcc_codes, hcc_count, line_of_business, risk_rank,   clinical_summary FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.gold_member_risk_narrative WHERE risk_rank <= 20 ORDER BY risk_rank "
+      ]
+    },
+    {
+      "name": "ds_stars_provider",
+      "displayName": "Provider Star Ratings",
+      "queryLines": [
+        "SELECT star_rating, COUNT(*) AS provider_count FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.gold_stars_provider GROUP BY star_rating ORDER BY star_rating DESC "
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "data_quality",
+      "displayName": "Data Quality",
+      "layout": [
+        {
+          "widget": {
+            "name": "dq-title",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Data Quality Results"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "dq-subtitle",
+            "multilineTextboxSpec": {
+              "lines": [
+                "Pipeline data quality pass/drop rates across all domains \u2014 Bronze to Silver layer validation"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-total-ingested",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_dq_totals",
+                  "fields": [
+                    {
+                      "name": "total_ingested",
+                      "expression": "`total_ingested`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "total_ingested",
+                  "displayName": "Total Ingested"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Total Records Ingested"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-total-passed",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_dq_totals",
+                  "fields": [
+                    {
+                      "name": "total_passed",
+                      "expression": "`total_passed`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "total_passed",
+                  "displayName": "Total Passed"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Records Passed DQ"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-overall-pass-rate",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_dq_totals",
+                  "fields": [
+                    {
+                      "name": "overall_pass_rate",
+                      "expression": "`overall_pass_rate`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "overall_pass_rate",
+                  "displayName": "Overall Pass Rate %"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Overall Pass Rate (%)"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "dq-section-header",
+            "multilineTextboxSpec": {
+              "lines": [
+                "### Drop Rate by Domain"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "chart-drop-rate-by-domain",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_dq_domain_counts",
+                  "fields": [
+                    {
+                      "name": "domain",
+                      "expression": "`domain`"
+                    },
+                    {
+                      "name": "drop_rate_pct",
+                      "expression": "`drop_rate_pct`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "domain",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "Domain"
+                },
+                "y": {
+                  "fieldName": "drop_rate_pct",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Drop Rate (%)"
+                },
+                "label": {
+                  "show": true
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Record Drop Rate by Domain (%)"
+              },
+              "mark": {
+                "colors": [
+                  "#FF3621"
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 6,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "dq-counts-header",
+            "multilineTextboxSpec": {
+              "lines": [
+                "### Record Counts by Domain"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 12,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "chart-bronze-silver-counts",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_dq_domain_counts",
+                  "fields": [
+                    {
+                      "name": "domain",
+                      "expression": "`domain`"
+                    },
+                    {
+                      "name": "silver_count",
+                      "expression": "`silver_count`"
+                    },
+                    {
+                      "name": "dropped_count",
+                      "expression": "`dropped_count`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "domain",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Domain"
+                },
+                "y": {
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "fields": [
+                    {
+                      "fieldName": "silver_count",
+                      "displayName": "Passed (Silver)"
+                    },
+                    {
+                      "fieldName": "dropped_count",
+                      "displayName": "Dropped"
+                    }
+                  ]
+                },
+                "label": {
+                  "show": false
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Record Counts: Passed vs Dropped"
+              },
+              "mark": {
+                "colors": [
+                  "#00A972",
+                  "#FF3621"
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 13,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "dq-claims-header",
+            "multilineTextboxSpec": {
+              "lines": [
+                "### Claims Data Quality Detail"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 19,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "table-dq-domain-detail",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_dq_domain_counts",
+                  "fields": [
+                    {
+                      "name": "domain",
+                      "expression": "`domain`"
+                    },
+                    {
+                      "name": "bronze_count",
+                      "expression": "`bronze_count`"
+                    },
+                    {
+                      "name": "silver_count",
+                      "expression": "`silver_count`"
+                    },
+                    {
+                      "name": "dropped_count",
+                      "expression": "`dropped_count`"
+                    },
+                    {
+                      "name": "pass_rate_pct",
+                      "expression": "`pass_rate_pct`"
+                    },
+                    {
+                      "name": "drop_rate_pct",
+                      "expression": "`drop_rate_pct`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "domain",
+                    "displayName": "Domain"
+                  },
+                  {
+                    "fieldName": "bronze_count",
+                    "displayName": "Bronze (Ingested)"
+                  },
+                  {
+                    "fieldName": "silver_count",
+                    "displayName": "Silver (Passed)"
+                  },
+                  {
+                    "fieldName": "dropped_count",
+                    "displayName": "Dropped"
+                  },
+                  {
+                    "fieldName": "pass_rate_pct",
+                    "displayName": "Pass Rate (%)"
+                  },
+                  {
+                    "fieldName": "drop_rate_pct",
+                    "displayName": "Drop Rate (%)"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Data Quality Summary by Domain"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 20,
+            "width": 6,
+            "height": 6
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS"
+    },
+    {
+      "name": "kpis_metrics",
+      "displayName": "KPIs & Metrics",
+      "layout": [
+        {
+          "widget": {
+            "name": "kpi-title",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## KPIs & Metrics"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-subtitle",
+            "multilineTextboxSpec": {
+              "lines": [
+                "Claims trends, enrollment metrics, and AI-powered denial analysis"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "chart-claims-trend",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_claims_trend",
+                  "fields": [
+                    {
+                      "name": "monthly(service_year_month)",
+                      "expression": "DATE_TRUNC(\"MONTH\", `service_year_month`)"
+                    },
+                    {
+                      "name": "claim_type",
+                      "expression": "`claim_type`"
+                    },
+                    {
+                      "name": "sum(total_claims)",
+                      "expression": "SUM(`total_claims`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "monthly(service_year_month)",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "Month"
+                },
+                "y": {
+                  "fieldName": "sum(total_claims)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Total Claims"
+                },
+                "color": {
+                  "fieldName": "claim_type",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Claim Type"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Claims Volume Trend by Type"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "chart-pmpm-trend",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_pmpm_trend",
+                  "fields": [
+                    {
+                      "name": "monthly(service_year_month)",
+                      "expression": "DATE_TRUNC(\"MONTH\", `service_year_month`)"
+                    },
+                    {
+                      "name": "line_of_business",
+                      "expression": "`line_of_business`"
+                    },
+                    {
+                      "name": "avg(pmpm_paid)",
+                      "expression": "AVG(`pmpm_paid`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "monthly(service_year_month)",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "Month"
+                },
+                "y": {
+                  "fieldName": "avg(pmpm_paid)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "PMPM Paid ($)"
+                },
+                "color": {
+                  "fieldName": "line_of_business",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Line of Business"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Per Member Per Month (PMPM) Trend by LOB"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "chart-enrollment-by-lob",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_enrollment",
+                  "fields": [
+                    {
+                      "name": "line_of_business",
+                      "expression": "`line_of_business`"
+                    },
+                    {
+                      "name": "sum(active_member_count)",
+                      "expression": "SUM(`active_member_count`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "line_of_business",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "Line of Business"
+                },
+                "y": {
+                  "fieldName": "sum(active_member_count)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Active Members"
+                },
+                "label": {
+                  "show": true
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Active Enrollment by Line of Business"
+              },
+              "mark": {
+                "colors": [
+                  "#137CBD"
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 14,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "chart-denial-pie",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_denial_by_category",
+                  "fields": [
+                    {
+                      "name": "denial_category",
+                      "expression": "`denial_category`"
+                    },
+                    {
+                      "name": "denial_count",
+                      "expression": "`denial_count`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "pie",
+              "encodings": {
+                "angle": {
+                  "fieldName": "denial_count",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Denial Count"
+                },
+                "color": {
+                  "fieldName": "denial_category",
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "Administrative",
+                        "color": "#FFAB00"
+                      },
+                      {
+                        "value": "Clinical",
+                        "color": "#FF3621"
+                      },
+                      {
+                        "value": "Eligibility",
+                        "color": "#8BCAE7"
+                      },
+                      {
+                        "value": "Financial",
+                        "color": "#AB4057"
+                      }
+                    ]
+                  },
+                  "displayName": "Denial Category (AI-Classified)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "AI-Classified Denial Categories"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 14,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "chart-denial-by-lob",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_denial_by_lob",
+                  "fields": [
+                    {
+                      "name": "line_of_business",
+                      "expression": "`line_of_business`"
+                    },
+                    {
+                      "name": "denial_category",
+                      "expression": "`denial_category`"
+                    },
+                    {
+                      "name": "sum(denial_count)",
+                      "expression": "SUM(`denial_count`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "line_of_business",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Line of Business"
+                },
+                "y": {
+                  "fieldName": "sum(denial_count)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Denial Count"
+                },
+                "color": {
+                  "fieldName": "denial_category",
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "Administrative",
+                        "color": "#FFAB00"
+                      },
+                      {
+                        "value": "Clinical",
+                        "color": "#FF3621"
+                      },
+                      {
+                        "value": "Eligibility",
+                        "color": "#8BCAE7"
+                      },
+                      {
+                        "value": "Financial",
+                        "color": "#AB4057"
+                      }
+                    ]
+                  },
+                  "displayName": "Denial Category"
+                },
+                "label": {
+                  "show": false
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Denials by LOB & AI-Classified Category"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 20,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "table-enrollment-detail",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_enrollment",
+                  "fields": [
+                    {
+                      "name": "line_of_business",
+                      "expression": "`line_of_business`"
+                    },
+                    {
+                      "name": "plan_type",
+                      "expression": "`plan_type`"
+                    },
+                    {
+                      "name": "active_member_count",
+                      "expression": "`active_member_count`"
+                    },
+                    {
+                      "name": "avg_premium",
+                      "expression": "`avg_premium`"
+                    },
+                    {
+                      "name": "avg_risk_score",
+                      "expression": "`avg_risk_score`"
+                    },
+                    {
+                      "name": "churn_rate_pct",
+                      "expression": "`churn_rate_pct`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "line_of_business",
+                    "displayName": "Line of Business"
+                  },
+                  {
+                    "fieldName": "plan_type",
+                    "displayName": "Plan Type"
+                  },
+                  {
+                    "fieldName": "active_member_count",
+                    "displayName": "Active Members"
+                  },
+                  {
+                    "fieldName": "avg_premium",
+                    "displayName": "Avg Premium ($)"
+                  },
+                  {
+                    "fieldName": "avg_risk_score",
+                    "displayName": "Avg Risk Score"
+                  },
+                  {
+                    "fieldName": "churn_rate_pct",
+                    "displayName": "Churn Rate (%)"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Enrollment Detail by Plan"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 26,
+            "width": 6,
+            "height": 7
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS"
+    },
+    {
+      "name": "executive_summary",
+      "displayName": "Executive Summary",
+      "layout": [
+        {
+          "widget": {
+            "name": "exec-title",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Executive Summary"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "exec-subtitle",
+            "multilineTextboxSpec": {
+              "lines": [
+                "High-level metrics for strategic planning \u2014 includes AI-powered risk narratives and denial insights"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-active-members",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_exec_kpis",
+                  "fields": [
+                    {
+                      "name": "total_active_members",
+                      "expression": "`total_active_members`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "total_active_members",
+                  "displayName": "Active Members"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Total Active Members"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-total-claims-paid",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_exec_kpis",
+                  "fields": [
+                    {
+                      "name": "total_claims_paid",
+                      "expression": "`total_claims_paid`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "total_claims_paid",
+                  "displayName": "Total Claims Paid ($)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Total Claims Paid ($)"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-dq-pass-rate",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_dq_totals",
+                  "fields": [
+                    {
+                      "name": "overall_pass_rate",
+                      "expression": "`overall_pass_rate`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "overall_pass_rate",
+                  "displayName": "DQ Pass Rate (%)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Data Quality Pass Rate (%)"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "exec-mlr-header",
+            "multilineTextboxSpec": {
+              "lines": [
+                "### Medical Loss Ratio by Line of Business"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "chart-mlr-by-lob",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_mlr",
+                  "fields": [
+                    {
+                      "name": "line_of_business",
+                      "expression": "`line_of_business`"
+                    },
+                    {
+                      "name": "mlr",
+                      "expression": "`mlr`"
+                    },
+                    {
+                      "name": "target_mlr",
+                      "expression": "`target_mlr`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "line_of_business",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Line of Business"
+                },
+                "y": {
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "fields": [
+                    {
+                      "fieldName": "mlr",
+                      "displayName": "Actual MLR"
+                    },
+                    {
+                      "fieldName": "target_mlr",
+                      "displayName": "Target MLR"
+                    }
+                  ]
+                },
+                "label": {
+                  "show": true
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Medical Loss Ratio: Actual vs Target"
+              },
+              "mark": {
+                "layout": "group",
+                "colors": [
+                  "#137CBD",
+                  "#00A972"
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 6,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "chart-demographics",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_member_demographics",
+                  "fields": [
+                    {
+                      "name": "age_band",
+                      "expression": "`age_band`"
+                    },
+                    {
+                      "name": "line_of_business",
+                      "expression": "`line_of_business`"
+                    },
+                    {
+                      "name": "sum(member_count)",
+                      "expression": "SUM(`member_count`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "age_band",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Age Band"
+                },
+                "y": {
+                  "fieldName": "sum(member_count)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Members"
+                },
+                "color": {
+                  "fieldName": "line_of_business",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Line of Business"
+                },
+                "label": {
+                  "show": false
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Member Population by Age & LOB"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 12,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "chart-star-ratings",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_stars_provider",
+                  "fields": [
+                    {
+                      "name": "star_rating",
+                      "expression": "`star_rating`"
+                    },
+                    {
+                      "name": "provider_count",
+                      "expression": "`provider_count`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "star_rating",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Star Rating"
+                },
+                "y": {
+                  "fieldName": "provider_count",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Provider Count"
+                },
+                "label": {
+                  "show": true
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Provider CMS Star Rating Distribution"
+              },
+              "mark": {
+                "colors": [
+                  "#FFAB00"
+                ],
+                "colorByField": false
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 12,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "exec-risk-header",
+            "multilineTextboxSpec": {
+              "lines": [
+                "### Risk Adjustment & Revenue Analysis"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 18,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "table-risk-adjustment",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_risk_adjustment",
+                  "fields": [
+                    {
+                      "name": "line_of_business",
+                      "expression": "`line_of_business`"
+                    },
+                    {
+                      "name": "model_year",
+                      "expression": "`model_year`"
+                    },
+                    {
+                      "name": "member_count",
+                      "expression": "`member_count`"
+                    },
+                    {
+                      "name": "avg_raf_score",
+                      "expression": "`avg_raf_score`"
+                    },
+                    {
+                      "name": "pct_high_risk",
+                      "expression": "`pct_high_risk`"
+                    },
+                    {
+                      "name": "estimated_annual_revenue",
+                      "expression": "`estimated_annual_revenue`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "line_of_business",
+                    "displayName": "Line of Business"
+                  },
+                  {
+                    "fieldName": "model_year",
+                    "displayName": "Model Year"
+                  },
+                  {
+                    "fieldName": "member_count",
+                    "displayName": "Members"
+                  },
+                  {
+                    "fieldName": "avg_raf_score",
+                    "displayName": "Avg RAF Score"
+                  },
+                  {
+                    "fieldName": "pct_high_risk",
+                    "displayName": "High Risk (%)"
+                  },
+                  {
+                    "fieldName": "estimated_annual_revenue",
+                    "displayName": "Est. Annual Revenue ($)"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Risk Adjustment Summary by LOB"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 19,
+            "width": 6,
+            "height": 5
+          }
+        },
+        {
+          "widget": {
+            "name": "exec-ai-header",
+            "multilineTextboxSpec": {
+              "lines": [
+                "### AI-Generated Clinical Risk Narratives (Top 20 Highest-Risk Members)"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 24,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "table-ai-narratives",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_ai_risk_narratives",
+                  "fields": [
+                    {
+                      "name": "risk_rank",
+                      "expression": "`risk_rank`"
+                    },
+                    {
+                      "name": "member_id",
+                      "expression": "`member_id`"
+                    },
+                    {
+                      "name": "raf_score",
+                      "expression": "`raf_score`"
+                    },
+                    {
+                      "name": "hcc_count",
+                      "expression": "`hcc_count`"
+                    },
+                    {
+                      "name": "line_of_business",
+                      "expression": "`line_of_business`"
+                    },
+                    {
+                      "name": "clinical_summary",
+                      "expression": "`clinical_summary`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "risk_rank",
+                    "displayName": "Rank"
+                  },
+                  {
+                    "fieldName": "member_id",
+                    "displayName": "Member ID"
+                  },
+                  {
+                    "fieldName": "raf_score",
+                    "displayName": "RAF Score"
+                  },
+                  {
+                    "fieldName": "hcc_count",
+                    "displayName": "HCC Count"
+                  },
+                  {
+                    "fieldName": "line_of_business",
+                    "displayName": "LOB"
+                  },
+                  {
+                    "fieldName": "clinical_summary",
+                    "displayName": "AI Clinical Summary"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "AI-Powered Member Risk Narratives"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 25,
+            "width": 6,
+            "height": 8
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS"
+    }
+  ]
+}

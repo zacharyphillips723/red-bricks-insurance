@@ -1,0 +1,15 @@
+resources:
+  pipelines:
+    documents_pipeline:
+      name: "[${bundle.target}] Red Bricks — Documents Pipeline"
+      catalog: ${var.catalog}
+      target: ${var.schema}
+      configuration:
+        source_volume: ${var.source_volume}
+      libraries:
+        - file:
+            path: ../src/pipelines/documents/bronze.sql
+        - file:
+            path: ../src/pipelines/documents/silver.sql
+      channel: PREVIEW
+      development: true

@@ -1,0 +1,23 @@
+resources:
+  pipelines:
+    gold_analytics_pipeline:
+      name: "[${bundle.target}] Red Bricks — Gold Analytics Pipeline"
+      catalog: ${var.catalog}
+      target: ${var.schema}
+      configuration:
+        source_volume: ${var.source_volume}
+        catalog: ${var.catalog}
+        schema: ${var.schema}
+      libraries:
+        - file:
+            path: ../src/pipelines/gold_analytics/financial_metrics.sql
+        - file:
+            path: ../src/pipelines/gold_analytics/quality_metrics.sql
+        - file:
+            path: ../src/pipelines/gold_analytics/risk_metrics.sql
+        - file:
+            path: ../src/pipelines/gold_analytics/ai_classification.sql
+        - file:
+            path: ../src/pipelines/gold_analytics/member_360.sql
+      channel: PREVIEW
+      development: true

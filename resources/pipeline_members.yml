@@ -1,0 +1,17 @@
+resources:
+  pipelines:
+    members_pipeline:
+      name: "[${bundle.target}] Red Bricks — Members & Enrollment Pipeline"
+      catalog: ${var.catalog}
+      target: ${var.schema}
+      configuration:
+        source_volume: ${var.source_volume}
+      libraries:
+        - file:
+            path: ../src/pipelines/members/bronze.sql
+        - file:
+            path: ../src/pipelines/members/silver.sql
+        - file:
+            path: ../src/pipelines/members/gold.sql
+      channel: PREVIEW
+      development: true

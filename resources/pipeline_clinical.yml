@@ -1,0 +1,17 @@
+resources:
+  pipelines:
+    clinical_pipeline:
+      name: "[${bundle.target}] Red Bricks — Clinical Pipeline"
+      catalog: ${var.catalog}
+      target: ${var.schema}
+      configuration:
+        source_volume: ${var.source_volume}
+      libraries:
+        - file:
+            path: ../src/pipelines/clinical/bronze.sql
+        - file:
+            path: ../src/pipelines/clinical/silver.sql
+        - file:
+            path: ../src/pipelines/clinical/gold.sql
+      channel: PREVIEW
+      development: true

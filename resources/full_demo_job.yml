@@ -1,0 +1,132 @@
+resources:
+  jobs:
+    red_bricks_full_demo:
+      name: "[${bundle.target}] Red Bricks Insurance — Full Demo Pipeline"
+      tasks:
+        # Step 1: Generate synthetic data
+        - task_key: data_generation
+          notebook_task:
+            notebook_path: ../src/notebooks/run_data_generation.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+          libraries:
+            - pypi:
+                package: faker
+            - pypi:
+                package: fpdf2
+          new_cluster:
+            spark_version: "15.4.x-scala2.12"
+            node_type_id: Standard_DS3_v2
+            num_workers: 1
+            data_security_mode: SINGLE_USER
+
+        # Step 2: Domain pipelines (run in parallel after data generation)
+        - task_key: members_pipeline
+          depends_on:
+            - task_key: data_generation
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.members_pipeline.id}
+
+        - task_key: providers_pipeline
+          depends_on:
+            - task_key: data_generation
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.providers_pipeline.id}
+
+        - task_key: claims_pipeline
+          depends_on:
+            - task_key: data_generation
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.claims_pipeline.id}
+
+        - task_key: clinical_pipeline
+          depends_on:
+            - task_key: data_generation
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.clinical_pipeline.id}
+
+        - task_key: underwriting_pipeline
+          depends_on:
+            - task_key: data_generation
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.underwriting_pipeline.id}
+
+        - task_key: risk_adjustment_pipeline
+          depends_on:
+            - task_key: data_generation
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.risk_adjustment_pipeline.id}
+
+        # Step 2b: Documents pipeline (depends on data generation)
+        - task_key: documents_pipeline
+          depends_on:
+            - task_key: data_generation
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.documents_pipeline.id}
+
+        # Step 3: Gold analytics (depends on ALL domain pipelines completing)
+        - task_key: gold_analytics_pipeline
+          depends_on:
+            - task_key: members_pipeline
+            - task_key: providers_pipeline
+            - task_key: claims_pipeline
+            - task_key: clinical_pipeline
+            - task_key: underwriting_pipeline
+            - task_key: risk_adjustment_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.gold_analytics_pipeline.id}
+
+        # Step 4: Vector Search index (depends on documents pipeline)
+        - task_key: setup_vector_search
+          depends_on:
+            - task_key: documents_pipeline
+          notebook_task:
+            notebook_path: ../src/notebooks/setup_vector_search.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+          new_cluster:
+            spark_version: "15.4.x-scala2.12"
+            node_type_id: Standard_DS3_v2
+            num_workers: 0
+            data_security_mode: SINGLE_USER
+            spark_conf:
+              spark.databricks.cluster.profile: singleNode
+              spark.master: "local[*]"
+            custom_tags:
+              ResourceClass: SingleNode
+
+        # Step 5: Deploy Member RAG Agent (depends on vector search + gold analytics)
+        - task_key: deploy_member_agent
+          depends_on:
+            - task_key: setup_vector_search
+            - task_key: gold_analytics_pipeline
+          notebook_task:
+            notebook_path: ../src/notebooks/deploy_member_agent.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+          libraries:
+            - pypi:
+                package: langchain
+            - pypi:
+                package: langchain-community
+            - pypi:
+                package: databricks-langchain
+            - pypi:
+                package: mlflow
+          new_cluster:
+            spark_version: "15.4.x-scala2.12"
+            node_type_id: Standard_DS3_v2
+            num_workers: 0
+            data_security_mode: SINGLE_USER
+            spark_conf:
+              spark.databricks.cluster.profile: singleNode
+              spark.master: "local[*]"
+            custom_tags:
+              ResourceClass: SingleNode
+
+      tags:
+        project: red-bricks-insurance
+        domain: full_demo

@@ -1,0 +1,41 @@
+# Red Bricks Insurance - Healthcare insurance company simulation
+# Modular DAB: data generation can be run independently; pipelines added iteratively.
+bundle:
+  name: red-bricks-insurance
+
+variables:
+  catalog:
+    description: Unity Catalog catalog name
+    default: main
+  schema:
+    description: Target schema for raw and pipeline tables
+    default: red_bricks_insurance
+  warehouse_id:
+    description: SQL warehouse for jobs (optional)
+    default: ""
+  source_volume:
+    description: Volume path for raw generated source files
+    default: /Volumes/${var.catalog}/${var.schema}/raw_sources
+
+include:
+  - resources/*.yml
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      profile: fe-vm-red-bricks-insurance
+    variables:
+      catalog: catalog_insurance_vpx9o6
+      schema: red_bricks_insurance_dev
+      warehouse_id: 781064a3466c0984
+
+  prod:
+    mode: production
+    workspace:
+      profile: fe-vm-red-bricks-insurance
+    variables:
+      catalog: catalog_insurance_vpx9o6
+      schema: red_bricks_insurance
+      warehouse_id: 781064a3466c0984

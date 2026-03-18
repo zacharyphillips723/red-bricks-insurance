@@ -1,0 +1,33 @@
+resources:
+  apps:
+    red_bricks_command_center:
+      name: "red-bricks-command-center-app"
+      description: "Red Bricks Insurance — Population Health Command Center"
+      source_code_path: ../app
+      config:
+        command:
+          - uvicorn
+          - main:app
+          - --host=0.0.0.0
+          - --port=8000
+        env:
+          - name: LAKEBASE_INSTANCE_NAME
+            value: red-bricks-command-center
+          - name: LAKEBASE_DATABASE_NAME
+            value: red_bricks_alerts
+          - name: GENIE_SPACE_ID
+            value: 01f122e25de814fe9767478c8718a462
+          - name: SQL_WAREHOUSE_ID
+            value: 781064a3466c0984
+          - name: AGENT_ENDPOINT_NAME
+            value: red-bricks-member-agent
+          - name: UC_CATALOG
+            value: catalog_insurance_vpx9o6
+          - name: UC_SCHEMA
+            value: red_bricks_insurance_dev
+      resources:
+        - name: lakebase
+          database:
+            instance_name: red-bricks-command-center
+            database_name: red_bricks_alerts
+            permission: CAN_CONNECT_AND_CREATE

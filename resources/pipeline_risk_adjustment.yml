@@ -1,0 +1,17 @@
+resources:
+  pipelines:
+    risk_adjustment_pipeline:
+      name: "[${bundle.target}] Red Bricks — Risk Adjustment Pipeline"
+      catalog: ${var.catalog}
+      target: ${var.schema}
+      configuration:
+        source_volume: ${var.source_volume}
+      libraries:
+        - file:
+            path: ../src/pipelines/risk_adjustment/bronze.sql
+        - file:
+            path: ../src/pipelines/risk_adjustment/silver.sql
+        - file:
+            path: ../src/pipelines/risk_adjustment/gold.sql
+      channel: PREVIEW
+      development: true

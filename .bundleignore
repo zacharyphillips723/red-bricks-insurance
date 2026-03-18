@@ -1,0 +1,7 @@
+# Exclude frontend source and node_modules — pre-built static assets are in app/static/
+app/frontend/node_modules/
+app/frontend/src/
+app/frontend/*.json
+app/frontend/*.ts
+app/frontend/*.js
+app/frontend/*.html

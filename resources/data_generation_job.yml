@@ -1,0 +1,26 @@
+# Job: Run healthcare synthetic data generation (all domains).
+# Run iteratively to refresh raw_sources; pipelines will consume from same volume.
+resources:
+  jobs:
+    red_bricks_data_generation:
+      name: "[${bundle.target}] Red Bricks Insurance — Data Generation"
+      tasks:
+        - task_key: generate_all_domains
+          notebook_task:
+            notebook_path: ../src/notebooks/run_data_generation.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+          libraries:
+            - pypi:
+                package: faker
+            - pypi:
+                package: fpdf2
+          new_cluster:
+            spark_version: "15.4.x-scala2.12"
+            node_type_id: Standard_DS3_v2
+            num_workers: 1
+            data_security_mode: SINGLE_USER
+      tags:
+        project: red-bricks-insurance
+        domain: data_generation

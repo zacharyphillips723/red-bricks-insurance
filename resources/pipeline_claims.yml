@@ -1,0 +1,17 @@
+resources:
+  pipelines:
+    claims_pipeline:
+      name: "[${bundle.target}] Red Bricks — Claims Pipeline"
+      catalog: ${var.catalog}
+      target: ${var.schema}
+      configuration:
+        source_volume: ${var.source_volume}
+      libraries:
+        - file:
+            path: ../src/pipelines/claims/bronze.sql
+        - file:
+            path: ../src/pipelines/claims/silver.sql
+        - file:
+            path: ../src/pipelines/claims/gold.sql
+      channel: PREVIEW
+      development: true
