@@ -77,6 +77,19 @@ except Exception as e:
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema}")
 spark.sql(f"CREATE VOLUME IF NOT EXISTS {catalog}.{schema}.raw_sources")
 
+# Clean old data so Auto Loader doesn't re-ingest stale files on pipeline refresh
+import subprocess
+for subdir in ["members", "enrollment", "providers", "claims_medical", "claims_pharmacy",
+               "encounters", "labs", "vitals", "underwriting", "risk_adjustment_member",
+               "risk_adjustment_provider", "fhir_bundles", "documents"]:
+    path = f"{volume_base}/{subdir}"
+    try:
+        dbutils.fs.rm(path, recurse=True)
+        print(f"  Cleaned {path}")
+    except Exception:
+        pass  # directory may not exist yet
+print("Volume cleaned — ready for fresh data generation.")
+
 # COMMAND ----------
 
 # MAGIC %md

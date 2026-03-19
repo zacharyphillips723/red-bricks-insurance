@@ -118,7 +118,7 @@ export function Member360() {
     { role: "user" | "agent"; text: string }[]
   >([]);
   const [agentLoading, setAgentLoading] = useState(false);
-  const chatBottomRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
 
   // Expanded case notes
   const [expandedNotes, setExpandedNotes] = useState<Set<string>>(new Set());
@@ -184,7 +184,11 @@ export function Member360() {
       ]);
     } finally {
       setAgentLoading(false);
-      setTimeout(() => chatBottomRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+      setTimeout(() => {
+        if (chatContainerRef.current) {
+          chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+        }
+      }, 100);
     }
   };
 
@@ -449,7 +453,7 @@ export function Member360() {
             </div>
 
             {/* RIGHT PANEL: Agent Chat */}
-            <div className="lg:col-span-2 flex flex-col card">
+            <div className="lg:col-span-2 flex flex-col card h-[600px]">
               <div className="px-4 py-3 border-b border-gray-200">
                 <h4 className="text-sm font-semibold text-databricks-dark flex items-center gap-2">
                   <Sparkles className="w-4 h-4 text-databricks-red" /> Care Intelligence Agent
@@ -460,7 +464,7 @@ export function Member360() {
               </div>
 
               {/* Chat messages */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[300px] max-h-[500px]">
+              <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-4 space-y-3">
                 {agentMessages.length === 0 && !agentLoading && (
                   <div className="space-y-2">
                     <p className="text-xs text-gray-400 mb-3">Suggested questions:</p>
@@ -497,7 +501,6 @@ export function Member360() {
                     Agent is thinking...
                   </div>
                 )}
-                <div ref={chatBottomRef} />
               </div>
 
               {/* Chat input */}
@@ -536,12 +539,13 @@ export function Member360() {
             )}
 
             <div className="space-y-3">
-              {caseNotes.map((note) => {
-                const isExpanded = expandedNotes.has(note.document_id);
+              {caseNotes.map((note, idx) => {
+                const noteKey = note.document_id || `note-${idx}`;
+                const isExpanded = expandedNotes.has(noteKey);
                 return (
-                  <div key={note.document_id} className="border border-gray-200 rounded-lg overflow-hidden">
+                  <div key={noteKey} className="border border-gray-200 rounded-lg overflow-hidden">
                     <button
-                      onClick={() => toggleNote(note.document_id)}
+                      onClick={() => toggleNote(noteKey)}
                       className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors"
                     >
                       <div className="flex items-center gap-3">

@@ -13,8 +13,10 @@ from ..helpers import random_date_between, weighted_choice, COUNTIES
 fake = Faker("en_US")
 
 
-def generate_members(n: int = 5000) -> List[Dict[str, Any]]:
+def generate_members(n: int = 5000, seed: int = 42) -> List[Dict[str, Any]]:
     """Generate member demographic records (member_id, name, DOB, gender, address)."""
+    random.seed(seed)
+    Faker.seed(seed)
     members = []
     lob_names = list(reference_data.LOB_CONFIG.keys())
     lob_weights = [reference_data.LOB_CONFIG[l]["weight"] for l in lob_names]

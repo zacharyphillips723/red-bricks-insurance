@@ -1,17 +1,17 @@
 """Member RAG Agent and Member 360 data integration module.
 
 Implements the care management RAG agent directly in the backend using
-Foundation Model API + Vector Search REST API. This avoids the complexity
-of deploying a separate Model Serving endpoint and handles auth natively
-via the Databricks App context.
+Foundation Model API + Vector Search REST API. Uses the Databricks SDK
+for SQL execution (which handles auth natively in App context) and REST
+API only for Vector Search (where SDK has deserialization bugs).
 """
 
 import json
 import os
 import traceback
 
-import requests
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.sql import StatementParameterListItem
 
 UC_CATALOG = os.environ.get("UC_CATALOG", "catalog_insurance_vpx9o6")
 UC_SCHEMA = os.environ.get("UC_SCHEMA", "red_bricks_insurance_dev")
@@ -37,53 +37,67 @@ this information into a clear, actionable summary. Always:
 Never make up information not in the provided data."""
 
 
-def _get_api_client() -> tuple[str, dict]:
-    """Get workspace host and auth headers for REST API calls."""
+def _execute_sql(sql: str, params: list | None = None) -> list[dict]:
+    """Execute SQL via SDK Statement Execution API."""
     w = WorkspaceClient()
-    host = w.config.host.rstrip("/")
-    token = w.config.token
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    return host, headers
-
-
-def _execute_sql_rest(host: str, headers: dict, sql: str, params: list | None = None) -> list[dict]:
-    """Execute SQL via Statement Execution REST API."""
-    body = {
+    kwargs = {
         "warehouse_id": SQL_WAREHOUSE_ID,
         "statement": sql,
         "wait_timeout": "30s",
     }
     if params:
-        body["parameters"] = params
+        kwargs["parameters"] = [
+            StatementParameterListItem(name=p["name"], value=p["value"], type=p.get("type", "STRING"))
+            for p in params
+        ]
 
-    resp = requests.post(f"{host}/api/2.0/sql/statements", headers=headers, json=body)
-    resp.raise_for_status()
-    data = resp.json()
+    stmt = w.statement_execution.execute_statement(**kwargs)
 
-    if data.get("status", {}).get("state") != "SUCCEEDED":
+    if not stmt.result or not stmt.result.data_array:
         return []
 
-    columns = [c["name"] for c in data.get("manifest", {}).get("schema", {}).get("columns", [])]
-    rows = data.get("result", {}).get("data_array", [])
-    return [dict(zip(columns, row)) for row in rows]
+    col_names = []
+    if stmt.manifest and stmt.manifest.schema and stmt.manifest.schema.columns:
+        col_names = [c.name for c in stmt.manifest.schema.columns]
+
+    print(f"[SQL] col_names={col_names}, rows={len(stmt.result.data_array)}, first_row={stmt.result.data_array[0] if stmt.result.data_array else 'empty'}")
+
+    if not col_names:
+        print(f"[SQL] WARNING: No column names from manifest. manifest={stmt.manifest}")
+        return []
+
+    return [dict(zip(col_names, row)) for row in stmt.result.data_array]
+
+
+def _sdk_request(method: str, path: str, body: dict | None = None) -> dict:
+    """Make an authenticated request using the SDK's api_client (handles App OAuth)."""
+    w = WorkspaceClient()
+    if method == "GET":
+        resp = w.api_client.do(method, path)
+    else:
+        resp = w.api_client.do(method, path, body=body)
+    return resp
 
 
 def search_members(query: str) -> list[dict]:
     """Search members by name or ID."""
     try:
-        host, headers = _get_api_client()
         sql = f"""
             SELECT member_id, first_name, last_name, member_name, date_of_birth,
                    age, gender, line_of_business, risk_tier, raf_score, county
-            FROM {MEMBER_360_TABLE}
-            WHERE member_id = :query
-               OR LOWER(member_name) LIKE CONCAT('%', LOWER(:query), '%')
-               OR LOWER(last_name) LIKE CONCAT('%', LOWER(:query), '%')
-               OR LOWER(first_name) LIKE CONCAT('%', LOWER(:query), '%')
+            FROM (
+                SELECT *, ROW_NUMBER() OVER (PARTITION BY member_id ORDER BY member_id) AS rn
+                FROM {MEMBER_360_TABLE}
+                WHERE member_id = :query
+                   OR LOWER(member_name) LIKE CONCAT('%', LOWER(:query), '%')
+                   OR LOWER(last_name) LIKE CONCAT('%', LOWER(:query), '%')
+                   OR LOWER(first_name) LIKE CONCAT('%', LOWER(:query), '%')
+            )
+            WHERE rn = 1
             ORDER BY last_name, first_name
             LIMIT 25
         """
-        rows = _execute_sql_rest(host, headers, sql, [{"name": "query", "value": query, "type": "STRING"}])
+        rows = _execute_sql(sql, [{"name": "query", "value": query}])
         print(f"[Member Search] Query '{query}' returned {len(rows)} results")
         return rows
     except Exception as e:
@@ -95,9 +109,8 @@ def search_members(query: str) -> list[dict]:
 def get_member_360(member_id: str) -> dict | None:
     """Get full Member 360 profile."""
     try:
-        host, headers = _get_api_client()
-        sql = f"SELECT * FROM {MEMBER_360_TABLE} WHERE member_id = :member_id"
-        rows = _execute_sql_rest(host, headers, sql, [{"name": "member_id", "value": member_id, "type": "STRING"}])
+        sql = f"SELECT * FROM {MEMBER_360_TABLE} WHERE member_id = :member_id LIMIT 1"
+        rows = _execute_sql(sql, [{"name": "member_id", "value": member_id}])
         if rows:
             print(f"[Member 360] Found profile for {member_id}")
             return rows[0]
@@ -112,7 +125,6 @@ def get_member_360(member_id: str) -> dict | None:
 def get_case_notes(member_id: str, limit: int = 20) -> list[dict]:
     """Get recent case notes for a member."""
     try:
-        host, headers = _get_api_client()
         sql = f"""
             SELECT document_id, member_id, document_type, title, created_date,
                    author, full_text, text_length
@@ -121,7 +133,7 @@ def get_case_notes(member_id: str, limit: int = 20) -> list[dict]:
             ORDER BY created_date DESC
             LIMIT {limit}
         """
-        rows = _execute_sql_rest(host, headers, sql, [{"name": "member_id", "value": member_id, "type": "STRING"}])
+        rows = _execute_sql(sql, [{"name": "member_id", "value": member_id}])
         print(f"[Case Notes] Found {len(rows)} documents for {member_id}")
         return rows
     except Exception as e:
@@ -130,62 +142,46 @@ def get_case_notes(member_id: str, limit: int = 20) -> list[dict]:
         return []
 
 
-def _search_vs_index(host: str, headers: dict, member_id: str, query: str) -> list[dict]:
+def _search_vs_index(member_id: str, query: str) -> list[dict]:
     """Search Vector Search index for relevant case note chunks."""
-    resp = requests.post(
-        f"{host}/api/2.0/vector-search/indexes/{VS_INDEX_NAME}/query",
-        headers=headers,
-        json={
-            "columns": ["chunk_id", "document_id", "member_id", "document_type",
-                        "title", "created_date", "author", "chunk_text"],
-            "query_text": query,
-            "filters_json": json.dumps({"member_id": member_id}),
-            "num_results": 5,
-        },
-    )
-    resp.raise_for_status()
-    data = resp.json()
+    data = _sdk_request("POST", f"/api/2.0/vector-search/indexes/{VS_INDEX_NAME}/query", {
+        "columns": ["chunk_id", "document_id", "member_id", "document_type",
+                     "title", "created_date", "author", "chunk_text"],
+        "query_text": query,
+        "filters_json": json.dumps({"member_id": member_id}),
+        "num_results": 5,
+    })
     rows = data.get("result", {}).get("data_array", [])
     col_names = [c["name"] for c in data.get("manifest", {}).get("columns", [])]
     return [dict(zip(col_names, row)) for row in rows]
 
 
-def _call_llm(host: str, headers: dict, messages: list[dict]) -> str:
-    """Call Foundation Model API for chat completion."""
-    resp = requests.post(
-        f"{host}/serving-endpoints/{LLM_ENDPOINT}/invocations",
-        headers=headers,
-        json={
-            "messages": messages,
-            "max_tokens": 1500,
-            "temperature": 0.1,
-        },
-    )
-    resp.raise_for_status()
-    data = resp.json()
+def _call_llm(messages: list[dict]) -> str:
+    """Call Foundation Model API for chat completion via SDK api_client."""
+    data = _sdk_request("POST", f"/serving-endpoints/{LLM_ENDPOINT}/invocations", {
+        "messages": messages,
+        "max_tokens": 1500,
+        "temperature": 0.1,
+    })
     return data.get("choices", [{}])[0].get("message", {}).get("content", "No response generated.")
 
 
 def query_member_agent(member_id: str, question: str) -> dict:
     """RAG agent: retrieve member profile + relevant case notes, then synthesize with LLM."""
     try:
-        host, headers = _get_api_client()
         print(f"[Agent] Processing query for {member_id}: {question[:80]}...")
 
-        # Step 1: Get member profile
+        # Step 1: Get member profile via SDK
         sql = f"SELECT * FROM {MEMBER_360_TABLE} WHERE member_id = :member_id"
-        profile_rows = _execute_sql_rest(
-            host, headers, sql,
-            [{"name": "member_id", "value": member_id, "type": "STRING"}],
-        )
+        profile_rows = _execute_sql(sql, [{"name": "member_id", "value": member_id}])
         profile = profile_rows[0] if profile_rows else {}
 
-        # Step 2: Search case notes via Vector Search
+        # Step 2: Search case notes via Vector Search (SDK auth)
+        case_chunks = []
         try:
-            case_chunks = _search_vs_index(host, headers, member_id, question)
+            case_chunks = _search_vs_index(member_id, question)
         except Exception as vs_err:
             print(f"[Agent] Vector Search error (continuing without): {vs_err}")
-            case_chunks = []
 
         # Step 3: Build context for the LLM
         profile_text = json.dumps(profile, indent=2, default=str) if profile else "No profile found."
@@ -208,7 +204,7 @@ def query_member_agent(member_id: str, question: str) -> dict:
         if not chunks_text:
             chunks_text = "No case notes or documents found for this member."
 
-        # Step 4: Call LLM with full context
+        # Step 4: Call LLM
         user_message = f"""Question: {question}
 
 ## Member Profile
@@ -222,7 +218,7 @@ def query_member_agent(member_id: str, question: str) -> dict:
             {"role": "user", "content": user_message},
         ]
 
-        answer = _call_llm(host, headers, messages)
+        answer = _call_llm(messages)
         print(f"[Agent] Response generated: {len(answer)} chars, {len(sources)} sources")
         return {"answer": answer, "sources": sources}
 

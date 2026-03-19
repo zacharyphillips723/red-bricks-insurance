@@ -65,15 +65,20 @@ pharmacy_agg AS (
   GROUP BY member_id
 ),
 
--- Risk adjustment
+-- Risk adjustment (dedup to one row per member)
 risk AS (
-  SELECT
-    member_id,
-    raf_score,
-    hcc_codes,
-    hcc_count,
-    is_high_risk
-  FROM ${catalog}.${schema}.silver_risk_adjustment_member
+  SELECT *
+  FROM (
+    SELECT
+      member_id,
+      raf_score,
+      hcc_codes,
+      hcc_count,
+      is_high_risk,
+      ROW_NUMBER() OVER (PARTITION BY member_id ORDER BY raf_score DESC) AS rn
+    FROM ${catalog}.${schema}.silver_risk_adjustment_member
+  )
+  WHERE rn = 1
 ),
 
 -- HEDIS gaps
@@ -169,7 +174,12 @@ SELECT
   le.last_encounter_type,
   le.pcp_npi
 
-FROM ${catalog}.${schema}.silver_members m
+FROM (
+  SELECT * FROM (
+    SELECT *, ROW_NUMBER() OVER (PARTITION BY member_id ORDER BY member_id) AS m_rn
+    FROM ${catalog}.${schema}.silver_members
+  ) WHERE m_rn = 1
+) m
 LEFT JOIN latest_enrollment e        ON m.member_id = e.member_id
 LEFT JOIN medical_agg mc             ON m.member_id = mc.member_id
 LEFT JOIN pharmacy_agg rx            ON m.member_id = rx.member_id
