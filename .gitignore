@@ -13,8 +13,8 @@ build/
 app/frontend/node_modules/
 app/frontend/dist/
 
-# Build artifacts served by FastAPI
-app/static/
+# Build artifacts served by FastAPI (not gitignored — needed for DAB deployment)
+# app/static/
 
 # IDE
 .idea/
