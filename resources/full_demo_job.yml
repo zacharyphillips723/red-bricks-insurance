@@ -97,7 +97,7 @@ resources:
             custom_tags:
               ResourceClass: SingleNode
 
-        # Step 5: Deploy Member RAG Agent (depends on vector search + gold analytics)
+        # Step 5: Validate Member RAG Agent components (depends on vector search + gold analytics)
         - task_key: deploy_member_agent
           depends_on:
             - task_key: setup_vector_search
@@ -107,15 +107,6 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
               schema: ${var.schema}
-          libraries:
-            - pypi:
-                package: langchain
-            - pypi:
-                package: langchain-community
-            - pypi:
-                package: databricks-langchain
-            - pypi:
-                package: mlflow
           new_cluster:
             spark_version: "15.4.x-scala2.12"
             node_type_id: Standard_DS3_v2

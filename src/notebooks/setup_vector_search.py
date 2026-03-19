@@ -26,35 +26,66 @@ print(f"Source Table: {SOURCE_TABLE}")
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ## Helper: REST API client
+# MAGIC
+# MAGIC The Databricks Python SDK has deserialization issues with certain Vector Search
+# MAGIC responses. We use direct REST API calls as a reliable fallback alongside SDK calls.
+
+# COMMAND ----------
+
+import requests
+import time
+import json
+
+# Get workspace host and token from the notebook context
+ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
+host = ctx.apiUrl().get()
+token = ctx.apiToken().get()
+
+headers = {
+    "Authorization": f"Bearer {token}",
+    "Content-Type": "application/json",
+}
+
+
+def vs_api_get(path: str) -> dict:
+    """GET request to Vector Search API."""
+    resp = requests.get(f"{host}/api/2.0/vector-search/{path}", headers=headers)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def vs_api_post(path: str, body: dict) -> dict:
+    """POST request to Vector Search API."""
+    resp = requests.post(
+        f"{host}/api/2.0/vector-search/{path}", headers=headers, json=body
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## Create or reuse Vector Search endpoint
 
 # COMMAND ----------
 
-from databricks.sdk import WorkspaceClient
-import time
-
-w = WorkspaceClient()
-
 # Check for existing endpoint
-existing_endpoints = list(w.vector_search_endpoints.list_endpoints())
-endpoint_exists = any(ep.name == VS_ENDPOINT_NAME for ep in existing_endpoints)
+endpoints = vs_api_get("endpoints")
+endpoint_names = [ep["name"] for ep in endpoints.get("endpoints", [])]
 
-if endpoint_exists:
+if VS_ENDPOINT_NAME in endpoint_names:
     print(f"Vector Search endpoint '{VS_ENDPOINT_NAME}' already exists — reusing.")
 else:
     print(f"Creating Vector Search endpoint '{VS_ENDPOINT_NAME}'...")
-    w.vector_search_endpoints.create_endpoint(
-        name=VS_ENDPOINT_NAME,
-        endpoint_type="STANDARD",
-    )
+    vs_api_post("endpoints", {"name": VS_ENDPOINT_NAME, "endpoint_type": "STANDARD"})
+
     # Wait for endpoint to be ready
     for i in range(60):
-        ep = w.vector_search_endpoints.get_endpoint(VS_ENDPOINT_NAME)
-        status = getattr(ep, "endpoint_status", None)
-        state = getattr(status, "state", None) if status else None
-        state_str = getattr(state, "value", str(state)) if state else "UNKNOWN"
-        print(f"  Endpoint status: {state_str} ({i*10}s)")
-        if state_str == "ONLINE":
+        ep = vs_api_get(f"endpoints/{VS_ENDPOINT_NAME}")
+        state = ep.get("endpoint_status", {}).get("state", "UNKNOWN")
+        print(f"  Endpoint status: {state} ({i*10}s)")
+        if state == "ONLINE":
             break
         time.sleep(10)
     print(f"Endpoint '{VS_ENDPOINT_NAME}' is ready.")
@@ -66,30 +97,46 @@ else:
 
 # COMMAND ----------
 
-# Check if index already exists
+# Check if index already exists via REST API
 try:
-    existing_index = w.vector_search_indexes.get_index(VS_INDEX_NAME)
-    print(f"Index '{VS_INDEX_NAME}' already exists. Triggering sync...")
-    w.vector_search_indexes.sync_index(VS_INDEX_NAME)
-except Exception:
-    print(f"Creating Delta Sync index '{VS_INDEX_NAME}'...")
-    w.vector_search_indexes.create_index(
-        name=VS_INDEX_NAME,
-        endpoint_name=VS_ENDPOINT_NAME,
-        primary_key="chunk_id",
-        index_type="DELTA_SYNC",
-        delta_sync_index_spec={
-            "source_table": SOURCE_TABLE,
-            "pipeline_type": "TRIGGERED",
-            "embedding_source_columns": [
-                {
-                    "name": "chunk_text",
-                    "embedding_model_endpoint_name": "databricks-bge-large-en",
-                }
-            ],
-        },
-    )
-    print(f"Index '{VS_INDEX_NAME}' creation initiated.")
+    idx_info = vs_api_get(f"indexes/{VS_INDEX_NAME}")
+    idx_status = idx_info.get("status", {})
+    print(f"Index '{VS_INDEX_NAME}' already exists.")
+    print(f"  Status: {idx_status.get('detailed_state', 'UNKNOWN')}")
+    print(f"  Indexed rows: {idx_status.get('indexed_row_count', 'N/A')}")
+    print(f"  Ready: {idx_status.get('ready', False)}")
+
+    # Trigger sync if index is online
+    if idx_status.get("ready"):
+        print("Index is ready. Triggering sync...")
+        vs_api_post(f"indexes/{VS_INDEX_NAME}/sync", {})
+    else:
+        print("Index exists but not ready yet. Will wait...")
+except requests.exceptions.HTTPError as e:
+    if e.response.status_code == 404:
+        print(f"Index '{VS_INDEX_NAME}' does not exist. Creating...")
+        vs_api_post(
+            "indexes",
+            {
+                "name": VS_INDEX_NAME,
+                "endpoint_name": VS_ENDPOINT_NAME,
+                "primary_key": "chunk_id",
+                "index_type": "DELTA_SYNC",
+                "delta_sync_index_spec": {
+                    "source_table": SOURCE_TABLE,
+                    "pipeline_type": "TRIGGERED",
+                    "embedding_source_columns": [
+                        {
+                            "name": "chunk_text",
+                            "embedding_model_endpoint_name": "databricks-bge-large-en",
+                        }
+                    ],
+                },
+            },
+        )
+        print(f"Index '{VS_INDEX_NAME}' creation initiated.")
+    else:
+        raise
 
 # COMMAND ----------
 
@@ -98,19 +145,29 @@ except Exception:
 
 # COMMAND ----------
 
-for i in range(90):
+index_ready = False
+for i in range(120):  # Up to 20 minutes
     try:
-        idx = w.vector_search_indexes.get_index(VS_INDEX_NAME)
-        status = getattr(idx, "status", None)
-        state = getattr(status, "ready", None) if status else None
-        print(f"  Index status: ready={state} ({i*10}s)")
-        if state:
+        idx_info = vs_api_get(f"indexes/{VS_INDEX_NAME}")
+        idx_status = idx_info.get("status", {})
+        ready = idx_status.get("ready", False)
+        detailed = idx_status.get("detailed_state", "UNKNOWN")
+        row_count = idx_status.get("indexed_row_count", 0)
+
+        if i % 6 == 0 or ready:
+            print(f"  [{i*10}s] state={detailed}, ready={ready}, rows={row_count}")
+
+        if ready:
+            index_ready = True
             break
     except Exception as e:
-        print(f"  Waiting... ({e})")
+        print(f"  [{i*10}s] Waiting... ({e})")
     time.sleep(10)
 
-print(f"\nVector Search index '{VS_INDEX_NAME}' is ONLINE and ready for queries.")
+if index_ready:
+    print(f"\nVector Search index '{VS_INDEX_NAME}' is ONLINE and ready for queries.")
+else:
+    print(f"\nWarning: Index not ready after 20 min. Attempting test query anyway...")
 
 # COMMAND ----------
 
@@ -119,14 +176,37 @@ print(f"\nVector Search index '{VS_INDEX_NAME}' is ONLINE and ready for queries.
 
 # COMMAND ----------
 
-test_results = w.vector_search_indexes.query_index(
-    index_name=VS_INDEX_NAME,
-    columns=["chunk_id", "document_id", "member_id", "document_type", "chunk_text"],
-    query_text="diabetes management and blood glucose control",
-    num_results=3,
-)
+# Query via REST API (SDK query_index can also have deserialization issues)
+test_results = None
+for attempt in range(6):
+    try:
+        result = vs_api_post(
+            f"indexes/{VS_INDEX_NAME}/query",
+            {
+                "columns": [
+                    "chunk_id",
+                    "document_id",
+                    "member_id",
+                    "document_type",
+                    "chunk_text",
+                ],
+                "query_text": "diabetes management and blood glucose control",
+                "num_results": 3,
+            },
+        )
+        test_results = result
+        break
+    except Exception as e:
+        print(f"  Test query attempt {attempt+1} failed: {e}")
+        if attempt < 5:
+            time.sleep(30)
 
-print("Test query: 'diabetes management and blood glucose control'")
-print(f"Results: {len(test_results.result.data_array)} chunks returned")
-for row in test_results.result.data_array:
-    print(f"  - {row[0]} | {row[2]} | {row[3]} | {row[4][:80]}...")
+if test_results and test_results.get("result", {}).get("data_array"):
+    data = test_results["result"]["data_array"]
+    print("Test query: 'diabetes management and blood glucose control'")
+    print(f"Results: {len(data)} chunks returned")
+    for row in data:
+        print(f"  - {row[0]} | {row[2]} | {row[3]} | {str(row[4])[:80]}...")
+else:
+    print("Warning: Test query returned no results. Index may still be syncing.")
+    print(f"Raw response: {test_results}")

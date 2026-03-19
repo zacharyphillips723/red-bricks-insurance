@@ -366,21 +366,33 @@ for doc_type in ["case_notes", "call_transcripts", "claims_summarys"]:
     dbutils.fs.mkdirs(f"{volume_base}/documents/{doc_type}")
 dbutils.fs.mkdirs(f"{volume_base}/documents/metadata")
 
-# Build metadata records (everything except pdf_bytes) and write PDFs
+# Build metadata records (everything except pdf_bytes) and write PDFs in parallel
 # PDFs are written to the local FUSE mount path for binary compatibility
 metadata_records = []
-fuse_base = volume_base.replace("/Volumes/", "/Volumes/")  # Already FUSE-compatible
-
 for doc in documents_data:
-    # Metadata record for pipeline (no pdf_bytes)
     metadata_records.append({k: v for k, v in doc.items() if k != "pdf_bytes"})
 
-    # Write PDF via FUSE mount (binary write)
+# Ensure target directories exist
+for doc_type in ["case_notes", "call_transcripts", "claims_summarys"]:
+    os.makedirs(f"/Volumes/{catalog}/{schema}/raw_sources/documents/{doc_type}", exist_ok=True)
+
+# Write PDFs in parallel using ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+def _write_pdf(doc):
     doc_type = doc["document_type"]
-    pdf_fuse_path = f"/Volumes/{catalog}/{schema}/raw_sources/documents/{doc_type}s/{doc['file_name']}"
-    os.makedirs(os.path.dirname(pdf_fuse_path), exist_ok=True)
-    with open(pdf_fuse_path, "wb") as f:
+    pdf_path = f"/Volumes/{catalog}/{schema}/raw_sources/documents/{doc_type}s/{doc['file_name']}"
+    with open(pdf_path, "wb") as f:
         f.write(doc["pdf_bytes"])
+
+with ThreadPoolExecutor(max_workers=16) as executor:
+    futures = [executor.submit(_write_pdf, doc) for doc in documents_data]
+    for i, future in enumerate(as_completed(futures)):
+        future.result()  # Raise any exceptions
+        if (i + 1) % 3000 == 0:
+            print(f"  PDFs written: {i + 1}/{len(documents_data)}")
+
+print(f"  PDFs written: {len(documents_data)}/{len(documents_data)} (complete)")
 
 # Write metadata as Spark JSON (for Auto Loader ingestion by documents pipeline)
 meta_schema = T.StructType([

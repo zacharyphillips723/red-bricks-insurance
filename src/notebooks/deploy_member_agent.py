@@ -1,14 +1,14 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Red Bricks Insurance — Deploy Member RAG Agent
+# MAGIC # Red Bricks Insurance — Validate Member RAG Agent Components
 # MAGIC
-# MAGIC Deploys a care management assistant agent with two tools:
-# MAGIC 1. **search_case_notes** — Vector Search over case notes, call transcripts, claims summaries
-# MAGIC 2. **get_member_profile** — SQL query against `gold_member_360` for structured member data
+# MAGIC Validates that all components needed by the Member RAG Agent are functional:
+# MAGIC 1. **Vector Search index** — case notes chunks are queryable
+# MAGIC 2. **Member 360 table** — gold view returns member profiles
+# MAGIC 3. **Foundation Model API** — LLM endpoint responds
 # MAGIC
-# MAGIC The agent synthesizes structured (demographics, claims, risk, HEDIS gaps) with
-# MAGIC unstructured data (case notes, call transcripts) to help care managers prepare
-# MAGIC for member outreach.
+# MAGIC The RAG agent runs directly in the FastAPI backend (no separate Model Serving
+# MAGIC endpoint needed). This notebook confirms all data sources are ready.
 
 # COMMAND ----------
 
@@ -20,310 +20,173 @@ schema = dbutils.widgets.get("schema")
 
 VS_INDEX_NAME = f"{catalog}.{schema}.case_notes_vs_index"
 MEMBER_360_TABLE = f"{catalog}.{schema}.gold_member_360"
-ENDPOINT_NAME = "red-bricks-member-agent"
-MODEL_NAME = f"{catalog}.{schema}.member_rag_agent"
+LLM_ENDPOINT = "databricks-meta-llama-3-3-70b-instruct"
 
 print(f"VS Index: {VS_INDEX_NAME}")
 print(f"Member 360 Table: {MEMBER_360_TABLE}")
-print(f"Serving Endpoint: {ENDPOINT_NAME}")
-print(f"UC Model: {MODEL_NAME}")
+print(f"LLM Endpoint: {LLM_ENDPOINT}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Define Agent Tools
+# MAGIC ## Setup REST API client
 
 # COMMAND ----------
 
 import json
-from databricks.sdk import WorkspaceClient
+import requests
 
-w = WorkspaceClient()
-
-
-def search_case_notes(member_id: str, query: str) -> str:
-    """Search case notes, call transcripts, and claims summaries for a member.
-
-    Args:
-        member_id: The member ID (e.g., MBR100042)
-        query: Natural language search query about the member's history
-
-    Returns:
-        Relevant document chunks with metadata
-    """
-    results = w.vector_search_indexes.query_index(
-        index_name=VS_INDEX_NAME,
-        columns=["chunk_id", "document_id", "member_id", "document_type", "title",
-                 "created_date", "author", "chunk_text"],
-        query_text=query,
-        filters={"member_id": member_id},
-        num_results=5,
-    )
-
-    if not results.result or not results.result.data_array:
-        return json.dumps({"documents": [], "message": f"No documents found for member {member_id}"})
-
-    columns = [c.name for c in results.manifest.columns]
-    docs = []
-    for row in results.result.data_array:
-        doc = dict(zip(columns, row))
-        docs.append(doc)
-
-    return json.dumps({"documents": docs, "count": len(docs)})
-
-
-def get_member_profile(member_id: str) -> str:
-    """Get the full Member 360 profile with demographics, claims, risk, and HEDIS data.
-
-    Args:
-        member_id: The member ID (e.g., MBR100042)
-
-    Returns:
-        JSON with full member profile from gold_member_360
-    """
-    stmt = w.statement_execution.execute_statement(
-        warehouse_id=spark.conf.get("warehouse_id", "781064a3466c0984"),
-        statement=f"SELECT * FROM {MEMBER_360_TABLE} WHERE member_id = '{member_id}'",
-        wait_timeout="30s",
-    )
-
-    if not stmt.result or not stmt.result.data_array or len(stmt.result.data_array) == 0:
-        return json.dumps({"error": f"Member {member_id} not found"})
-
-    columns = [c.name for c in stmt.manifest.schema.columns]
-    row = dict(zip(columns, stmt.result.data_array[0]))
-    return json.dumps(row, default=str)
-
+ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
+host = ctx.apiUrl().get()
+token = ctx.apiToken().get()
+headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Define Agent with LangChain
+# MAGIC ## Validate 1: Vector Search Index
 
 # COMMAND ----------
 
-# MAGIC %pip install langchain langchain-community databricks-langchain mlflow
-# MAGIC dbutils.library.restartPython()
+# Check index status
+idx_info = requests.get(
+    f"{host}/api/2.0/vector-search/indexes/{VS_INDEX_NAME}", headers=headers
+).json()
+idx_status = idx_info.get("status", {})
+print(f"Index: {VS_INDEX_NAME}")
+print(f"  State: {idx_status.get('detailed_state')}")
+print(f"  Ready: {idx_status.get('ready')}")
+print(f"  Rows:  {idx_status.get('indexed_row_count')}")
+
+assert idx_status.get("ready"), f"Index not ready: {idx_status}"
+print("PASS: Vector Search index is ONLINE")
 
 # COMMAND ----------
 
-# Re-read widgets after restart
-catalog = dbutils.widgets.get("catalog")
-schema = dbutils.widgets.get("schema")
-VS_INDEX_NAME = f"{catalog}.{schema}.case_notes_vs_index"
-MEMBER_360_TABLE = f"{catalog}.{schema}.gold_member_360"
-ENDPOINT_NAME = "red-bricks-member-agent"
-MODEL_NAME = f"{catalog}.{schema}.member_rag_agent"
+# Test similarity search
+test_query = requests.post(
+    f"{host}/api/2.0/vector-search/indexes/{VS_INDEX_NAME}/query",
+    headers=headers,
+    json={
+        "columns": ["chunk_id", "document_id", "member_id", "document_type", "chunk_text"],
+        "query_text": "diabetes management and blood glucose control",
+        "num_results": 3,
+    },
+).json()
+
+rows = test_query.get("result", {}).get("data_array", [])
+print(f"Test query returned {len(rows)} chunks:")
+for row in rows:
+    print(f"  - {row[0]} | {row[2]} | {row[3]} | {str(row[4])[:80]}...")
+
+assert len(rows) > 0, "Vector Search returned no results"
+print("PASS: Vector Search query works")
 
 # COMMAND ----------
 
-from langchain_core.tools import tool
-from langchain_community.chat_models import ChatDatabricks
-from langchain.agents import AgentExecutor, create_tool_calling_agent
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-import json
-from databricks.sdk import WorkspaceClient
+# Test filtered search (by member_id)
+test_member = rows[0][2]  # Use a member_id from the previous results
+filtered = requests.post(
+    f"{host}/api/2.0/vector-search/indexes/{VS_INDEX_NAME}/query",
+    headers=headers,
+    json={
+        "columns": ["chunk_id", "member_id", "document_type", "chunk_text"],
+        "query_text": "care history and treatment plan",
+        "filters_json": json.dumps({"member_id": test_member}),
+        "num_results": 3,
+    },
+).json()
 
-w = WorkspaceClient()
+filtered_rows = filtered.get("result", {}).get("data_array", [])
+print(f"Filtered query for {test_member}: {len(filtered_rows)} chunks")
+for row in filtered_rows:
+    print(f"  - {row[0]} | {row[2]} | {str(row[3])[:80]}...")
 
-SYSTEM_PROMPT = """You are a care management assistant for Red Bricks Insurance, a health plan serving commercial, Medicare Advantage, Medicaid, and ACA populations.
-
-Your role is to help care managers prepare for member outreach by synthesizing both structured data (demographics, claims history, risk scores, HEDIS gaps) and unstructured data (clinical case notes, outreach call transcripts, claims summaries).
-
-When answering questions about a member:
-1. First retrieve the member's profile using get_member_profile to understand their demographics, risk level, and claims history
-2. Then search their case notes using search_case_notes to find relevant clinical context
-3. Synthesize both data sources into a clear, actionable summary
-
-Always:
-- Cite your sources (e.g., "According to the case note from January 15, 2025...")
-- Highlight key risk factors and care gaps
-- Suggest relevant follow-up actions when appropriate
-- Use clinical terminology appropriately but explain for non-clinical audiences
-- Flag any concerning trends (rising costs, worsening conditions, missed appointments)
-
-Never:
-- Make up information not in the data
-- Provide medical advice or diagnoses
-- Share PHI beyond what's needed for care coordination
-"""
-
-
-@tool
-def search_case_notes_tool(member_id: str, query: str) -> str:
-    """Search case notes, call transcripts, and claims summaries for a member.
-    Use this to find clinical context, outreach history, and care documentation.
-
-    Args:
-        member_id: The member ID (e.g., MBR100042)
-        query: Natural language search query about the member's history
-    """
-    results = w.vector_search_indexes.query_index(
-        index_name=VS_INDEX_NAME,
-        columns=["chunk_id", "document_id", "member_id", "document_type", "title",
-                 "created_date", "author", "chunk_text"],
-        query_text=query,
-        filters={"member_id": member_id},
-        num_results=5,
-    )
-    if not results.result or not results.result.data_array:
-        return json.dumps({"documents": [], "message": f"No documents found for member {member_id}"})
-    columns = [c.name for c in results.manifest.columns]
-    docs = [dict(zip(columns, row)) for row in results.result.data_array]
-    return json.dumps({"documents": docs, "count": len(docs)})
-
-
-@tool
-def get_member_profile_tool(member_id: str) -> str:
-    """Get the full Member 360 profile including demographics, claims, risk scores, and HEDIS gaps.
-    Use this as the first step when asked about any member.
-
-    Args:
-        member_id: The member ID (e.g., MBR100042)
-    """
-    stmt = w.statement_execution.execute_statement(
-        warehouse_id=spark.conf.get("warehouse_id", "781064a3466c0984"),
-        statement=f"SELECT * FROM {MEMBER_360_TABLE} WHERE member_id = :member_id",
-        wait_timeout="30s",
-        parameters=[{"name": "member_id", "value": member_id}],
-    )
-    if not stmt.result or not stmt.result.data_array or len(stmt.result.data_array) == 0:
-        return json.dumps({"error": f"Member {member_id} not found"})
-    columns = [c.name for c in stmt.manifest.schema.columns]
-    row = dict(zip(columns, stmt.result.data_array[0]))
-    return json.dumps(row, default=str)
-
-
-tools = [search_case_notes_tool, get_member_profile_tool]
-
-prompt = ChatPromptTemplate.from_messages([
-    ("system", SYSTEM_PROMPT),
-    MessagesPlaceholder("chat_history", optional=True),
-    ("human", "{input}"),
-    MessagesPlaceholder("agent_scratchpad"),
-])
-
-llm = ChatDatabricks(endpoint="databricks-meta-llama-3-3-70b-instruct")
-agent = create_tool_calling_agent(llm, tools, prompt)
-agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
+assert all(r[1] == test_member for r in filtered_rows), "Filter did not restrict to member"
+print("PASS: Filtered Vector Search works")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Test Agent Locally
+# MAGIC ## Validate 2: Member 360 Table
 
 # COMMAND ----------
 
-test_response = agent_executor.invoke({
-    "input": "Summarize the care history for member MBR100042",
-    "chat_history": [],
-})
-print(test_response["output"])
+# Query member 360
+m360_resp = requests.post(
+    f"{host}/api/2.0/sql/statements",
+    headers=headers,
+    json={
+        "warehouse_id": "781064a3466c0984",
+        "statement": f"SELECT COUNT(*) AS cnt, COUNT(DISTINCT member_id) AS members FROM {MEMBER_360_TABLE}",
+        "wait_timeout": "30s",
+    },
+).json()
+
+m360_data = m360_resp.get("result", {}).get("data_array", [[0, 0]])[0]
+print(f"Member 360: {m360_data[0]} rows, {m360_data[1]} unique members")
+assert int(m360_data[1]) > 0, "Member 360 table is empty"
+print("PASS: Member 360 table populated")
+
+# COMMAND ----------
+
+# Sample a member profile
+sample_resp = requests.post(
+    f"{host}/api/2.0/sql/statements",
+    headers=headers,
+    json={
+        "warehouse_id": "781064a3466c0984",
+        "statement": f"SELECT * FROM {MEMBER_360_TABLE} LIMIT 1",
+        "wait_timeout": "30s",
+    },
+).json()
+
+columns = [c["name"] for c in sample_resp.get("manifest", {}).get("schema", {}).get("columns", [])]
+row = sample_resp.get("result", {}).get("data_array", [[]])[0]
+profile = dict(zip(columns, row))
+print("Sample member profile:")
+for k, v in profile.items():
+    print(f"  {k}: {v}")
+print("PASS: Member 360 profile query works")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Log and Register in Unity Catalog
+# MAGIC ## Validate 3: Foundation Model API
 
 # COMMAND ----------
 
-import mlflow
-from mlflow.models import infer_signature
-
-mlflow.set_registry_uri("databricks-uc")
-
-input_example = {"input": "Summarize care history for MBR100042", "chat_history": []}
-output_example = agent_executor.invoke(input_example)
-
-with mlflow.start_run(run_name="member_rag_agent"):
-    model_info = mlflow.langchain.log_model(
-        lc_model=agent_executor,
-        artifact_path="agent",
-        registered_model_name=MODEL_NAME,
-        input_example=input_example,
-        signature=infer_signature(input_example, output_example),
-    )
-    print(f"Model logged: {model_info.model_uri}")
-    print(f"Registered as: {MODEL_NAME}")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Deploy to Model Serving
-
-# COMMAND ----------
-
-from databricks.sdk.service.serving import EndpointCoreConfigInput, ServedEntityInput
-
-# Get latest model version
-latest_version = max(
-    w.model_registry.get_model(MODEL_NAME).latest_versions,
-    key=lambda v: int(v.version),
-).version
-
-print(f"Deploying {MODEL_NAME} version {latest_version} to endpoint '{ENDPOINT_NAME}'...")
-
-try:
-    # Check if endpoint exists
-    w.serving_endpoints.get(ENDPOINT_NAME)
-    # Update existing
-    w.serving_endpoints.update_config(
-        name=ENDPOINT_NAME,
-        served_entities=[
-            ServedEntityInput(
-                entity_name=MODEL_NAME,
-                entity_version=latest_version,
-                workload_size="Small",
-                scale_to_zero_enabled=True,
-            )
+llm_resp = requests.post(
+    f"{host}/serving-endpoints/{LLM_ENDPOINT}/invocations",
+    headers=headers,
+    json={
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Say 'Agent validation successful' in exactly those words."},
         ],
-    )
-    print(f"Updated existing endpoint '{ENDPOINT_NAME}'")
-except Exception:
-    # Create new
-    w.serving_endpoints.create(
-        name=ENDPOINT_NAME,
-        config=EndpointCoreConfigInput(
-            served_entities=[
-                ServedEntityInput(
-                    entity_name=MODEL_NAME,
-                    entity_version=latest_version,
-                    workload_size="Small",
-                    scale_to_zero_enabled=True,
-                )
-            ]
-        ),
-    )
-    print(f"Created endpoint '{ENDPOINT_NAME}'")
+        "max_tokens": 50,
+        "temperature": 0.0,
+    },
+)
+llm_resp.raise_for_status()
+llm_text = llm_resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+print(f"LLM response: {llm_text}")
+print("PASS: Foundation Model API works")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Verify Deployment
+# MAGIC ## Summary
 
 # COMMAND ----------
 
-import time
-
-for i in range(60):
-    ep = w.serving_endpoints.get(ENDPOINT_NAME)
-    state = ep.state.ready if ep.state else None
-    config_update = ep.state.config_update if ep.state else None
-    print(f"  Endpoint state: ready={state}, config_update={config_update} ({i*10}s)")
-    if state == "READY":
-        break
-    time.sleep(10)
-
-print(f"\nEndpoint '{ENDPOINT_NAME}' is ready for queries.")
-
-# COMMAND ----------
-
-# Test via serving endpoint
-response = w.serving_endpoints.query(
-    name=ENDPOINT_NAME,
-    dataframe_records=[{
-        "input": "What are the key risk factors for member MBR100042?",
-        "chat_history": [],
-    }],
-)
-print("Test response:", response.predictions)
+print("=" * 60)
+print("MEMBER RAG AGENT — ALL VALIDATIONS PASSED")
+print("=" * 60)
+print(f"  Vector Search Index:  {VS_INDEX_NAME} (ONLINE)")
+print(f"  Member 360 Table:     {MEMBER_360_TABLE}")
+print(f"  Foundation Model:     {LLM_ENDPOINT}")
+print()
+print("The RAG agent runs directly in the FastAPI backend.")
+print("No separate Model Serving endpoint is required.")
+print("Deploy the Databricks App to activate the agent.")

@@ -58,55 +58,28 @@ FROM STREAM bronze_document_metadata;
 -- 50 tokens ~ 200 chars overlap.
 -- Uses POSEXPLODE + SEQUENCE to create sliding-window chunks.
 -- ---------------------------------------------------------------------------
-CREATE OR REFRESH MATERIALIZED VIEW silver_case_notes_chunks
+CREATE OR REFRESH STREAMING TABLE silver_case_notes_chunks
 COMMENT 'Chunked document text for vector search embedding. Each row is a ~500-token chunk with 50-token overlap from the parent document.'
 TBLPROPERTIES (
   'quality' = 'silver',
-  'domain'  = 'documents'
+  'domain'  = 'documents',
+  'delta.enableChangeDataFeed' = 'true'
 )
 AS
-WITH numbered_docs AS (
-  SELECT
-    document_id,
-    member_id,
-    document_type,
-    title,
-    created_date,
-    author,
-    full_text,
-    LENGTH(full_text) AS text_len
-  FROM silver_case_notes
-  WHERE full_text IS NOT NULL AND LENGTH(full_text) > 0
-),
-
--- Generate chunk start positions: 0, 1800, 3600, ... (2000 - 200 overlap = 1800 stride)
-chunk_positions AS (
-  SELECT
-    document_id,
-    member_id,
-    document_type,
-    title,
-    created_date,
-    author,
-    full_text,
-    text_len,
-    pos AS chunk_index,
-    pos * 1800 AS start_pos
-  FROM numbered_docs
-  LATERAL VIEW POSEXPLODE(SEQUENCE(0, CAST(CEIL(text_len / 1800.0) - 1 AS INT))) t AS pos, val
-)
-
 SELECT
-  CONCAT(document_id, '_chunk_', LPAD(CAST(chunk_index AS STRING), 3, '0')) AS chunk_id,
-  document_id,
-  member_id,
-  document_type,
-  title,
-  created_date,
-  author,
-  SUBSTRING(full_text, start_pos + 1, 2000) AS chunk_text,
-  chunk_index,
-  start_pos,
-  LENGTH(SUBSTRING(full_text, start_pos + 1, 2000)) AS chunk_length
-FROM chunk_positions
-WHERE start_pos < text_len;
+  CONCAT(d.document_id, '_chunk_', LPAD(CAST(t.pos AS STRING), 3, '0')) AS chunk_id,
+  d.document_id,
+  d.member_id,
+  d.document_type,
+  d.title,
+  d.created_date,
+  d.author,
+  SUBSTRING(d.full_text, t.pos * 1800 + 1, 2000) AS chunk_text,
+  t.pos AS chunk_index,
+  t.pos * 1800 AS start_pos,
+  LENGTH(SUBSTRING(d.full_text, t.pos * 1800 + 1, 2000)) AS chunk_length
+FROM STREAM silver_case_notes d
+LATERAL VIEW POSEXPLODE(SEQUENCE(0, CAST(CEIL(LENGTH(d.full_text) / 1800.0) - 1 AS INT))) t AS pos, val
+WHERE d.full_text IS NOT NULL
+  AND LENGTH(d.full_text) > 0
+  AND t.pos * 1800 < LENGTH(d.full_text);
