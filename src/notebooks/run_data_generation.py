@@ -61,6 +61,7 @@ from src.data_generation.domains import underwriting as dom_underwriting
 from src.data_generation.domains import risk_adjustment as dom_risk
 from src.data_generation.domains import fhir_bundles as dom_fhir
 from src.data_generation.domains import documents as dom_documents
+from src.data_generation.domains import benefits as dom_benefits
 
 # COMMAND ----------
 
@@ -78,10 +79,9 @@ spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema}")
 spark.sql(f"CREATE VOLUME IF NOT EXISTS {catalog}.{schema}.raw_sources")
 
 # Clean old data so Auto Loader doesn't re-ingest stale files on pipeline refresh
-import subprocess
 for subdir in ["members", "enrollment", "providers", "claims_medical", "claims_pharmacy",
                "encounters", "labs", "vitals", "underwriting", "risk_adjustment_member",
-               "risk_adjustment_provider", "fhir_bundles", "documents"]:
+               "risk_adjustment_provider", "fhir_bundles", "documents", "benefits"]:
     path = f"{volume_base}/{subdir}"
     try:
         dbutils.fs.rm(path, recurse=True)
@@ -177,6 +177,62 @@ enrollment_schema = T.StructType([
 df_enrollment = spark.createDataFrame(enrollment_data, schema=enrollment_schema)
 df_enrollment.write.mode("overwrite").parquet(f"{volume_base}/enrollment/")
 print("Enrollment:", df_enrollment.count())
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Benefits (plan benefit schedules and cost-sharing)
+
+# COMMAND ----------
+
+benefits_data = dom_benefits.generate_benefits(enrollment_data)
+benefits_schema = T.StructType([
+    T.StructField("benefit_id", T.StringType()),
+    T.StructField("plan_id", T.StringType()),
+    T.StructField("member_id", T.StringType()),
+    T.StructField("line_of_business", T.StringType()),
+    T.StructField("plan_type", T.StringType()),
+    T.StructField("benefit_category", T.StringType()),
+    T.StructField("benefit_name", T.StringType()),
+    T.StructField("benefit_code", T.StringType()),
+    T.StructField("in_network_copay", T.DoubleType()),
+    T.StructField("in_network_coinsurance_pct", T.IntegerType()),
+    T.StructField("out_of_network_copay", T.DoubleType()),
+    T.StructField("out_of_network_coinsurance_pct", T.IntegerType()),
+    T.StructField("deductible_applies", T.BooleanType()),
+    T.StructField("prior_auth_required", T.BooleanType()),
+    T.StructField("visit_limit", T.IntegerType()),
+    T.StructField("annual_limit", T.DoubleType()),
+    T.StructField("coverage_level", T.StringType()),
+    T.StructField("individual_deductible", T.DoubleType()),
+    T.StructField("family_deductible", T.DoubleType()),
+    T.StructField("individual_oop_max", T.DoubleType()),
+    T.StructField("family_oop_max", T.DoubleType()),
+    # Tier 1: Actuarial / pricing levers
+    T.StructField("actuarial_value_pct", T.IntegerType()),
+    T.StructField("allowed_amount_schedule", T.StringType()),
+    T.StructField("network_tier", T.StringType()),
+    T.StructField("cost_trend_factor", T.DoubleType()),
+    T.StructField("pharmacy_trend_factor", T.DoubleType()),
+    T.StructField("age_sex_factor", T.DoubleType()),
+    # Tier 1: Utilization modeling
+    T.StructField("expected_utilization_per_1000", T.DoubleType()),
+    T.StructField("unit_cost_assumption", T.DoubleType()),
+    T.StructField("elasticity_factor", T.DoubleType()),
+    # Tier 1: Benefit versioning
+    T.StructField("benefit_effective_date", T.StringType()),
+    T.StructField("benefit_termination_date", T.StringType()),
+    T.StructField("benefit_version", T.IntegerType()),
+    T.StructField("scenario_id", T.StringType()),
+    T.StructField("is_baseline", T.BooleanType()),
+    # Tier 1: Agent-friendly metadata
+    T.StructField("benefit_description", T.StringType()),
+    T.StructField("clinical_guideline_ref", T.StringType()),
+    T.StructField("regulatory_mandate", T.StringType()),
+])
+df_benefits = spark.createDataFrame(benefits_data, schema=benefits_schema)
+df_benefits.write.mode("overwrite").parquet(f"{volume_base}/benefits/")
+print("Benefits:", df_benefits.count())
 
 # COMMAND ----------
 

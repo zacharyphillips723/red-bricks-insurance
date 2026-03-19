@@ -1,0 +1,19 @@
+resources:
+  pipelines:
+    benefits_pipeline:
+      name: "[${bundle.target}] Red Bricks — Benefits Pipeline"
+      catalog: ${var.catalog}
+      target: ${var.schema}
+      configuration:
+        source_volume: ${var.source_volume}
+        catalog: ${var.catalog}
+        schema: ${var.schema}
+      libraries:
+        - file:
+            path: ../src/pipelines/benefits/bronze.sql
+        - file:
+            path: ../src/pipelines/benefits/silver.sql
+        - file:
+            path: ../src/pipelines/benefits/gold.sql
+      channel: PREVIEW
+      development: true
