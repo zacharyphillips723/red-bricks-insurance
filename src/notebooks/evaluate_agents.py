@@ -51,7 +51,7 @@ import pandas as pd
 # Query high-risk members to build evaluation prompts
 high_risk_df = spark.sql(f"""
     SELECT member_id, raf_score, hcc_count, line_of_business,
-           primary_conditions, open_hedis_gaps
+           top_diagnoses, hedis_gap_measures
     FROM {catalog}.{schema}.gold_member_360
     WHERE raf_score > 2.0
     ORDER BY raf_score DESC
