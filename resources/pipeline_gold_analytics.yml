@@ -19,5 +19,7 @@ resources:
             path: ../src/pipelines/gold_analytics/ai_classification.sql
         - file:
             path: ../src/pipelines/gold_analytics/member_360.sql
+        - file:
+            path: ../src/pipelines/gold_analytics/actuarial_metrics.sql
       channel: PREVIEW
       development: true
