@@ -29,14 +29,24 @@ SELECT
   group_number,
   monthly_premium,
   risk_score
-FROM ${catalog}.${schema}.silver_enrollment
-LATERAL VIEW EXPLODE(
-  SEQUENCE(
-    DATE_TRUNC('month', eligibility_start_date),
-    DATE_TRUNC('month', COALESCE(eligibility_end_date, CURRENT_DATE())),
-    INTERVAL 1 MONTH
-  )
-) months AS eligibility_month;
+FROM (
+  SELECT
+    member_id,
+    subscriber_id,
+    line_of_business,
+    plan_type,
+    group_number,
+    monthly_premium,
+    risk_score,
+    EXPLODE(
+      SEQUENCE(
+        DATE_TRUNC('month', eligibility_start_date),
+        DATE_TRUNC('month', COALESCE(eligibility_end_date, CURRENT_DATE())),
+        INTERVAL 1 MONTH
+      )
+    ) AS eligibility_month
+  FROM ${catalog}.${schema}.silver_enrollment
+);
 
 
 -- -----------------------------------------------------------------------------
