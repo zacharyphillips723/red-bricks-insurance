@@ -8,45 +8,9 @@
 -- =============================================================================
 
 
--- -----------------------------------------------------------------------------
--- silver_member_months — Exploded monthly enrollment exposure records
--- -----------------------------------------------------------------------------
--- One row per member per month of coverage. This is the actuarial-correct
--- denominator for PMPM, utilization rates, and MLR calculations.
--- Enrollment spans are expanded into discrete months using SEQUENCE + EXPLODE.
--- -----------------------------------------------------------------------------
-CREATE OR REFRESH MATERIALIZED VIEW silver_member_months
-COMMENT 'Exploded member-month enrollment records — one row per member per month of active coverage. Serves as the denominator for PMPM, utilization per 1,000, and MLR calculations.'
-AS
-SELECT
-  member_id,
-  subscriber_id,
-  eligibility_month,
-  YEAR(eligibility_month)  AS eligibility_year,
-  MONTH(eligibility_month) AS eligibility_month_num,
-  line_of_business,
-  plan_type,
-  group_number,
-  monthly_premium,
-  risk_score
-FROM (
-  SELECT
-    member_id,
-    subscriber_id,
-    line_of_business,
-    plan_type,
-    group_number,
-    monthly_premium,
-    risk_score,
-    EXPLODE(
-      SEQUENCE(
-        DATE_TRUNC('month', eligibility_start_date),
-        DATE_TRUNC('month', COALESCE(eligibility_end_date, CURRENT_DATE())),
-        INTERVAL 1 MONTH
-      )
-    ) AS eligibility_month
-  FROM ${catalog}.${schema}.silver_enrollment
-);
+-- NOTE: silver_member_months is created by src/notebooks/build_member_months.py
+-- (standalone notebook outside SDP — EXPLODE+SEQUENCE is too slow in SDP pipelines).
+-- All views below reference it from the catalog.
 
 
 -- -----------------------------------------------------------------------------
