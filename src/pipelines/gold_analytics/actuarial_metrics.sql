@@ -19,26 +19,21 @@ CREATE OR REFRESH MATERIALIZED VIEW silver_member_months
 COMMENT 'Exploded member-month enrollment records — one row per member per month of active coverage. Serves as the denominator for PMPM, utilization per 1,000, and MLR calculations.'
 AS
 SELECT
-  e.member_id,
-  e.subscriber_id,
+  member_id,
+  subscriber_id,
   eligibility_month,
   YEAR(eligibility_month)  AS eligibility_year,
   MONTH(eligibility_month) AS eligibility_month_num,
-  e.line_of_business,
-  e.plan_type,
-  e.group_number,
-  m.state,
-  m.county,
-  m.gender,
-  e.monthly_premium,
-  e.risk_score
-FROM ${catalog}.${schema}.silver_enrollment e
-INNER JOIN ${catalog}.${schema}.silver_members m
-  ON e.member_id = m.member_id
+  line_of_business,
+  plan_type,
+  group_number,
+  monthly_premium,
+  risk_score
+FROM ${catalog}.${schema}.silver_enrollment
 LATERAL VIEW EXPLODE(
   SEQUENCE(
-    DATE_TRUNC('month', e.eligibility_start_date),
-    DATE_TRUNC('month', COALESCE(e.eligibility_end_date, CURRENT_DATE())),
+    DATE_TRUNC('month', eligibility_start_date),
+    DATE_TRUNC('month', COALESCE(eligibility_end_date, CURRENT_DATE())),
     INTERVAL 1 MONTH
   )
 ) months AS eligibility_month;
