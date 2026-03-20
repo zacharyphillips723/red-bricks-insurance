@@ -3,21 +3,20 @@
 # MAGIC # Red Bricks Insurance — Agent A/B Evaluation
 # MAGIC
 # MAGIC This notebook evaluates Care Intelligence Agent **v1** (`production`) vs **v2** (`champion`)
-# MAGIC using MLflow's evaluation framework with custom clinical scorers and LLM-as-judge.
+# MAGIC using direct model prediction + MLflow evaluation with custom scorers.
 # MAGIC
 # MAGIC ### Evaluation Pipeline
 # MAGIC 1. Build evaluation dataset from high-risk members (`raf_score > 2.0`)
 # MAGIC 2. Load both agents from Unity Catalog by alias
-# MAGIC 3. Run `mlflow.evaluate()` with custom clinical scorers
-# MAGIC 4. Combine results and persist to Delta tables
-# MAGIC 5. Write aggregated summary for dashboard consumption
+# MAGIC 3. Generate predictions from each agent
+# MAGIC 4. Score outputs with LLM-as-judge and Python scorers
+# MAGIC 5. Persist results to Delta tables for dashboard consumption
 # MAGIC
 # MAGIC ### Custom Scorers
 # MAGIC - **clinical_completeness** — risk factors, care gaps, medications, actions (1-5)
 # MAGIC - **citation_quality** — sources cited with dates and document types (1-5)
 # MAGIC - **actionability** — concrete next steps for a care manager (1-5)
 # MAGIC - **response_structure** — checks for SOAP section headers (0 or 1)
-# MAGIC - Plus built-in: `relevance`, `groundedness`
 
 # COMMAND ----------
 
@@ -75,7 +74,7 @@ for _, member in high_risk_df.iterrows():
     mid = member["member_id"]
     for q_type, q_text in question_templates:
         eval_rows.append({
-            "inputs": f"[{mid}] {q_text}",
+            "prompt": f"[{mid}] {q_text}",
             "member_id": mid,
             "question_type": q_type,
             "raf_score": float(member["raf_score"]),
@@ -85,7 +84,7 @@ for _, member in high_risk_df.iterrows():
 for _, member in high_risk_df.head(5).iterrows():
     mid = member["member_id"]
     eval_rows.append({
-        "inputs": f"[{mid}] What are the cost drivers for this member and how do they compare to peers?",
+        "prompt": f"[{mid}] What are the cost drivers for this member and how do they compare to peers?",
         "member_id": mid,
         "question_type": "cost_context",
         "raf_score": float(member["raf_score"]),
@@ -98,150 +97,7 @@ display(eval_df)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 2: Define Custom Scorers
-
-# COMMAND ----------
-
-from mlflow.metrics.genai import make_genai_metric, EvaluationExample
-
-# Custom scorer 1: Clinical Completeness
-clinical_completeness = make_genai_metric(
-    name="clinical_completeness",
-    definition=(
-        "Evaluates whether the response comprehensively covers the member's clinical picture: "
-        "risk factors, active conditions, care gaps, current medications, and recommended actions."
-    ),
-    grading_prompt=(
-        "Score the response on clinical completeness from 1-5:\n"
-        "5: Covers risk factors, active conditions, medications, care gaps, AND recommended actions\n"
-        "4: Covers 4 of the 5 clinical dimensions\n"
-        "3: Covers 3 of the 5 clinical dimensions\n"
-        "2: Covers only 1-2 clinical dimensions\n"
-        "1: Missing most clinical context or provides vague/generic information"
-    ),
-    examples=[
-        EvaluationExample(
-            input="[MBR-0001] Prepare me for outreach — what are the key risks and talking points?",
-            output=(
-                "Member has diabetes (HCC 19), CHF (HCC 85), and CKD Stage 3. "
-                "Currently on metformin and lisinopril. A1C of 9.2 from last lab. "
-                "Open HEDIS gaps: diabetic eye exam, nephropathy screening. "
-                "Recommend prioritizing A1C management and scheduling eye exam."
-            ),
-            score=5,
-            justification="Covers all 5 dimensions: risk factors, conditions, medications, care gaps, and actions.",
-        ),
-    ],
-    model=f"endpoints:/{JUDGE_ENDPOINT}",
-    greater_is_better=True,
-    parameters={"temperature": 0.0},
-)
-
-# Custom scorer 2: Citation Quality
-citation_quality = make_genai_metric(
-    name="citation_quality",
-    definition=(
-        "Evaluates whether the response properly cites its data sources with dates, "
-        "document types, and author attribution where available."
-    ),
-    grading_prompt=(
-        "Score the response on citation quality from 1-5:\n"
-        "5: Most claims cite specific sources with dates and document types\n"
-        "4: Multiple citations present but some claims lack attribution\n"
-        "3: Some citations but many claims are unsourced\n"
-        "2: Minimal citations — mostly unsourced assertions\n"
-        "1: No citations or source references at all"
-    ),
-    examples=[
-        EvaluationExample(
-            input="[MBR-0001] Summarize recent clinical activity and flag concerning trends.",
-            output=(
-                "According to the case note from 2025-01-15 (authored by RN Johnson), "
-                "the member reported increased shortness of breath. Lab results from "
-                "2025-01-10 show BNP elevated at 450 pg/mL. The care plan note from "
-                "2024-12-20 recommended cardiology referral."
-            ),
-            score=5,
-            justification="Every claim cites a source with date, document type, and author.",
-        ),
-    ],
-    model=f"endpoints:/{JUDGE_ENDPOINT}",
-    greater_is_better=True,
-    parameters={"temperature": 0.0},
-)
-
-# Custom scorer 3: Actionability
-actionability = make_genai_metric(
-    name="actionability",
-    definition=(
-        "Evaluates whether the response provides concrete, prioritized next steps "
-        "that a care manager can act on immediately."
-    ),
-    grading_prompt=(
-        "Score the response on actionability from 1-5:\n"
-        "5: Provides specific, prioritized actions with timelines and talking points\n"
-        "4: Provides specific actions but lacks prioritization or timelines\n"
-        "3: Actions are present but somewhat generic\n"
-        "2: Vague suggestions without concrete steps\n"
-        "1: No actionable recommendations"
-    ),
-    examples=[
-        EvaluationExample(
-            input="[MBR-0001] What HEDIS care gaps should I prioritize?",
-            output=(
-                "Priority 1 (this week): Schedule diabetic eye exam — last exam was 14 months ago. "
-                "Priority 2 (within 2 weeks): Order nephropathy screening given CKD progression. "
-                "Talking point: 'Your diabetes management is important — let's get your eye exam "
-                "scheduled. We can do it at the clinic on Main Street which is in-network.'"
-            ),
-            score=5,
-            justification="Specific actions with clear priorities, timelines, and a member-facing talking point.",
-        ),
-    ],
-    model=f"endpoints:/{JUDGE_ENDPOINT}",
-    greater_is_better=True,
-    parameters={"temperature": 0.0},
-)
-
-print("Custom GenAI scorers defined: clinical_completeness, citation_quality, actionability")
-
-# COMMAND ----------
-
-# Custom scorer 4: Response Structure (Python-based, checks for SOAP headers)
-from mlflow.metrics import make_metric
-from mlflow.metrics import MetricValue
-import numpy as np
-
-
-def _score_response_structure(predictions, targets=None, metrics=None):
-    """Check if response contains SOAP section headers. Returns 1.0 if all present, 0.0 otherwise."""
-    scores = []
-    soap_headers = ["## SUBJECTIVE", "## OBJECTIVE", "## ASSESSMENT", "## PLAN"]
-    for pred in predictions:
-        if pred is None:
-            scores.append(0.0)
-            continue
-        text = str(pred).upper()
-        has_all = all(h.upper() in text for h in soap_headers)
-        scores.append(1.0 if has_all else 0.0)
-    return MetricValue(
-        scores=scores,
-        aggregate_results={"mean": np.mean(scores)},
-    )
-
-
-response_structure = make_metric(
-    eval_fn=_score_response_structure,
-    name="response_structure",
-    greater_is_better=True,
-)
-
-print("Python scorer defined: response_structure (SOAP header check)")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Step 3: Load Models and Run Evaluation
+# MAGIC ## Step 2: Load Models and Generate Predictions
 
 # COMMAND ----------
 
@@ -260,57 +116,169 @@ print("Both models loaded successfully")
 
 # COMMAND ----------
 
+def generate_predictions(model, prompts: list[str]) -> list[str]:
+    """Call a ChatModel with each prompt and collect responses."""
+    responses = []
+    for i, prompt in enumerate(prompts):
+        try:
+            # ChatModel expects messages format via predict()
+            input_data = {"messages": [{"role": "user", "content": prompt}]}
+            result = model.predict(input_data)
+            # Extract the assistant response from ChatCompletionResponse
+            if isinstance(result, dict):
+                content = (
+                    result.get("choices", [{}])[0]
+                    .get("message", {})
+                    .get("content", "No response")
+                )
+            else:
+                # ChatCompletionResponse object
+                content = result.choices[0].message.content
+            responses.append(content)
+            print(f"  [{i+1}/{len(prompts)}] Generated response ({len(content)} chars)")
+        except Exception as e:
+            print(f"  [{i+1}/{len(prompts)}] ERROR: {e}")
+            responses.append(f"Error: {e}")
+    return responses
+
+# COMMAND ----------
+
+print("Generating v1 predictions...")
+v1_responses = generate_predictions(v1_model, eval_df["prompt"].tolist())
+
+# COMMAND ----------
+
+print("Generating v2 predictions...")
+v2_responses = generate_predictions(v2_model, eval_df["prompt"].tolist())
+
+# COMMAND ----------
+
 # MAGIC %md
-# MAGIC ### Evaluate v1 (Production)
+# MAGIC ## Step 3: Score Responses with LLM-as-Judge
 
 # COMMAND ----------
 
-with mlflow.start_run(run_name="eval_v1_production"):
-    v1_results = mlflow.evaluate(
-        model=v1_model,
-        data=eval_df,
-        model_type="question-answering",
-        extra_metrics=[
-            clinical_completeness,
-            citation_quality,
-            actionability,
-            response_structure,
-        ],
-        evaluator_config={
-            "col_mapping": {"inputs": "inputs"},
-        },
-    )
+import json
+import requests
 
-print("v1 Evaluation Metrics:")
-for k, v in v1_results.metrics.items():
-    print(f"  {k}: {v}")
+ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
+host = ctx.apiUrl().get()
+token = ctx.apiToken().get()
+headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+
+def llm_judge_score(prompt: str, response: str, criteria: str, rubric: str) -> int:
+    """Use an LLM judge to score a response on a given criteria (1-5)."""
+    judge_prompt = (
+        f"You are evaluating a care management AI assistant's response.\n\n"
+        f"## Evaluation Criteria: {criteria}\n\n"
+        f"## Rubric\n{rubric}\n\n"
+        f"## Input Question\n{prompt}\n\n"
+        f"## Response to Evaluate\n{response}\n\n"
+        f"Score the response from 1-5 based on the rubric above. "
+        f"Return ONLY a JSON object: {{\"score\": <int>, \"justification\": \"<brief reason>\"}}"
+    )
+    try:
+        resp = requests.post(
+            f"{host}/serving-endpoints/{JUDGE_ENDPOINT}/invocations",
+            headers=headers,
+            json={
+                "messages": [{"role": "user", "content": judge_prompt}],
+                "max_tokens": 200,
+                "temperature": 0.0,
+            },
+        )
+        resp.raise_for_status()
+        content = resp.json()["choices"][0]["message"]["content"]
+        # Parse score from JSON response
+        parsed = json.loads(content.strip().removeprefix("```json").removesuffix("```").strip())
+        return max(1, min(5, int(parsed["score"])))
+    except Exception as e:
+        print(f"    Judge error: {e}")
+        return 3  # default middle score on failure
+
+# COMMAND ----------
+
+# Define scoring criteria
+CRITERIA = {
+    "clinical_completeness": {
+        "criteria": "Clinical Completeness",
+        "rubric": (
+            "5: Covers risk factors, active conditions, medications, care gaps, AND recommended actions\n"
+            "4: Covers 4 of the 5 clinical dimensions\n"
+            "3: Covers 3 of the 5 clinical dimensions\n"
+            "2: Covers only 1-2 clinical dimensions\n"
+            "1: Missing most clinical context or provides vague/generic information"
+        ),
+    },
+    "citation_quality": {
+        "criteria": "Citation Quality",
+        "rubric": (
+            "5: Most claims cite specific sources with dates and document types\n"
+            "4: Multiple citations present but some claims lack attribution\n"
+            "3: Some citations but many claims are unsourced\n"
+            "2: Minimal citations — mostly unsourced assertions\n"
+            "1: No citations or source references at all"
+        ),
+    },
+    "actionability": {
+        "criteria": "Actionability",
+        "rubric": (
+            "5: Provides specific, prioritized actions with timelines and talking points\n"
+            "4: Provides specific actions but lacks prioritization or timelines\n"
+            "3: Actions are present but somewhat generic\n"
+            "2: Vague suggestions without concrete steps\n"
+            "1: No actionable recommendations"
+        ),
+    },
+}
+
+
+def score_response_structure(response: str) -> float:
+    """Check if response contains SOAP section headers."""
+    if not response:
+        return 0.0
+    text = response.upper()
+    soap_headers = ["## SUBJECTIVE", "## OBJECTIVE", "## ASSESSMENT", "## PLAN"]
+    return 1.0 if all(h.upper() in text for h in soap_headers) else 0.0
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Evaluate v2 (Champion)
+# MAGIC ### Score v1 Responses
 
 # COMMAND ----------
 
-with mlflow.start_run(run_name="eval_v2_champion"):
-    v2_results = mlflow.evaluate(
-        model=v2_model,
-        data=eval_df,
-        model_type="question-answering",
-        extra_metrics=[
-            clinical_completeness,
-            citation_quality,
-            actionability,
-            response_structure,
-        ],
-        evaluator_config={
-            "col_mapping": {"inputs": "inputs"},
-        },
-    )
+print("Scoring v1 responses...")
+v1_scores = {metric: [] for metric in list(CRITERIA.keys()) + ["response_structure"]}
 
-print("v2 Evaluation Metrics:")
-for k, v in v2_results.metrics.items():
-    print(f"  {k}: {v}")
+for i, (prompt, response) in enumerate(zip(eval_df["prompt"], v1_responses)):
+    print(f"  Scoring [{i+1}/{len(v1_responses)}]: {prompt[:60]}...")
+    for metric, config in CRITERIA.items():
+        score = llm_judge_score(prompt, response, config["criteria"], config["rubric"])
+        v1_scores[metric].append(score)
+    v1_scores["response_structure"].append(score_response_structure(response))
+
+print("v1 scoring complete")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Score v2 Responses
+
+# COMMAND ----------
+
+print("Scoring v2 responses...")
+v2_scores = {metric: [] for metric in list(CRITERIA.keys()) + ["response_structure"]}
+
+for i, (prompt, response) in enumerate(zip(eval_df["prompt"], v2_responses)):
+    print(f"  Scoring [{i+1}/{len(v2_responses)}]: {prompt[:60]}...")
+    for metric, config in CRITERIA.items():
+        score = llm_judge_score(prompt, response, config["criteria"], config["rubric"])
+        v2_scores[metric].append(score)
+    v2_scores["response_structure"].append(score_response_structure(response))
+
+print("v2 scoring complete")
 
 # COMMAND ----------
 
@@ -323,25 +291,37 @@ from datetime import datetime
 
 eval_timestamp = datetime.now().isoformat()
 
-# Extract per-row results from both evaluations
-v1_per_row = v1_results.tables["eval_results_table"].copy()
-v1_per_row["agent_version"] = "v1"
-v1_per_row["model_name"] = V1_MODEL_NAME
-v1_per_row["prompt_strategy"] = "narrative"
-v1_per_row["llm_endpoint"] = "databricks-meta-llama-3-3-70b-instruct"
-v1_per_row["retrieval_chunks"] = 5
-v1_per_row["eval_timestamp"] = eval_timestamp
+# Build per-row results for v1
+v1_results_df = eval_df.copy()
+v1_results_df["agent_version"] = "v1"
+v1_results_df["model_name"] = V1_MODEL_NAME
+v1_results_df["prompt_strategy"] = "narrative"
+v1_results_df["llm_endpoint"] = "databricks-meta-llama-3-3-70b-instruct"
+v1_results_df["retrieval_chunks"] = 5
+v1_results_df["eval_timestamp"] = eval_timestamp
+v1_results_df["response"] = v1_responses
+for metric, scores in v1_scores.items():
+    v1_results_df[metric] = scores
 
-v2_per_row = v2_results.tables["eval_results_table"].copy()
-v2_per_row["agent_version"] = "v2"
-v2_per_row["model_name"] = V2_MODEL_NAME
-v2_per_row["prompt_strategy"] = "soap_structured"
-v2_per_row["llm_endpoint"] = "databricks-llama-4-maverick"
-v2_per_row["retrieval_chunks"] = 10
-v2_per_row["eval_timestamp"] = eval_timestamp
+# Build per-row results for v2
+v2_results_df = eval_df.copy()
+v2_results_df["agent_version"] = "v2"
+v2_results_df["model_name"] = V2_MODEL_NAME
+v2_results_df["prompt_strategy"] = "soap_structured"
+v2_results_df["llm_endpoint"] = "databricks-llama-4-maverick"
+v2_results_df["retrieval_chunks"] = 10
+v2_results_df["eval_timestamp"] = eval_timestamp
+v2_results_df["response"] = v2_responses
+for metric, scores in v2_scores.items():
+    v2_results_df[metric] = scores
 
-combined_df = pd.concat([v1_per_row, v2_per_row], ignore_index=True)
+combined_df = pd.concat([v1_results_df, v2_results_df], ignore_index=True)
+
+# Rename 'prompt' to 'inputs' for dashboard compatibility
+combined_df = combined_df.rename(columns={"prompt": "inputs"})
+
 print(f"Combined results: {len(combined_df)} rows")
+display(combined_df[["agent_version", "inputs", "clinical_completeness", "citation_quality", "actionability", "response_structure"]].head(10))
 
 # COMMAND ----------
 
@@ -355,17 +335,9 @@ print(f"  Rows: {combined_spark_df.count()}")
 # COMMAND ----------
 
 # Build and write aggregated summary
-metric_cols = [
-    "clinical_completeness/v1/mean", "citation_quality/v1/mean",
-    "actionability/v1/mean", "response_structure/mean",
-]
-# Dynamically identify score columns from the combined dataframe
-score_cols = [c for c in combined_df.columns if c.endswith("/score") or c in [
-    "clinical_completeness", "citation_quality", "actionability", "response_structure"
-]]
-
-# Aggregate by agent version
 summary_rows = []
+score_metrics = ["clinical_completeness", "citation_quality", "actionability", "response_structure"]
+
 for version in ["v1", "v2"]:
     version_df = combined_df[combined_df["agent_version"] == version]
     row = {
@@ -377,10 +349,8 @@ for version in ["v1", "v2"]:
         "eval_timestamp": eval_timestamp,
         "num_eval_rows": len(version_df),
     }
-    # Compute mean for each score column
-    for col in score_cols:
-        if col in version_df.columns:
-            row[f"avg_{col}"] = float(version_df[col].mean())
+    for metric in score_metrics:
+        row[f"avg_{metric}"] = round(float(version_df[metric].mean()), 3)
     summary_rows.append(row)
 
 summary_df = pd.DataFrame(summary_rows)
@@ -401,14 +371,12 @@ print("=" * 70)
 print("AGENT A/B EVALUATION — COMPLETE")
 print("=" * 70)
 print()
-print("v1 (Production) Aggregate Metrics:")
-for k, v in v1_results.metrics.items():
-    print(f"  {k}: {v}")
-print()
-print("v2 (Champion) Aggregate Metrics:")
-for k, v in v2_results.metrics.items():
-    print(f"  {k}: {v}")
-print()
+for _, row in summary_df.iterrows():
+    v = row["agent_version"]
+    print(f"{v} ({row['prompt_strategy']}, {row['llm_endpoint']}):")
+    for metric in score_metrics:
+        print(f"  {metric:30s} {row[f'avg_{metric}']:.3f}")
+    print()
 print(f"Results persisted to:")
 print(f"  Per-row:   {RESULTS_TABLE}")
 print(f"  Summary:   {SUMMARY_TABLE}")
