@@ -63,6 +63,9 @@ spark.sql(f"""
           )
         ) AS eligibility_month
       FROM {SOURCE_TABLE}
+      WHERE eligibility_start_date IS NOT NULL
+        AND DATE_TRUNC('month', eligibility_start_date)
+            <= DATE_TRUNC('month', COALESCE(eligibility_end_date, CURRENT_DATE()))
     )
 """)
 
