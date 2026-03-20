@@ -29,10 +29,24 @@
       ]
     },
     {
-      "name": "ds_overall_avg",
-      "displayName": "Overall Average Score by Agent",
+      "name": "ds_overall_avg_v1",
+      "displayName": "v1 Overall Average Score",
       "queryLines": [
-        "SELECT agent_version, ROUND((COALESCE(avg_clinical_completeness, 0) + COALESCE(avg_citation_quality, 0) + COALESCE(avg_actionability, 0)) / 3.0, 2) AS overall_avg_score FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.agent_evaluation_summary ORDER BY agent_version "
+        "SELECT ROUND((COALESCE(avg_clinical_completeness, 0) + COALESCE(avg_citation_quality, 0) + COALESCE(avg_actionability, 0)) / 3.0, 2) AS overall_avg_score FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.agent_evaluation_summary WHERE agent_version = 'v1' "
+      ]
+    },
+    {
+      "name": "ds_overall_avg_v2",
+      "displayName": "v2 Overall Average Score",
+      "queryLines": [
+        "SELECT ROUND((COALESCE(avg_clinical_completeness, 0) + COALESCE(avg_citation_quality, 0) + COALESCE(avg_actionability, 0)) / 3.0, 2) AS overall_avg_score FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.agent_evaluation_summary WHERE agent_version = 'v2' "
+      ]
+    },
+    {
+      "name": "ds_eval_count",
+      "displayName": "Evaluation Question Count",
+      "queryLines": [
+        "SELECT num_eval_rows FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.agent_evaluation_summary WHERE agent_version = 'v1' "
       ]
     },
     {
@@ -87,20 +101,14 @@
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "ds_overall_avg",
+                  "datasetName": "ds_overall_avg_v1",
                   "fields": [
                     {
                       "name": "overall_avg_score",
                       "expression": "`overall_avg_score`"
                     }
                   ],
-                  "disaggregated": true,
-                  "filters": [
-                    {
-                      "fieldName": "agent_version",
-                      "values": ["v1"]
-                    }
-                  ]
+                  "disaggregated": true
                 }
               }
             ],
@@ -133,20 +141,14 @@
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "ds_overall_avg",
+                  "datasetName": "ds_overall_avg_v2",
                   "fields": [
                     {
                       "name": "overall_avg_score",
                       "expression": "`overall_avg_score`"
                     }
                   ],
-                  "disaggregated": true,
-                  "filters": [
-                    {
-                      "fieldName": "agent_version",
-                      "values": ["v2"]
-                    }
-                  ]
+                  "disaggregated": true
                 }
               }
             ],
@@ -179,20 +181,14 @@
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "ds_eval_summary",
+                  "datasetName": "ds_eval_count",
                   "fields": [
                     {
                       "name": "num_eval_rows",
                       "expression": "`num_eval_rows`"
                     }
                   ],
-                  "disaggregated": true,
-                  "filters": [
-                    {
-                      "fieldName": "agent_version",
-                      "values": ["v1"]
-                    }
-                  ]
+                  "disaggregated": true
                 }
               }
             ],
