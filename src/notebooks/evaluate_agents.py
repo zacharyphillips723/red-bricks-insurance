@@ -336,7 +336,7 @@ v2_per_row = v2_results.tables["eval_results_table"].copy()
 v2_per_row["agent_version"] = "v2"
 v2_per_row["model_name"] = V2_MODEL_NAME
 v2_per_row["prompt_strategy"] = "soap_structured"
-v2_per_row["llm_endpoint"] = "databricks-meta-llama-4-maverick"
+v2_per_row["llm_endpoint"] = "databricks-llama-4-maverick"
 v2_per_row["retrieval_chunks"] = 10
 v2_per_row["eval_timestamp"] = eval_timestamp
 

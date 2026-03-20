@@ -65,7 +65,7 @@ class CareIntelligenceAgentV2(ChatModel):
         self.schema = os.environ.get("UC_SCHEMA", "red_bricks_insurance_dev")
         self.warehouse_id = os.environ.get("SQL_WAREHOUSE_ID", "781064a3466c0984")
         self.llm_endpoint = os.environ.get(
-            "LLM_ENDPOINT", "databricks-meta-llama-4-maverick"
+            "LLM_ENDPOINT", "databricks-llama-4-maverick"
         )
         self.vs_index = f"{self.catalog}.{self.schema}.case_notes_vs_index"
         self.member_360_table = f"{self.catalog}.{self.schema}.gold_member_360"

@@ -28,7 +28,7 @@ schema = dbutils.widgets.get("schema")
 VS_INDEX_NAME = f"{catalog}.{schema}.case_notes_vs_index"
 MEMBER_360_TABLE = f"{catalog}.{schema}.gold_member_360"
 BENEFIT_UTIL_TABLE = f"{catalog}.{schema}.gold_member_benefit_utilization"
-LLM_ENDPOINT = "databricks-meta-llama-4-maverick"
+LLM_ENDPOINT = "databricks-llama-4-maverick"
 MODEL_NAME = f"{catalog}.{schema}.care_intelligence_agent_v2"
 
 print(f"VS Index:        {VS_INDEX_NAME}")
