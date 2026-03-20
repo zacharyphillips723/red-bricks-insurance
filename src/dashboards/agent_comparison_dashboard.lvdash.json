@@ -1,0 +1,668 @@
+{
+  "datasets": [
+    {
+      "name": "ds_eval_summary",
+      "displayName": "Agent Evaluation Summary",
+      "queryLines": [
+        "SELECT agent_version, model_name, prompt_strategy, llm_endpoint, retrieval_chunks, num_eval_rows, eval_timestamp, avg_clinical_completeness, avg_citation_quality, avg_actionability, avg_response_structure FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.agent_evaluation_summary ORDER BY agent_version "
+      ]
+    },
+    {
+      "name": "ds_eval_by_metric",
+      "displayName": "Scores by Metric and Agent Version",
+      "queryLines": [
+        "SELECT agent_version, 'Clinical Completeness' AS metric, avg_clinical_completeness AS avg_score FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.agent_evaluation_summary UNION ALL SELECT agent_version, 'Citation Quality', avg_citation_quality FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.agent_evaluation_summary UNION ALL SELECT agent_version, 'Actionability', avg_actionability FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.agent_evaluation_summary UNION ALL SELECT agent_version, 'Response Structure', avg_response_structure FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.agent_evaluation_summary ORDER BY metric, agent_version "
+      ]
+    },
+    {
+      "name": "ds_eval_per_question",
+      "displayName": "Per-Question Evaluation Detail",
+      "queryLines": [
+        "SELECT agent_version, inputs, clinical_completeness, citation_quality, actionability, response_structure, ROUND((COALESCE(clinical_completeness, 0) + COALESCE(citation_quality, 0) + COALESCE(actionability, 0)) / 3.0, 2) AS avg_custom_score FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.agent_evaluation_results ORDER BY inputs, agent_version "
+      ]
+    },
+    {
+      "name": "ds_eval_metadata",
+      "displayName": "Agent Configuration Metadata",
+      "queryLines": [
+        "SELECT agent_version, model_name, prompt_strategy, llm_endpoint, retrieval_chunks, num_eval_rows, eval_timestamp FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.agent_evaluation_summary ORDER BY agent_version "
+      ]
+    },
+    {
+      "name": "ds_overall_avg",
+      "displayName": "Overall Average Score by Agent",
+      "queryLines": [
+        "SELECT agent_version, ROUND((COALESCE(avg_clinical_completeness, 0) + COALESCE(avg_citation_quality, 0) + COALESCE(avg_actionability, 0)) / 3.0, 2) AS overall_avg_score FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.agent_evaluation_summary ORDER BY agent_version "
+      ]
+    },
+    {
+      "name": "ds_eval_by_question_type",
+      "displayName": "Average Scores by Question Type",
+      "queryLines": [
+        "SELECT r.agent_version, CASE WHEN r.inputs LIKE '%outreach%' THEN 'Outreach Prep' WHEN r.inputs LIKE '%HEDIS%' OR r.inputs LIKE '%care gap%' THEN 'Care Gaps' WHEN r.inputs LIKE '%clinical activity%' OR r.inputs LIKE '%trends%' THEN 'Clinical Trends' WHEN r.inputs LIKE '%cost driver%' THEN 'Cost Context' ELSE 'Other' END AS question_type, ROUND(AVG(COALESCE(r.clinical_completeness, 0)), 2) AS avg_clinical, ROUND(AVG(COALESCE(r.actionability, 0)), 2) AS avg_actionability, COUNT(*) AS num_questions FROM catalog_insurance_vpx9o6.red_bricks_insurance_dev.agent_evaluation_results r GROUP BY r.agent_version, CASE WHEN r.inputs LIKE '%outreach%' THEN 'Outreach Prep' WHEN r.inputs LIKE '%HEDIS%' OR r.inputs LIKE '%care gap%' THEN 'Care Gaps' WHEN r.inputs LIKE '%clinical activity%' OR r.inputs LIKE '%trends%' THEN 'Clinical Trends' WHEN r.inputs LIKE '%cost driver%' THEN 'Cost Context' ELSE 'Other' END ORDER BY question_type, r.agent_version "
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "agent_comparison",
+      "displayName": "Agent A/B Comparison",
+      "layout": [
+        {
+          "widget": {
+            "name": "title",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Care Intelligence Agent — A/B Evaluation"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "subtitle",
+            "multilineTextboxSpec": {
+              "lines": [
+                "Comparing v1 (Production — Narrative, Llama 3.3 70B) vs v2 (Champion — SOAP Structured, Llama 4 Maverick) using LLM-as-judge evaluation"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-v1-overall",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_overall_avg",
+                  "fields": [
+                    {
+                      "name": "overall_avg_score",
+                      "expression": "`overall_avg_score`"
+                    }
+                  ],
+                  "disaggregated": true,
+                  "filters": [
+                    {
+                      "fieldName": "agent_version",
+                      "values": ["v1"]
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "overall_avg_score",
+                  "displayName": "v1 Average"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "v1 (Production) Overall Score"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-v2-overall",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_overall_avg",
+                  "fields": [
+                    {
+                      "name": "overall_avg_score",
+                      "expression": "`overall_avg_score`"
+                    }
+                  ],
+                  "disaggregated": true,
+                  "filters": [
+                    {
+                      "fieldName": "agent_version",
+                      "values": ["v2"]
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "overall_avg_score",
+                  "displayName": "v2 Average"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "v2 (Champion) Overall Score"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-eval-count",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_eval_summary",
+                  "fields": [
+                    {
+                      "name": "num_eval_rows",
+                      "expression": "`num_eval_rows`"
+                    }
+                  ],
+                  "disaggregated": true,
+                  "filters": [
+                    {
+                      "fieldName": "agent_version",
+                      "values": ["v1"]
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "num_eval_rows",
+                  "displayName": "Questions"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Evaluation Questions"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "hero-metric-comparison",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_eval_by_metric",
+                  "fields": [
+                    {
+                      "name": "metric",
+                      "expression": "`metric`"
+                    },
+                    {
+                      "name": "avg_score",
+                      "expression": "`avg_score`"
+                    },
+                    {
+                      "name": "agent_version",
+                      "expression": "`agent_version`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "metric",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Evaluation Metric"
+                },
+                "y": {
+                  "fieldName": "avg_score",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Average Score"
+                },
+                "color": {
+                  "fieldName": "agent_version",
+                  "scale": {
+                    "type": "categorical",
+                    "mapping": {
+                      "v1": "#137CBD",
+                      "v2": "#00A972"
+                    }
+                  },
+                  "displayName": "Agent Version"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Average Score per Metric — v1 vs v2"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "section-detail",
+            "multilineTextboxSpec": {
+              "lines": [
+                "### Per-Question Type Breakdown"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 11,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "question-type-clinical",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_eval_by_question_type",
+                  "fields": [
+                    {
+                      "name": "question_type",
+                      "expression": "`question_type`"
+                    },
+                    {
+                      "name": "avg_clinical",
+                      "expression": "`avg_clinical`"
+                    },
+                    {
+                      "name": "agent_version",
+                      "expression": "`agent_version`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "question_type",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Question Type"
+                },
+                "y": {
+                  "fieldName": "avg_clinical",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Avg Clinical Completeness"
+                },
+                "color": {
+                  "fieldName": "agent_version",
+                  "scale": {
+                    "type": "categorical",
+                    "mapping": {
+                      "v1": "#137CBD",
+                      "v2": "#00A972"
+                    }
+                  },
+                  "displayName": "Agent Version"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Clinical Completeness by Question Type"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 12,
+            "width": 3,
+            "height": 5
+          }
+        },
+        {
+          "widget": {
+            "name": "question-type-actionability",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_eval_by_question_type",
+                  "fields": [
+                    {
+                      "name": "question_type",
+                      "expression": "`question_type`"
+                    },
+                    {
+                      "name": "avg_actionability",
+                      "expression": "`avg_actionability`"
+                    },
+                    {
+                      "name": "agent_version",
+                      "expression": "`agent_version`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "question_type",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Question Type"
+                },
+                "y": {
+                  "fieldName": "avg_actionability",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Avg Actionability"
+                },
+                "color": {
+                  "fieldName": "agent_version",
+                  "scale": {
+                    "type": "categorical",
+                    "mapping": {
+                      "v1": "#137CBD",
+                      "v2": "#00A972"
+                    }
+                  },
+                  "displayName": "Agent Version"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Actionability by Question Type"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 12,
+            "width": 3,
+            "height": 5
+          }
+        },
+        {
+          "widget": {
+            "name": "section-detail-table",
+            "multilineTextboxSpec": {
+              "lines": [
+                "### Per-Question Detail"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 17,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "per-question-table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_eval_per_question",
+                  "fields": [
+                    {
+                      "name": "agent_version",
+                      "expression": "`agent_version`"
+                    },
+                    {
+                      "name": "inputs",
+                      "expression": "`inputs`"
+                    },
+                    {
+                      "name": "clinical_completeness",
+                      "expression": "`clinical_completeness`"
+                    },
+                    {
+                      "name": "citation_quality",
+                      "expression": "`citation_quality`"
+                    },
+                    {
+                      "name": "actionability",
+                      "expression": "`actionability`"
+                    },
+                    {
+                      "name": "response_structure",
+                      "expression": "`response_structure`"
+                    },
+                    {
+                      "name": "avg_custom_score",
+                      "expression": "`avg_custom_score`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "agent_version",
+                    "displayName": "Version",
+                    "type": "string"
+                  },
+                  {
+                    "fieldName": "inputs",
+                    "displayName": "Evaluation Prompt",
+                    "type": "string"
+                  },
+                  {
+                    "fieldName": "clinical_completeness",
+                    "displayName": "Clinical",
+                    "type": "number"
+                  },
+                  {
+                    "fieldName": "citation_quality",
+                    "displayName": "Citations",
+                    "type": "number"
+                  },
+                  {
+                    "fieldName": "actionability",
+                    "displayName": "Actionability",
+                    "type": "number"
+                  },
+                  {
+                    "fieldName": "response_structure",
+                    "displayName": "SOAP Structure",
+                    "type": "number"
+                  },
+                  {
+                    "fieldName": "avg_custom_score",
+                    "displayName": "Avg Score",
+                    "type": "number"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Per-Question Evaluation Scores"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 18,
+            "width": 6,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "section-metadata",
+            "multilineTextboxSpec": {
+              "lines": [
+                "### Agent Configuration Comparison"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 26,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "metadata-table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_eval_metadata",
+                  "fields": [
+                    {
+                      "name": "agent_version",
+                      "expression": "`agent_version`"
+                    },
+                    {
+                      "name": "model_name",
+                      "expression": "`model_name`"
+                    },
+                    {
+                      "name": "prompt_strategy",
+                      "expression": "`prompt_strategy`"
+                    },
+                    {
+                      "name": "llm_endpoint",
+                      "expression": "`llm_endpoint`"
+                    },
+                    {
+                      "name": "retrieval_chunks",
+                      "expression": "`retrieval_chunks`"
+                    },
+                    {
+                      "name": "num_eval_rows",
+                      "expression": "`num_eval_rows`"
+                    },
+                    {
+                      "name": "eval_timestamp",
+                      "expression": "`eval_timestamp`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "agent_version",
+                    "displayName": "Version",
+                    "type": "string"
+                  },
+                  {
+                    "fieldName": "prompt_strategy",
+                    "displayName": "Prompt Strategy",
+                    "type": "string"
+                  },
+                  {
+                    "fieldName": "llm_endpoint",
+                    "displayName": "LLM Model",
+                    "type": "string"
+                  },
+                  {
+                    "fieldName": "retrieval_chunks",
+                    "displayName": "Retrieval Chunks",
+                    "type": "number"
+                  },
+                  {
+                    "fieldName": "num_eval_rows",
+                    "displayName": "Eval Questions",
+                    "type": "number"
+                  },
+                  {
+                    "fieldName": "eval_timestamp",
+                    "displayName": "Evaluated At",
+                    "type": "string"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "What Changed Between v1 and v2"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 27,
+            "width": 6,
+            "height": 4
+          }
+        }
+      ]
+    }
+  ]
+}

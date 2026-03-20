@@ -140,6 +140,61 @@ resources:
             custom_tags:
               ResourceClass: SingleNode
 
+        # Step 6: Register Care Intelligence Agent v2 (depends on vector search + gold analytics + benefits)
+        - task_key: deploy_agent_v2
+          depends_on:
+            - task_key: setup_vector_search
+            - task_key: gold_analytics_pipeline
+            - task_key: benefits_pipeline
+          notebook_task:
+            notebook_path: ../src/notebooks/deploy_agent_v2.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+          libraries:
+            - pypi:
+                package: mlflow>=2.14.0
+            - pypi:
+                package: databricks-sdk>=0.30.0
+          new_cluster:
+            spark_version: "15.4.x-scala2.12"
+            node_type_id: Standard_DS3_v2
+            num_workers: 0
+            data_security_mode: SINGLE_USER
+            spark_conf:
+              spark.databricks.cluster.profile: singleNode
+              spark.master: "local[*]"
+            custom_tags:
+              ResourceClass: SingleNode
+
+        # Step 7: Evaluate v1 vs v2 agents (depends on both being registered)
+        - task_key: evaluate_agents
+          depends_on:
+            - task_key: deploy_member_agent
+            - task_key: deploy_agent_v2
+          notebook_task:
+            notebook_path: ../src/notebooks/evaluate_agents.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+          libraries:
+            - pypi:
+                package: mlflow>=2.14.0
+            - pypi:
+                package: databricks-sdk>=0.30.0
+            - pypi:
+                package: pandas
+          new_cluster:
+            spark_version: "15.4.x-scala2.12"
+            node_type_id: Standard_DS3_v2
+            num_workers: 0
+            data_security_mode: SINGLE_USER
+            spark_conf:
+              spark.databricks.cluster.profile: singleNode
+              spark.master: "local[*]"
+            custom_tags:
+              ResourceClass: SingleNode
+
       tags:
         project: red-bricks-insurance
         domain: full_demo
