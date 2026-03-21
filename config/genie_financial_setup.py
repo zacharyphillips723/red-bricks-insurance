@@ -39,6 +39,14 @@ TABLES = [
     f"{CATALOG}.{SCHEMA}.silver_claims_medical",
     f"{CATALOG}.{SCHEMA}.silver_claims_pharmacy",
     f"{CATALOG}.{SCHEMA}.gold_pharmacy_summary",
+
+    # Metric views (governed semantic layer)
+    f"{CATALOG}.{SCHEMA}.mv_financial_overview",
+    f"{CATALOG}.{SCHEMA}.mv_mlr_compliance",
+    f"{CATALOG}.{SCHEMA}.mv_utilization",
+    f"{CATALOG}.{SCHEMA}.mv_enrollment",
+    f"{CATALOG}.{SCHEMA}.mv_ibnr",
+    f"{CATALOG}.{SCHEMA}.mv_denials",
 ]
 
 # ---------------------------------------------------------------------------

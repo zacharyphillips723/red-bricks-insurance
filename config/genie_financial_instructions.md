@@ -130,6 +130,54 @@ per member per month) or aggregated in `gold_utilization_per_1000`.
 - Which line of business is most profitable based on MLR and admin ratio?
 - What are the top 3 financial risks across our book of business?
 
+## Metric Views — Governed Semantic Layer
+
+Red Bricks Insurance publishes **metric views** in Unity Catalog that define
+measures and dimensions as governed objects. When a metric view exists for a
+question, **prefer it over querying gold tables directly** — metric views
+guarantee consistent definitions across dashboards, notebooks, and this Genie space.
+
+### How to Query Metric Views
+
+Use the `MEASURE()` function to reference named measures:
+
+```sql
+-- PMPM by line of business
+SELECT `line_of_business`, MEASURE(`PMPM Paid`) AS pmpm
+FROM mv_financial_overview
+GROUP BY `line_of_business`;
+
+-- MLR compliance with admin ratio
+SELECT `line_of_business`, `service_year`,
+       MEASURE(`MLR`) AS mlr, MEASURE(`Admin Ratio`) AS admin_ratio
+FROM mv_mlr_compliance
+GROUP BY `line_of_business`, `service_year`;
+
+-- Utilization per 1,000 by service category
+SELECT `service_category`, `line_of_business`,
+       MEASURE(`Claims per 1000`) AS claims_per_1000,
+       MEASURE(`Cost per 1000`) AS cost_per_1000
+FROM mv_utilization
+GROUP BY `service_category`, `line_of_business`;
+```
+
+### Available Metric Views
+
+| Metric View | Measures | Dimensions |
+|---|---|---|
+| `mv_financial_overview` | Total Paid, Total Allowed, PMPM Paid, PMPM Allowed, Member Months | line_of_business, service_year_month |
+| `mv_mlr_compliance` | MLR, Total Claims Paid, Total Premiums, Medical Claims, Pharmacy Claims, Admin Ratio | line_of_business, service_year |
+| `mv_utilization` | Claims per 1000, Patients per 1000, Cost per 1000, Admits per 1000, Avg Cost per Claim, Total Claims, Member Months | line_of_business, service_year, service_category |
+| `mv_enrollment` | Member Months, Active Members, Avg Premium, Premium Revenue, Avg Risk Score | line_of_business, plan_type, eligibility_year, eligibility_month |
+| `mv_ibnr` | Avg Payment Lag Days, Completion Rate, Claims Over 90 Days Pct, Total Claims | service_year_month |
+| `mv_denials` | Denial Count, Total Denied Amount, Avg Denied Amount | denial_category, line_of_business, claim_type |
+
+### When to Use Metric Views vs Gold Tables
+
+- **Use metric views** for standard KPIs (PMPM, MLR, utilization per 1,000, enrollment counts, denial totals)
+- **Use gold tables** for detail-level drill-down, ad-hoc exploratory queries, or columns not exposed as measures
+- Metric views and gold tables return the same answers — the metric view enforces *how* the metric is calculated
+
 ## PHI/PII Reminder
 This is synthetic data for demonstration purposes only. In production,
 apply appropriate column masks and row filters per Unity Catalog policies.

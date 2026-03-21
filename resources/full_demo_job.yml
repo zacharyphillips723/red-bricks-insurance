@@ -115,6 +115,28 @@ resources:
             pipeline_id: ${resources.pipelines.gold_analytics_pipeline.id}
             full_refresh: true
 
+        # Step 3b: Create metric views (governed semantic layer on gold tables)
+        # Requires DBR 17.2+ for CREATE VIEW ... WITH METRICS support
+        - task_key: create_metric_views
+          depends_on:
+            - task_key: gold_analytics_pipeline
+            - task_key: build_member_months
+          notebook_task:
+            notebook_path: ../src/notebooks/create_metric_views.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+          new_cluster:
+            spark_version: "17.3.x-scala2.13"
+            node_type_id: Standard_DS3_v2
+            num_workers: 0
+            data_security_mode: SINGLE_USER
+            spark_conf:
+              spark.databricks.cluster.profile: singleNode
+              spark.master: "local[*]"
+            custom_tags:
+              ResourceClass: SingleNode
+
         # Step 4: Vector Search index (depends on documents pipeline)
         - task_key: setup_vector_search
           depends_on:
