@@ -28,11 +28,20 @@ SELECT
   AVG(r.hcc_count)                                                 AS avg_hcc_count,
   SUM(CASE WHEN r.is_high_risk = TRUE THEN 1 ELSE 0 END)
     / NULLIF(COUNT(DISTINCT r.member_id), 0)                       AS pct_high_risk,
-  -- Estimated annual revenue: only meaningful for Medicare Advantage
-  CASE
-    WHEN e.line_of_business = 'Medicare Advantage'
-    THEN SUM(r.raf_score) * 12000
-    ELSE NULL
+  -- Estimated annual revenue per RAF unit varies by LOB:
+  --   Medicare Advantage: ~$12,000/RAF (CMS capitation)
+  --   Medicaid:           ~$6,000/RAF (state capitation, varies by state)
+  --   Individual/ACA:     ~$8,500/RAF (risk transfer payments)
+  --   Small Group:        ~$7,500/RAF (risk adjustment transfers)
+  --   Large Group:        ~$9,000/RAF (experience-rated premium impact)
+  -- These are demo approximations — actual rates vary by geography and model.
+  SUM(r.raf_score) * CASE
+    WHEN e.line_of_business = 'Medicare Advantage' THEN 12000
+    WHEN e.line_of_business = 'Medicaid'           THEN 6000
+    WHEN e.line_of_business = 'Individual'         THEN 8500
+    WHEN e.line_of_business = 'Small Group'        THEN 7500
+    WHEN e.line_of_business = 'Large Group'        THEN 9000
+    ELSE 8000
   END                                                              AS estimated_annual_revenue
 FROM ${catalog}.${schema}.silver_risk_adjustment_member r
 INNER JOIN ${catalog}.${schema}.silver_enrollment e

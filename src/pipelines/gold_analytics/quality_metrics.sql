@@ -211,11 +211,13 @@ SELECT
   p.specialty,
   COUNT(DISTINCT hp.measure_name)                  AS measure_count,
   AVG(hp.compliance_rate)                          AS overall_compliance_rate,
+  -- Thresholds calibrated for synthetic data to produce a realistic distribution
+  -- across all 5 star levels. Production systems use CMS cut points.
   CASE
-    WHEN AVG(hp.compliance_rate) >= 0.90 THEN 5
-    WHEN AVG(hp.compliance_rate) >= 0.75 THEN 4
-    WHEN AVG(hp.compliance_rate) >= 0.60 THEN 3
-    WHEN AVG(hp.compliance_rate) >= 0.45 THEN 2
+    WHEN AVG(hp.compliance_rate) >= 0.42 THEN 5
+    WHEN AVG(hp.compliance_rate) >= 0.37 THEN 4
+    WHEN AVG(hp.compliance_rate) >= 0.33 THEN 3
+    WHEN AVG(hp.compliance_rate) >= 0.29 THEN 2
     ELSE 1
   END                                              AS star_rating
 FROM gold_hedis_provider hp

@@ -10,12 +10,13 @@
 -- -----------------------------------------------------------------------------
 -- gold_denial_classification — AI-Classified Denial Reason Categories
 -- -----------------------------------------------------------------------------
--- Uses a foundation model to classify raw denial reason codes into actionable
--- categories (Administrative, Clinical, Eligibility, Financial). This enables
--- downstream analytics and denial management workflows.
+-- Uses a foundation model to classify raw denial reason codes into actionable,
+-- industry-standard categories. Each category maps to a specific remediation
+-- workflow in denial management (e.g., "Prior Authorization Missing" triggers
+-- retro-auth, "Coding / Billing Error" triggers rebill).
 -- -----------------------------------------------------------------------------
 CREATE OR REFRESH MATERIALIZED VIEW gold_denial_classification
-COMMENT 'AI-classified denial reason categories using Databricks foundation model. Maps raw denial codes to actionable categories for denial management.'
+COMMENT 'AI-classified denial reason categories using Databricks foundation model. Maps raw denial codes to actionable workflow-specific categories for denial management.'
 AS
 WITH distinct_denials AS (
   SELECT DISTINCT denial_reason_code
@@ -27,7 +28,15 @@ SELECT
   ai_query(
     'databricks-meta-llama-3-3-70b-instruct',
     CONCAT(
-      'You are a healthcare claims expert. Classify this claim denial reason code into exactly one category: Administrative, Clinical, Eligibility, or Financial. ',
+      'You are a healthcare claims denial management expert. Classify this claim denial reason code into exactly one of these categories: ',
+      'Prior Authorization Missing, ',
+      'Medical Necessity / Clinical Review, ',
+      'Eligibility / Coverage Terminated, ',
+      'Coding / Billing Error, ',
+      'Duplicate Claim, ',
+      'Timely Filing, ',
+      'Coordination of Benefits, ',
+      'Out-of-Network / Non-Covered Service. ',
       'Code: ', denial_reason_code,
       '. Respond with only the category name, nothing else.'
     )
@@ -109,6 +118,18 @@ SELECT
   hcc_count,
   line_of_business,
   risk_rank,
+  ai_query(
+    'databricks-meta-llama-3-3-70b-instruct',
+    CONCAT(
+      'Classify this health plan member into exactly one clinical risk category. Choose from: ',
+      'Complex Chronic, Behavioral Health, Cardiovascular, Metabolic/Endocrine, Respiratory, ',
+      'Renal, Oncology, Musculoskeletal, Frailty/Functional Decline, Rising Risk. ',
+      'RAF Score: ', CAST(raf_score AS STRING),
+      ', HCC Codes: ', COALESCE(hcc_codes, 'None'),
+      ', HCC Count: ', CAST(hcc_count AS STRING),
+      '. Respond with only the category name, nothing else.'
+    )
+  ) AS risk_category,
   ai_query(
     'databricks-meta-llama-3-3-70b-instruct',
     CONCAT(
