@@ -6,14 +6,15 @@
 -- range validations are tracked only so the quality dashboard captures defect
 -- rates without losing records.
 --
--- Expect ~2% of incoming rows to violate at least one tracked expectation.
+-- Uses materialized views (not streaming tables) because upstream bronze
+-- layer reads from dbignite Delta tables via full-table overwrite.
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
 -- silver_encounters
 -- Cleansed and typed encounter records
 -- ---------------------------------------------------------------------------
-CREATE OR REFRESH STREAMING TABLE silver_encounters (
+CREATE OR REFRESH MATERIALIZED VIEW silver_encounters (
   CONSTRAINT valid_encounter_id EXPECT (encounter_id IS NOT NULL) ON VIOLATION DROP ROW,
   CONSTRAINT valid_member_id    EXPECT (member_id IS NOT NULL)    ON VIOLATION DROP ROW,
   CONSTRAINT valid_npi          EXPECT (provider_npi RLIKE '^[0-9]{10}$'),
@@ -31,13 +32,13 @@ SELECT
   visit_type,
   source_file,
   ingestion_timestamp
-FROM STREAM(LIVE.bronze_encounters);
+FROM LIVE.bronze_encounters;
 
 -- ---------------------------------------------------------------------------
 -- silver_lab_results
 -- Cleansed lab results with abnormal flag
 -- ---------------------------------------------------------------------------
-CREATE OR REFRESH STREAMING TABLE silver_lab_results (
+CREATE OR REFRESH MATERIALIZED VIEW silver_lab_results (
   CONSTRAINT valid_lab_id          EXPECT (lab_result_id IS NOT NULL)  ON VIOLATION DROP ROW,
   CONSTRAINT valid_member_id       EXPECT (member_id IS NOT NULL)      ON VIOLATION DROP ROW,
   CONSTRAINT valid_value           EXPECT (value IS NOT NULL AND value >= 0),
@@ -61,13 +62,13 @@ SELECT
   END AS is_abnormal,
   source_file,
   ingestion_timestamp
-FROM STREAM(LIVE.bronze_lab_results);
+FROM LIVE.bronze_lab_results;
 
 -- ---------------------------------------------------------------------------
 -- silver_vitals
 -- Cleansed vitals measurements
 -- ---------------------------------------------------------------------------
-CREATE OR REFRESH STREAMING TABLE silver_vitals (
+CREATE OR REFRESH MATERIALIZED VIEW silver_vitals (
   CONSTRAINT valid_vital_id         EXPECT (vital_id IS NOT NULL)   ON VIOLATION DROP ROW,
   CONSTRAINT valid_member_id        EXPECT (member_id IS NOT NULL)  ON VIOLATION DROP ROW,
   CONSTRAINT valid_value            EXPECT (value > 0),
@@ -83,4 +84,4 @@ SELECT
   TRY_CAST(measurement_date AS DATE)  AS measurement_date,
   source_file,
   ingestion_timestamp
-FROM STREAM(LIVE.bronze_vitals);
+FROM LIVE.bronze_vitals;

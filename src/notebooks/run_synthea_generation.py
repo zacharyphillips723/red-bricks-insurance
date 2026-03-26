@@ -1,0 +1,353 @@
+# Databricks notebook source
+# MAGIC %md
+# MAGIC # Red Bricks Insurance — Synthea Patient Generation
+# MAGIC
+# MAGIC Downloads and runs [Synthea](https://github.com/synthetichealth/synthea), an open-source
+# MAGIC synthetic patient generator, to produce **5,000 clinically realistic FHIR R4 bundles**
+# MAGIC for North Carolina residents. These bundles are the input to the crosswalk step
+# MAGIC (Phase 2) which rewrites Synthea UUIDs to existing Red Bricks MBR IDs.
+# MAGIC
+# MAGIC **Output:** `{volume_base}/synthea_raw/fhir/` — one JSON Bundle per patient
+# MAGIC
+# MAGIC **Requirements:** Java 11+ (DBR 16.x+ recommended — DBR 15.x ships with Java 8 which is too old)
+
+# COMMAND ----------
+
+dbutils.widgets.text("catalog", "main", "Catalog")
+dbutils.widgets.text("schema", "red_bricks_insurance_dev", "Schema")
+
+catalog = dbutils.widgets.get("catalog")
+schema = dbutils.widgets.get("schema")
+volume_base = f"/Volumes/{catalog}/{schema}/raw_sources"
+
+print(f"Catalog: {catalog}, Schema: {schema}")
+print(f"Volume base: {volume_base}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Configuration
+
+# COMMAND ----------
+
+import os
+import subprocess
+import shutil
+import glob
+import json
+
+# Synthea version — pinned for reproducibility
+SYNTHEA_VERSION = "3.3.0"
+SYNTHEA_JAR_URL = f"https://github.com/synthetichealth/synthea/releases/download/v{SYNTHEA_VERSION}/synthea-with-dependencies.jar"
+SYNTHEA_JAR_NAME = f"synthea-{SYNTHEA_VERSION}-with-dependencies.jar"
+
+# Local working directory on the cluster node
+LOCAL_WORK_DIR = "/tmp/synthea_workdir"
+LOCAL_JAR_PATH = f"{LOCAL_WORK_DIR}/{SYNTHEA_JAR_NAME}"
+LOCAL_OUTPUT_DIR = f"{LOCAL_WORK_DIR}/output"
+
+# Volume output path
+VOLUME_SYNTHEA_RAW = f"{volume_base}/synthea_raw/fhir"
+
+# Generation parameters
+NUM_PATIENTS = 5000
+STATE = "North Carolina"
+CITY = None  # None = all cities in the state
+SEED = 42
+SYNTHEA_THREADS = os.cpu_count() or 4  # use all available vCPUs
+COPY_THREADS = 16                       # parallel file copy to volume
+
+print(f"Synthea version: {SYNTHEA_VERSION}")
+print(f"Patients: {NUM_PATIENTS}, State: {STATE}, Seed: {SEED}")
+print(f"Synthea threads: {SYNTHEA_THREADS}, Copy threads: {COPY_THREADS}")
+print(f"Output: {VOLUME_SYNTHEA_RAW}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 1 — Download Synthea JAR
+
+# COMMAND ----------
+
+os.makedirs(LOCAL_WORK_DIR, exist_ok=True)
+
+if os.path.exists(LOCAL_JAR_PATH):
+    print(f"Synthea JAR already present at {LOCAL_JAR_PATH}, skipping download.")
+else:
+    print(f"Downloading Synthea {SYNTHEA_VERSION} from GitHub releases...")
+    result = subprocess.run(
+        ["curl", "-L", "-o", LOCAL_JAR_PATH, SYNTHEA_JAR_URL],
+        capture_output=True, text=True, timeout=300,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to download Synthea JAR: {result.stderr}")
+    size_mb = os.path.getsize(LOCAL_JAR_PATH) / (1024 * 1024)
+    print(f"Downloaded {LOCAL_JAR_PATH} ({size_mb:.1f} MB)")
+
+# Verify the JAR was downloaded (check file size — should be ~300+ MB)
+jar_size_mb = os.path.getsize(LOCAL_JAR_PATH) / (1024 * 1024)
+if jar_size_mb < 50:
+    raise RuntimeError(f"JAR file is only {jar_size_mb:.1f} MB — download likely failed or redirected to HTML")
+print(f"Synthea JAR size: {jar_size_mb:.1f} MB")
+
+# Check Java version — Synthea 3.3.0 requires Java 11+
+java_ver = subprocess.run(["java", "-version"], capture_output=True, text=True, timeout=30)
+java_ver_str = (java_ver.stderr or java_ver.stdout or "").strip()
+print(f"Java version: {java_ver_str.split(chr(10))[0]}")
+
+# Quick smoke test — run with 0 patients to verify Java + JAR work
+result = subprocess.run(
+    ["java", "-jar", LOCAL_JAR_PATH, "-p", "0"],
+    capture_output=True, text=True, timeout=120,
+)
+print(f"Smoke test stdout (last 5 lines):")
+for line in (result.stdout or "").strip().split("\n")[-5:]:
+    print(f"  {line}")
+if result.returncode != 0:
+    print(f"Smoke test stderr: {(result.stderr or '')[:1000]}")
+    print(f"Smoke test stdout: {(result.stdout or '')[:1000]}")
+    # If Java version is too old, fail with a clear message
+    if "UnsupportedClassVersionError" in (result.stderr or ""):
+        raise RuntimeError(
+            "Synthea 3.3.0 requires Java 11+ but this cluster has Java 8. "
+            "Use DBR 16.x+ or specify a cluster with Java 11+."
+        )
+    print("WARNING: Smoke test returned non-zero — continuing anyway")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 2 — Configure and Run Synthea
+# MAGIC
+# MAGIC Key configuration:
+# MAGIC - **FHIR R4 JSON only** — disable C-CDA, CSV, CCDA exports
+# MAGIC - **Transaction bundles** — each patient gets a full Bundle with all resources
+# MAGIC - **Seed 42** — reproducible output across runs
+# MAGIC - **North Carolina** — matches existing Red Bricks member geography
+# MAGIC - **Disease modules** — Synthea's built-in modules automatically generate diabetes,
+# MAGIC   hypertension, CHF, COPD, CKD, depression, and other conditions based on
+# MAGIC   epidemiological data. No custom module configuration needed.
+
+# COMMAND ----------
+
+# Clean previous output
+if os.path.exists(LOCAL_OUTPUT_DIR):
+    shutil.rmtree(LOCAL_OUTPUT_DIR)
+os.makedirs(LOCAL_OUTPUT_DIR, exist_ok=True)
+
+# Write Synthea override properties
+# These override the defaults bundled inside the JAR
+synthea_props = f"""\
+# === Export Settings ===
+exporter.fhir.export = true
+exporter.fhir.transaction_bundle = true
+exporter.ccda.export = false
+exporter.csv.export = false
+exporter.cpcds.export = false
+exporter.hospital.fhir.export = false
+exporter.practitioner.fhir.export = false
+
+# === Output Location ===
+exporter.baseDirectory = {LOCAL_OUTPUT_DIR}
+
+# === Generation Settings ===
+generate.payers.insurance_companies.default_file = payers/insurance_companies.csv
+exporter.years_of_history = 10
+
+# === Seed for Reproducibility ===
+generate.seed = {SEED}
+"""
+
+props_path = f"{LOCAL_WORK_DIR}/synthea.properties"
+with open(props_path, "w") as f:
+    f.write(synthea_props)
+
+print("Synthea properties written:")
+print(synthea_props)
+
+# COMMAND ----------
+
+# Build the Synthea command
+# Synthea CLI: java -jar synthea.jar [-s seed] [-p population] [-c config] [state [city]]
+synthea_cmd = [
+    "java",
+    "-Xms512m", "-Xmx4g",         # memory settings for 5K patients
+    "-jar", LOCAL_JAR_PATH,
+    "-s", str(SEED),               # random seed
+    "-p", str(NUM_PATIENTS),       # population size
+    "-t", str(SYNTHEA_THREADS),    # parallel generation threads
+    "-c", props_path,              # properties file
+    STATE,                         # state (positional, must be last)
+]
+
+print(f"Running: {' '.join(synthea_cmd)}")
+print(f"Generating {NUM_PATIENTS} patients — this takes ~5-10 minutes...")
+print(f"Working directory: {LOCAL_WORK_DIR}")
+
+result = subprocess.run(
+    synthea_cmd,
+    capture_output=True, text=True,
+    timeout=1800,  # 30-minute timeout
+    cwd=LOCAL_WORK_DIR,            # run from workdir so relative paths resolve
+)
+
+# Print last 30 lines of stdout (progress/summary)
+stdout_lines = (result.stdout or "").strip().split("\n")
+print(f"\n--- Synthea stdout (last 30 lines of {len(stdout_lines)} total) ---")
+for line in stdout_lines[-30:]:
+    print(line)
+
+if result.stderr:
+    stderr_lines = result.stderr.strip().split("\n")
+    print(f"\n--- Synthea stderr (last 20 lines of {len(stderr_lines)} total) ---")
+    for line in stderr_lines[-20:]:
+        print(line)
+
+if result.returncode != 0:
+    # Include stdout+stderr in the exception so it shows up in run output
+    err_detail = f"STDOUT:\n{(result.stdout or '')[-2000:]}\n\nSTDERR:\n{(result.stderr or '')[-2000:]}"
+    raise RuntimeError(f"Synthea exited with code {result.returncode}\n{err_detail}")
+
+print(f"\nSynthea completed successfully (exit code {result.returncode})")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 3 — Validate Output
+
+# COMMAND ----------
+
+# Find FHIR JSON bundles
+fhir_output_dir = os.path.join(LOCAL_OUTPUT_DIR, "fhir")
+if not os.path.isdir(fhir_output_dir):
+    raise FileNotFoundError(
+        f"Expected FHIR output at {fhir_output_dir}. "
+        f"Contents of {LOCAL_OUTPUT_DIR}: {os.listdir(LOCAL_OUTPUT_DIR)}"
+    )
+
+bundle_files = glob.glob(os.path.join(fhir_output_dir, "*.json"))
+# Exclude hospital and practitioner info files
+patient_bundles = [
+    f for f in bundle_files
+    if not os.path.basename(f).startswith(("hospitalInformation", "practitionerInformation"))
+]
+print(f"Total FHIR JSON files: {len(bundle_files)}")
+print(f"Patient bundles: {len(patient_bundles)}")
+
+if len(patient_bundles) < NUM_PATIENTS * 0.95:
+    print(f"WARNING: Expected ~{NUM_PATIENTS} patient bundles, got {len(patient_bundles)}")
+
+# Sample validation — check first bundle structure
+sample_path = patient_bundles[0]
+with open(sample_path, "r") as f:
+    sample = json.load(f)
+
+print(f"\nSample bundle: {os.path.basename(sample_path)}")
+print(f"  resourceType: {sample.get('resourceType')}")
+print(f"  type: {sample.get('type')}")
+entries = sample.get("entry", [])
+print(f"  entries: {len(entries)}")
+
+# Count resource types in sample
+resource_types = {}
+for entry in entries:
+    rt = entry.get("resource", {}).get("resourceType", "Unknown")
+    resource_types[rt] = resource_types.get(rt, 0) + 1
+print(f"  resource types: {json.dumps(resource_types, indent=2)}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 4 — Copy to UC Volume
+
+# COMMAND ----------
+
+# Clean previous Synthea data in the volume
+try:
+    dbutils.fs.rm(f"dbfs:{VOLUME_SYNTHEA_RAW}", recurse=True)
+    print(f"Cleaned previous data at {VOLUME_SYNTHEA_RAW}")
+except Exception:
+    pass
+
+# Create the volume directory
+os.makedirs(VOLUME_SYNTHEA_RAW, exist_ok=True)
+
+# Copy patient bundles to the volume via FUSE mount (parallelized)
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+
+def _copy_bundle(src_path: str) -> str:
+    dest = os.path.join(VOLUME_SYNTHEA_RAW, os.path.basename(src_path))
+    shutil.copy2(src_path, dest)
+    return dest
+
+print(f"Copying {len(patient_bundles)} bundles using {COPY_THREADS} threads...")
+copy_start = time.time()
+copied = 0
+with ThreadPoolExecutor(max_workers=COPY_THREADS) as executor:
+    futures = {executor.submit(_copy_bundle, p): p for p in patient_bundles}
+    for future in as_completed(futures):
+        future.result()  # raise any exceptions
+        copied += 1
+        if copied % 1000 == 0:
+            elapsed = time.time() - copy_start
+            print(f"  Copied {copied}/{len(patient_bundles)} bundles ({elapsed:.0f}s)")
+
+copy_elapsed = time.time() - copy_start
+print(f"Copied {copied} patient bundles to {VOLUME_SYNTHEA_RAW} in {copy_elapsed:.0f}s")
+
+# Also copy hospital/practitioner info for reference
+for f in bundle_files:
+    basename = os.path.basename(f)
+    if basename.startswith(("hospitalInformation", "practitionerInformation")):
+        shutil.copy2(f, os.path.join(VOLUME_SYNTHEA_RAW, basename))
+        print(f"  Copied reference file: {basename}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 5 — Summary Statistics
+
+# COMMAND ----------
+
+# Aggregate resource type counts across all bundles (sample first 100 for speed)
+import random as _rand
+_rand.seed(42)
+sample_files = _rand.sample(patient_bundles, min(100, len(patient_bundles)))
+
+all_resource_types = {}
+condition_codes = set()
+for bp in sample_files:
+    with open(bp, "r") as f:
+        bundle = json.load(f)
+    for entry in bundle.get("entry", []):
+        resource = entry.get("resource", {})
+        rt = resource.get("resourceType", "Unknown")
+        all_resource_types[rt] = all_resource_types.get(rt, 0) + 1
+        # Collect condition codes
+        if rt == "Condition":
+            for coding in resource.get("code", {}).get("coding", []):
+                code = coding.get("code", "")
+                display = coding.get("display", "")
+                if code:
+                    condition_codes.add(f"{code}: {display}")
+
+print("=" * 60)
+print("SYNTHEA GENERATION COMPLETE")
+print("=" * 60)
+print(f"Patient bundles generated: {len(patient_bundles)}")
+print(f"Output location: {VOLUME_SYNTHEA_RAW}")
+print(f"\nResource types (sampled from {len(sample_files)} bundles):")
+for rt, count in sorted(all_resource_types.items(), key=lambda x: -x[1]):
+    print(f"  {rt:30s} {count:,}")
+
+print(f"\nUnique condition codes found (sample): {len(condition_codes)}")
+# Show a few HLS-relevant conditions
+hls_keywords = ["diabetes", "hypertension", "heart failure", "copd", "chronic kidney", "depression"]
+relevant = [c for c in condition_codes if any(k in c.lower() for k in hls_keywords)]
+if relevant:
+    print("Key HLS conditions found:")
+    for c in sorted(relevant)[:15]:
+        print(f"  {c}")
+
+print(f"\nNext step: Run Phase 2 crosswalk to map Synthea patients -> Red Bricks MBR IDs")

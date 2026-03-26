@@ -158,43 +158,43 @@ for table in ["Patient", "Encounter", "Condition", "Observation"]:
 # COMMAND ----------
 
 # Top diagnoses by frequency (navigate the nested FHIR struct)
-df_cond = spark.table(f"{catalog}.{schema}.Condition")
-# dbignite wraps the resource in a column named after the resource type
-from pyspark.sql import functions as F
-
-if "Condition" in df_cond.columns:
-    # Nested struct: Condition.code.coding[0].code
-    df_cond.select(
-        F.col("Condition.code.coding")[0]["code"].alias("icd10_code"),
-        F.col("Condition.code.coding")[0]["display"].alias("diagnosis"),
-        F.col("Condition.subject.reference").alias("patient_ref"),
-    ).groupBy("icd10_code", "diagnosis").agg(
-        F.count("*").alias("condition_count"),
-        F.countDistinct("patient_ref").alias("unique_patients"),
-    ).orderBy(F.desc("condition_count")).limit(15).display()
-else:
-    # Flat schema — columns are top-level
-    display(df_cond.limit(15))
+# Use SQL for reliable nested struct navigation — PySpark bracket notation
+# can conflict with dbignite's array-typed FHIR fields.
+try:
+    spark.sql(f"""
+        SELECT
+            Condition.code.coding[0].code   AS icd10_code,
+            Condition.code.coding[0].display AS diagnosis,
+            COUNT(*)                         AS condition_count,
+            COUNT(DISTINCT Condition.subject.reference) AS unique_patients
+        FROM {catalog}.{schema}.Condition
+        GROUP BY 1, 2
+        ORDER BY condition_count DESC
+        LIMIT 15
+    """).display()
+except Exception as e:
+    print(f"Condition summary skipped (schema exploration): {e}")
 
 # COMMAND ----------
 
 # Observation distribution (labs + vitals)
-df_obs = spark.table(f"{catalog}.{schema}.Observation")
-
-if "Observation" in df_obs.columns:
-    df_obs.select(
-        F.col("Observation.code.coding")[0]["code"].alias("loinc_code"),
-        F.col("Observation.code.coding")[0]["display"].alias("observation_name"),
-        F.col("Observation.category")[0]["coding"][0]["code"].alias("category"),
-        F.col("Observation.valueQuantity.value").alias("value"),
-    ).groupBy("loinc_code", "observation_name", "category").agg(
-        F.count("*").alias("observation_count"),
-        F.round(F.avg("value"), 2).alias("avg_value"),
-        F.round(F.min("value"), 2).alias("min_value"),
-        F.round(F.max("value"), 2).alias("max_value"),
-    ).orderBy(F.desc("observation_count")).limit(20).display()
-else:
-    display(df_obs.limit(20))
+try:
+    spark.sql(f"""
+        SELECT
+            Observation.code.coding[0].code    AS loinc_code,
+            Observation.code.coding[0].display  AS observation_name,
+            Observation.category[0].coding[0].code AS category,
+            COUNT(*)                            AS observation_count,
+            ROUND(AVG(Observation.valueQuantity.value), 2) AS avg_value,
+            ROUND(MIN(Observation.valueQuantity.value), 2) AS min_value,
+            ROUND(MAX(Observation.valueQuantity.value), 2) AS max_value
+        FROM {catalog}.{schema}.Observation
+        GROUP BY 1, 2, 3
+        ORDER BY observation_count DESC
+        LIMIT 20
+    """).display()
+except Exception as e:
+    print(f"Observation summary skipped (schema exploration): {e}")
 
 # COMMAND ----------
 

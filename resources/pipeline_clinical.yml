@@ -6,6 +6,8 @@ resources:
       target: ${var.schema}
       configuration:
         source_volume: ${var.source_volume}
+        catalog: ${var.catalog}
+        schema: ${var.schema}
       libraries:
         - file:
             path: ../src/pipelines/clinical/bronze.sql

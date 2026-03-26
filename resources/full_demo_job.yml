@@ -16,7 +16,7 @@ resources:
             - pypi:
                 package: fpdf2
           new_cluster:
-            spark_version: "15.4.x-scala2.12"
+            spark_version: "16.4.x-scala2.12"
             node_type_id: Standard_DS3_v2
             num_workers: 1
             data_security_mode: SINGLE_USER
@@ -41,13 +41,6 @@ resources:
             - task_key: data_generation
           pipeline_task:
             pipeline_id: ${resources.pipelines.claims_pipeline.id}
-            full_refresh: true
-
-        - task_key: clinical_pipeline
-          depends_on:
-            - task_key: data_generation
-          pipeline_task:
-            pipeline_id: ${resources.pipelines.clinical_pipeline.id}
             full_refresh: true
 
         - task_key: underwriting_pipeline
@@ -91,7 +84,7 @@ resources:
               catalog: ${var.catalog}
               schema: ${var.schema}
           new_cluster:
-            spark_version: "15.4.x-scala2.12"
+            spark_version: "16.4.x-scala2.12"
             node_type_id: Standard_DS3_v2
             num_workers: 0
             data_security_mode: SINGLE_USER
@@ -100,6 +93,62 @@ resources:
               spark.master: "local[*]"
             custom_tags:
               ResourceClass: SingleNode
+
+        # Step 2d: Synthea clinical data pipeline
+        # Synthea generation → crosswalk → dbignite parse → DLT clinical pipeline
+        - task_key: synthea_generation
+          depends_on:
+            - task_key: data_generation
+          notebook_task:
+            notebook_path: ../src/notebooks/run_synthea_generation.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+          new_cluster:
+            spark_version: "16.4.x-scala2.12"
+            node_type_id: Standard_DS3_v2
+            num_workers: 1
+            data_security_mode: SINGLE_USER
+
+        - task_key: synthea_crosswalk
+          depends_on:
+            - task_key: synthea_generation
+          notebook_task:
+            notebook_path: ../src/notebooks/run_synthea_crosswalk.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+          new_cluster:
+            spark_version: "16.4.x-scala2.12"
+            node_type_id: Standard_DS5_v2
+            num_workers: 0
+            data_security_mode: SINGLE_USER
+            spark_conf:
+              spark.databricks.cluster.profile: singleNode
+              spark.master: "local[*]"
+            custom_tags:
+              ResourceClass: SingleNode
+
+        - task_key: parse_fhir_with_dbignite
+          depends_on:
+            - task_key: synthea_crosswalk
+          notebook_task:
+            notebook_path: ../src/notebooks/parse_fhir_with_dbignite.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+          new_cluster:
+            spark_version: "16.4.x-scala2.12"
+            node_type_id: Standard_DS3_v2
+            num_workers: 1
+            data_security_mode: SINGLE_USER
+
+        - task_key: clinical_pipeline
+          depends_on:
+            - task_key: parse_fhir_with_dbignite
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.clinical_pipeline.id}
+            full_refresh: true
 
         # Step 3: Gold analytics (depends on ALL domain pipelines + member months)
         - task_key: gold_analytics_pipeline
@@ -147,7 +196,7 @@ resources:
               catalog: ${var.catalog}
               schema: ${var.schema}
           new_cluster:
-            spark_version: "15.4.x-scala2.12"
+            spark_version: "16.4.x-scala2.12"
             node_type_id: Standard_DS3_v2
             num_workers: 0
             data_security_mode: SINGLE_USER
@@ -173,7 +222,7 @@ resources:
             - pypi:
                 package: databricks-sdk>=0.30.0
           new_cluster:
-            spark_version: "15.4.x-scala2.12"
+            spark_version: "16.4.x-scala2.12"
             node_type_id: Standard_DS3_v2
             num_workers: 0
             data_security_mode: SINGLE_USER
@@ -200,7 +249,7 @@ resources:
             - pypi:
                 package: databricks-sdk>=0.30.0
           new_cluster:
-            spark_version: "15.4.x-scala2.12"
+            spark_version: "16.4.x-scala2.12"
             node_type_id: Standard_DS3_v2
             num_workers: 0
             data_security_mode: SINGLE_USER
@@ -228,7 +277,7 @@ resources:
             - pypi:
                 package: pandas
           new_cluster:
-            spark_version: "15.4.x-scala2.12"
+            spark_version: "16.4.x-scala2.12"
             node_type_id: Standard_DS3_v2
             num_workers: 0
             data_security_mode: SINGLE_USER
