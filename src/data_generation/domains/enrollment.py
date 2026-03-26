@@ -2,7 +2,7 @@
 
 import random
 from datetime import date, timedelta
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from faker import Faker
 
@@ -13,14 +13,24 @@ from ..helpers import random_date_between, weighted_choice, COUNTIES
 fake = Faker("en_US")
 
 
-def generate_enrollment(member_ids: List[str]) -> List[Dict[str, Any]]:
-    """Generate enrollment/plan records for each member (one record per member)."""
+def generate_enrollment(
+    member_ids: List[str],
+    member_lob_map: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    """Generate enrollment/plan records for each member (one record per member).
+
+    When member_lob_map is provided, uses the pre-assigned LOB for each member
+    (ensuring age-consistent assignment from Synthea demographics).
+    """
     enrollments = []
     lob_names = list(reference_data.LOB_CONFIG.keys())
     lob_weights = [reference_data.LOB_CONFIG[l]["weight"] for l in lob_names]
 
     for member_id in member_ids:
-        lob = weighted_choice(lob_names, lob_weights)
+        if member_lob_map and member_id in member_lob_map:
+            lob = member_lob_map[member_id]
+        else:
+            lob = weighted_choice(lob_names, lob_weights)
         config = reference_data.LOB_CONFIG.get(lob, reference_data.LOB_CONFIG["Commercial"])
         plan_type = random.choice(config["plan_types"])
         premium = round(

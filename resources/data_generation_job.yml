@@ -11,14 +11,9 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
               schema: ${var.schema}
-          libraries:
-            - pypi:
-                package: faker
-            - pypi:
-                package: fpdf2
           new_cluster:
-            spark_version: "15.4.x-scala2.12"
-            node_type_id: Standard_DS3_v2
+            spark_version: "16.4.x-scala2.12"
+            node_type_id: ${var.node_type_small}
             num_workers: 1
             data_security_mode: SINGLE_USER
       tags:

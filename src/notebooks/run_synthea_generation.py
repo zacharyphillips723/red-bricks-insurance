@@ -50,7 +50,7 @@ LOCAL_OUTPUT_DIR = f"{LOCAL_WORK_DIR}/output"
 VOLUME_SYNTHEA_RAW = f"{volume_base}/synthea_raw/fhir"
 
 # Generation parameters
-NUM_PATIENTS = 5000
+NUM_PATIENTS = 500
 STATE = "North Carolina"
 CITY = None  # None = all cities in the state
 SEED = 42
@@ -272,29 +272,55 @@ except Exception:
 # Create the volume directory
 os.makedirs(VOLUME_SYNTHEA_RAW, exist_ok=True)
 
-# Copy patient bundles to the volume via FUSE mount (parallelized)
+# Copy bundles to volume AND extract Patient demographics in a single parallel pass.
+# This avoids a separate Spark multiline JSON read of 5K complex FHIR bundles.
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
+from datetime import datetime
 
-def _copy_bundle(src_path: str) -> str:
+def _copy_and_extract(src_path: str):
+    """Copy bundle to volume and extract Patient demographics in one read."""
     dest = os.path.join(VOLUME_SYNTHEA_RAW, os.path.basename(src_path))
     shutil.copy2(src_path, dest)
-    return dest
 
-print(f"Copying {len(patient_bundles)} bundles using {COPY_THREADS} threads...")
+    # Extract Patient resource (first entry with resourceType == "Patient")
+    with open(src_path, "r") as f:
+        bundle = json.load(f)
+    for entry in bundle.get("entry", []):
+        resource = entry.get("resource", {})
+        if resource.get("resourceType") == "Patient":
+            names = resource.get("name", [{}])
+            addrs = resource.get("address", [{}])
+            return {
+                "synthea_uuid": resource.get("id"),
+                "first_name": (names[0].get("given") or [""])[0],
+                "last_name": names[0].get("family"),
+                "date_of_birth": resource.get("birthDate"),
+                "gender": resource.get("gender"),
+                "address_line_1": (addrs[0].get("line") or [""])[0],
+                "city": addrs[0].get("city"),
+                "state": addrs[0].get("state"),
+                "zip_code": addrs[0].get("postalCode"),
+            }
+    return None
+
+print(f"Copying {len(patient_bundles)} bundles + extracting demographics using {COPY_THREADS} threads...")
 copy_start = time.time()
+patients_raw = []
 copied = 0
 with ThreadPoolExecutor(max_workers=COPY_THREADS) as executor:
-    futures = {executor.submit(_copy_bundle, p): p for p in patient_bundles}
+    futures = {executor.submit(_copy_and_extract, p): p for p in patient_bundles}
     for future in as_completed(futures):
-        future.result()  # raise any exceptions
+        result = future.result()
+        if result:
+            patients_raw.append(result)
         copied += 1
         if copied % 1000 == 0:
             elapsed = time.time() - copy_start
-            print(f"  Copied {copied}/{len(patient_bundles)} bundles ({elapsed:.0f}s)")
+            print(f"  Processed {copied}/{len(patient_bundles)} bundles ({elapsed:.0f}s)")
 
 copy_elapsed = time.time() - copy_start
-print(f"Copied {copied} patient bundles to {VOLUME_SYNTHEA_RAW} in {copy_elapsed:.0f}s")
+print(f"Copied {copied} bundles + extracted {len(patients_raw)} patients in {copy_elapsed:.0f}s")
 
 # Also copy hospital/practitioner info for reference
 for f in bundle_files:
@@ -306,7 +332,85 @@ for f in bundle_files:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 5 — Summary Statistics
+# MAGIC ## Step 5 — Assign MBR IDs & Write Crosswalk
+# MAGIC
+# MAGIC Demographics were extracted during the copy step above. Now assign MBR IDs
+# MAGIC and age-consistent LOB, and write the crosswalk Parquet.
+
+# COMMAND ----------
+
+from pyspark.sql import SparkSession
+spark = SparkSession.builder.getOrCreate()
+
+print(f"Assigning MBR IDs to {len(patients_raw)} patients...")
+
+# Assign MBR IDs and age-consistent LOB
+import random as _rand
+_rand.seed(SEED)
+
+today = datetime.now().date()
+crosswalk_rows = []
+
+for idx, row in enumerate(patients_raw):
+    member_id = f"MBR{100000 + idx}"
+
+    # Compute age for LOB assignment
+    dob_str = row["date_of_birth"]
+    try:
+        dob = datetime.strptime(dob_str, "%Y-%m-%d").date()
+        age = (today - dob).days // 365
+    except Exception:
+        age = 40  # fallback
+
+    # Age-consistent LOB assignment
+    if age >= 65:
+        lob = "Medicare Advantage"
+    elif age < 18:
+        lob = "Medicaid"
+    else:
+        lob = _rand.choices(
+            ["Commercial", "Medicaid", "ACA Marketplace"],
+            weights=[40, 15, 15],
+            k=1,
+        )[0]
+
+    # Map Synthea gender to M/F
+    gender_raw = row["gender"] or "unknown"
+    gender = "M" if gender_raw.lower() == "male" else "F" if gender_raw.lower() == "female" else "U"
+
+    crosswalk_rows.append({
+        "synthea_uuid": row["synthea_uuid"],
+        "member_id": member_id,
+        "first_name": row["first_name"],
+        "last_name": row["last_name"],
+        "date_of_birth": dob_str,
+        "gender": gender,
+        "address_line_1": row["address_line_1"],
+        "city": row["city"],
+        "state": row["state"],
+        "zip_code": row["zip_code"],
+        "line_of_business": lob,
+    })
+
+# Write crosswalk Parquet
+crosswalk_path = f"{volume_base}/synthea_demographics/crosswalk.parquet"
+os.makedirs(f"{volume_base}/synthea_demographics", exist_ok=True)
+df_crosswalk = spark.createDataFrame(crosswalk_rows)
+df_crosswalk.write.mode("overwrite").parquet(crosswalk_path)
+
+print(f"Wrote {len(crosswalk_rows)} rows to {crosswalk_path}")
+
+# LOB distribution summary
+from collections import Counter
+lob_counts = Counter(r["line_of_business"] for r in crosswalk_rows)
+print("LOB distribution:")
+for lob_name, count in sorted(lob_counts.items(), key=lambda x: -x[1]):
+    print(f"  {lob_name:25s} {count:,} ({100*count/len(crosswalk_rows):.1f}%)")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 6 — Summary Statistics
 
 # COMMAND ----------
 
@@ -337,6 +441,7 @@ print("SYNTHEA GENERATION COMPLETE")
 print("=" * 60)
 print(f"Patient bundles generated: {len(patient_bundles)}")
 print(f"Output location: {VOLUME_SYNTHEA_RAW}")
+print(f"Crosswalk Parquet: {crosswalk_path}")
 print(f"\nResource types (sampled from {len(sample_files)} bundles):")
 for rt, count in sorted(all_resource_types.items(), key=lambda x: -x[1]):
     print(f"  {rt:30s} {count:,}")
@@ -350,4 +455,4 @@ if relevant:
     for c in sorted(relevant)[:15]:
         print(f"  {c}")
 
-print(f"\nNext step: Run Phase 2 crosswalk to map Synthea patients -> Red Bricks MBR IDs")
+print(f"\nNext step: run_data_generation reads crosswalk for member demographics")

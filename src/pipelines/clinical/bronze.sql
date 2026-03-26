@@ -25,17 +25,23 @@ CREATE OR REFRESH MATERIALIZED VIEW bronze_encounters
 COMMENT 'Flattened FHIR Encounter records from dbignite Delta tables. Maps FHIR class codes to standard encounter types.'
 AS
 SELECT
-  Encounter[0].id                                           AS encounter_id,
-  REGEXP_EXTRACT(
-    GET_JSON_OBJECT(Encounter[0].subject, '$.reference'),
-    'Patient/(.+)', 1
+  e.Encounter[0].id                                         AS encounter_id,
+  COALESCE(
+    cx.member_id,
+    REGEXP_EXTRACT(
+      GET_JSON_OBJECT(e.Encounter[0].subject, '$.reference'),
+      'Patient/(.+)', 1
+    )
   )                                                         AS member_id,
-  REGEXP_EXTRACT(
-    GET_JSON_OBJECT(Encounter[0].participant[0].individual, '$.reference'),
-    '([0-9]{10})', 1
+  COALESCE(
+    pcx.provider_npi,
+    REGEXP_EXTRACT(
+      GET_JSON_OBJECT(e.Encounter[0].participant[0].individual, '$.reference'),
+      '([0-9]{10})', 1
+    )
   )                                                         AS provider_npi,
-  Encounter[0].period.start                                 AS date_of_service,
-  CASE Encounter[0].class.code
+  e.Encounter[0].period.start                               AS date_of_service,
+  CASE e.Encounter[0].class.code
     WHEN 'AMB'  THEN 'office'
     WHEN 'IMP'  THEN 'inpatient'
     WHEN 'EMER' THEN 'emergency'
@@ -45,12 +51,22 @@ SELECT
     ELSE 'outpatient'
   END                                                       AS encounter_type,
   COALESCE(
-    Encounter[0].type[0].coding[0].display,
+    e.Encounter[0].type[0].coding[0].display,
     'general'
   )                                                         AS visit_type,
   'dbignite'                                                AS source_file,
   current_timestamp()                                       AS ingestion_timestamp
-FROM ${catalog}.${schema}.Encounter;
+FROM ${catalog}.${schema}.Encounter e
+LEFT JOIN ${catalog}.${schema}.synthea_crosswalk cx
+  ON REGEXP_EXTRACT(
+    GET_JSON_OBJECT(e.Encounter[0].subject, '$.reference'),
+    'Patient/(.+)', 1
+  ) = cx.synthea_uuid
+LEFT JOIN ${catalog}.${schema}.synthea_practitioner_crosswalk pcx
+  ON REGEXP_EXTRACT(
+    GET_JSON_OBJECT(e.Encounter[0].participant[0].individual, '$.reference'),
+    'Practitioner/(.+)', 1
+  ) = pcx.synthea_practitioner_uuid;
 
 -- ---------------------------------------------------------------------------
 -- bronze_lab_results
@@ -60,12 +76,15 @@ CREATE OR REFRESH MATERIALIZED VIEW bronze_lab_results
 COMMENT 'Flattened FHIR Observation records (laboratory category) from dbignite Delta tables. Maps LOINC codes to standard lab names.'
 AS
 SELECT
-  Observation[0].id                                         AS lab_result_id,
-  REGEXP_EXTRACT(
-    GET_JSON_OBJECT(Observation[0].subject, '$.reference'),
-    'Patient/(.+)', 1
+  o.Observation[0].id                                       AS lab_result_id,
+  COALESCE(
+    cx.member_id,
+    REGEXP_EXTRACT(
+      GET_JSON_OBJECT(o.Observation[0].subject, '$.reference'),
+      'Patient/(.+)', 1
+    )
   )                                                         AS member_id,
-  CASE Observation[0].code.coding[0].code
+  CASE o.Observation[0].code.coding[0].code
     WHEN '2345-7'  THEN 'glucose'
     WHEN '4548-4'  THEN 'HbA1c'
     WHEN '2160-0'  THEN 'creatinine'
@@ -86,17 +105,22 @@ SELECT
     WHEN '1975-2'  THEN 'bilirubin'
     WHEN '2885-2'  THEN 'protein_urine'
     WHEN '14959-1' THEN 'microalbumin_urine'
-    ELSE Observation[0].code.coding[0].display
+    ELSE o.Observation[0].code.coding[0].display
   END                                                       AS lab_name,
-  Observation[0].valueQuantity.value                        AS value,
-  Observation[0].valueQuantity.unit                         AS unit,
-  Observation[0].referenceRange[0].low.value                AS reference_range_low,
-  Observation[0].referenceRange[0].high.value               AS reference_range_high,
-  Observation[0].effectiveDateTime                          AS collection_date,
+  o.Observation[0].valueQuantity.value                      AS value,
+  o.Observation[0].valueQuantity.unit                       AS unit,
+  o.Observation[0].referenceRange[0].low.value              AS reference_range_low,
+  o.Observation[0].referenceRange[0].high.value             AS reference_range_high,
+  o.Observation[0].effectiveDateTime                        AS collection_date,
   'dbignite'                                                AS source_file,
   current_timestamp()                                       AS ingestion_timestamp
-FROM ${catalog}.${schema}.Observation
-WHERE Observation[0].category[0].coding[0].code = 'laboratory';
+FROM ${catalog}.${schema}.Observation o
+LEFT JOIN ${catalog}.${schema}.synthea_crosswalk cx
+  ON REGEXP_EXTRACT(
+    GET_JSON_OBJECT(o.Observation[0].subject, '$.reference'),
+    'Patient/(.+)', 1
+  ) = cx.synthea_uuid
+WHERE o.Observation[0].category[0].coding[0].code = 'laboratory';
 
 -- ---------------------------------------------------------------------------
 -- bronze_vitals
@@ -106,12 +130,15 @@ CREATE OR REFRESH MATERIALIZED VIEW bronze_vitals
 COMMENT 'Flattened FHIR Observation records (vital-signs category) from dbignite Delta tables. Maps LOINC codes to standard vital names.'
 AS
 SELECT
-  Observation[0].id                                         AS vital_id,
-  REGEXP_EXTRACT(
-    GET_JSON_OBJECT(Observation[0].subject, '$.reference'),
-    'Patient/(.+)', 1
+  o.Observation[0].id                                       AS vital_id,
+  COALESCE(
+    cx.member_id,
+    REGEXP_EXTRACT(
+      GET_JSON_OBJECT(o.Observation[0].subject, '$.reference'),
+      'Patient/(.+)', 1
+    )
   )                                                         AS member_id,
-  CASE Observation[0].code.coding[0].code
+  CASE o.Observation[0].code.coding[0].code
     WHEN '8480-6'  THEN 'systolic_bp'
     WHEN '8462-4'  THEN 'diastolic_bp'
     WHEN '8867-4'  THEN 'heart_rate'
@@ -121,11 +148,16 @@ SELECT
     WHEN '8302-2'  THEN 'body_height'
     WHEN '39156-5' THEN 'bmi'
     WHEN '59408-5' THEN 'oxygen_saturation'
-    ELSE Observation[0].code.coding[0].display
+    ELSE o.Observation[0].code.coding[0].display
   END                                                       AS vital_name,
-  Observation[0].valueQuantity.value                        AS value,
-  Observation[0].effectiveDateTime                          AS measurement_date,
+  o.Observation[0].valueQuantity.value                      AS value,
+  o.Observation[0].effectiveDateTime                        AS measurement_date,
   'dbignite'                                                AS source_file,
   current_timestamp()                                       AS ingestion_timestamp
-FROM ${catalog}.${schema}.Observation
-WHERE Observation[0].category[0].coding[0].code = 'vital-signs';
+FROM ${catalog}.${schema}.Observation o
+LEFT JOIN ${catalog}.${schema}.synthea_crosswalk cx
+  ON REGEXP_EXTRACT(
+    GET_JSON_OBJECT(o.Observation[0].subject, '$.reference'),
+    'Patient/(.+)', 1
+  ) = cx.synthea_uuid
+WHERE o.Observation[0].category[0].coding[0].code = 'vital-signs';

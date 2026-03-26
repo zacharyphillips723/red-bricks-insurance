@@ -16,6 +16,12 @@ variables:
   source_volume:
     description: Volume path for raw generated source files
     default: /Volumes/${var.catalog}/${var.schema}/raw_sources
+  node_type_small:
+    description: Small node type (4 vCPU, 14GB) — Azure DS3_v2 or AWS m5.xlarge
+    default: Standard_DS3_v2
+  node_type_large:
+    description: Large node type (16 vCPU, 56GB) — Azure DS5_v2 or AWS m5.4xlarge
+    default: Standard_DS5_v2
 
 include:
   - resources/*.yml
@@ -30,6 +36,17 @@ targets:
       catalog: catalog_insurance_vpx9o6
       schema: red_bricks_insurance_dev
       warehouse_id: 781064a3466c0984
+
+  e2-field-eng:
+    mode: development
+    workspace:
+      profile: fe-demo-field-eng
+    variables:
+      catalog: zack_phillips_demos
+      schema: red_bricks_insurance_dev
+      warehouse_id: 03560442e95cb440
+      node_type_small: m5.xlarge
+      node_type_large: m5.4xlarge
 
   prod:
     mode: production

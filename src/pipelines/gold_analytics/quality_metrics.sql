@@ -24,38 +24,30 @@ AS
 -- Eligible: members with diabetes diagnosis (E11%). Compliant: has HbA1c lab result.
 WITH diabetes_care AS (
   SELECT
-    c.member_id,
-    e.line_of_business,
+    base.member_id,
+    base.line_of_business,
     'Diabetes Care - HbA1c Testing' AS measure_name,
     CASE
       WHEN EXISTS (
         SELECT 1
         FROM ${catalog}.${schema}.silver_lab_results lr
-        WHERE lr.member_id = c.member_id
+        WHERE lr.member_id = base.member_id
           AND lr.lab_name = 'HbA1c'
-          AND YEAR(lr.collection_date) = YEAR(c.service_from_date)
+          AND YEAR(lr.collection_date) = base.measurement_year
       ) THEN 1
       ELSE 0
     END AS is_compliant,
-    YEAR(c.service_from_date) AS measurement_year
-  FROM ${catalog}.${schema}.silver_claims_medical c
-  INNER JOIN ${catalog}.${schema}.silver_enrollment e
-    ON c.member_id = e.member_id
-  WHERE c.primary_diagnosis_code LIKE 'E11%'
-  GROUP BY
-    c.member_id,
-    e.line_of_business,
-    YEAR(c.service_from_date),
-    CASE
-      WHEN EXISTS (
-        SELECT 1
-        FROM ${catalog}.${schema}.silver_lab_results lr
-        WHERE lr.member_id = c.member_id
-          AND lr.lab_name = 'HbA1c'
-          AND YEAR(lr.collection_date) = YEAR(c.service_from_date)
-      ) THEN 1
-      ELSE 0
-    END
+    base.measurement_year
+  FROM (
+    SELECT DISTINCT
+      c.member_id,
+      e.line_of_business,
+      YEAR(c.service_from_date) AS measurement_year
+    FROM ${catalog}.${schema}.silver_claims_medical c
+    INNER JOIN ${catalog}.${schema}.silver_enrollment e
+      ON c.member_id = e.member_id
+    WHERE c.primary_diagnosis_code LIKE 'E11%'
+  ) base
 ),
 
 -- Breast Cancer Screening: Mammography
