@@ -1,6 +1,6 @@
 # Red Bricks Insurance
 
-Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB). One deployable bundle that runs end-to-end: Synthea clinical generation → synthetic insurance data → bronze/silver/gold SDP pipelines → cross-domain analytics with AI classification → intelligent agents → Command Center app.
+Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB). One deployable bundle that runs end-to-end: Synthea clinical generation → synthetic insurance data → bronze/silver/gold SDP pipelines → cross-domain analytics with AI classification → intelligent agents → two purpose-built applications.
 
 ## Architecture
 
@@ -34,28 +34,32 @@ Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB
                                     │
                          ┌──────────▼──────────┐
                          │  Gold Analytics     │  Cross-domain metrics
-                         │  Financial, Quality,│
-                         │  Risk, AI, Actuarial│
+                         │  Financial, Quality,│  Group Report Card
+                         │  Risk, AI, Actuarial│  TCOC / TCI
                          │  Member 360         │
                          └──────────┬──────────┘
                                     │
-                    ┌───────────────┼───────────────┐
-                    ▼               ▼               ▼
-             ┌────────────┐ ┌────────────┐ ┌──────────────┐
-             │ Dashboards │ │  Genie     │ │ AI Agents    │
-             │ (AI/BI)    │ │  Space     │ │ v1 + v2      │
-             └────────────┘ └────────────┘ └──────┬───────┘
-                                                  │
-                                           ┌──────▼───────┐
-                                           │  Command     │
-                                           │  Center App  │
-                                           │  (React+API) │
-                                           └──────────────┘
+               ┌────────────────────┼────────────────────┐
+               ▼                    ▼                    ▼
+        ┌────────────┐       ┌────────────┐       ┌──────────────┐
+        │ Dashboards │       │  Genie     │       │ AI Agents    │
+        │ (AI/BI)    │       │  Spaces    │       │ Care Intel   │
+        └────────────┘       └────────────┘       │ Sales Coach  │
+                                                  └──────┬───────┘
+                                                         │
+                                    ┌────────────────────┼────────────────────┐
+                                    ▼                                         ▼
+                             ┌──────────────┐                         ┌──────────────────┐
+                             │  Command     │                         │  Group Reporting  │
+                             │  Center App  │                         │  Portal App      │
+                             │  (React+API) │                         │  (React+API)     │
+                             │  Clinical    │                         │  Sales Enablement │
+                             └──────────────┘                         └──────────────────┘
 ```
 
 ## Pipeline DAG
 
-The full demo job (`red_bricks_full_demo`) orchestrates 18 tasks:
+The full demo job (`red_bricks_full_demo`) orchestrates 21 tasks:
 
 ```
 synthea_generation (ROOT — generates FHIR bundles + extracts demographics + assigns MBR IDs)
@@ -70,8 +74,11 @@ synthea_generation (ROOT — generates FHIR bundles + extracts demographics + as
   → setup_vector_search (depends on documents_pipeline)
       → deploy_member_agent (v1)
       → deploy_agent_v2 (v2 with benefits)
-          → evaluate_agents (v1 vs v2 comparison)
+      → deploy_group_sales_agent (Sales Coach for group reporting)
+          → evaluate_agents (v1 vs v2 vs sales coach comparison)
 ```
+
+A **refresh job** (`red_bricks_refresh`) runs the same DAG minus Synthea/FHIR/clinical — useful when only insurance data generation or downstream logic has changed.
 
 **Synthea as golden demographic source:** Synthea generates clinically realistic patients with names, DOBs, and addresses. These demographics flow INTO the insurance generators (members, enrollment), ensuring that searching for "Aaron Anderson" in FHIR returns the same person as in the member table. A lightweight `synthea_crosswalk` Delta table maps Synthea UUIDs to MBR IDs via JOIN in `bronze.sql`.
 
@@ -115,7 +122,7 @@ Each domain has its own SDP pipeline with bronze → silver → gold tables:
 
 **Actuarial:** `gold_utilization_per_1000` (utilization benchmarks), `gold_ibnr_triangle` (chain-ladder development), `gold_ibnr_completion_factors`, `gold_mlr_ai_insights` (LLM-generated actuarial recommendations)
 
-**Group Reporting:** `gold_group_experience` (claims PMPM, utilization, loss ratio by employer group), `gold_group_stop_loss` (specific & aggregate stop-loss tracking), `gold_group_renewal` (credibility-weighted renewal pricing)
+**Group Reporting:** `gold_group_experience` (claims PMPM, utilization per 1000 member-months, loss ratio by employer group), `gold_group_stop_loss` (specific & aggregate stop-loss tracking), `gold_group_renewal` (credibility-weighted renewal pricing), `gold_group_report_card` (single-row-per-group executive summary with peer percentile benchmarks and composite health score)
 
 **Cost of Care:** `gold_member_tcoc` (member-level Total Cost of Care and Total Cost Index), `gold_tcoc_summary` (LOB-level TCOC distributions, cost tier breakdowns, spend concentration)
 
@@ -145,23 +152,40 @@ The clinical pipeline reads Synthea FHIR R4 bundles directly (no intermediate tr
 
 ## AI Agents
 
-Two versions of the Care Intelligence Agent are deployed and evaluated:
+Three agents are deployed and registered in Unity Catalog via MLflow:
 
-| Agent | Description | Tools |
-|-------|-------------|-------|
-| **v1** (`deploy_member_agent`) | Member lookup + document search | SQL queries, vector search |
-| **v2** (`deploy_agent_v2`) | v1 + benefits coverage analysis | SQL queries, vector search, benefits lookup |
+| Agent | Description | Audience |
+|-------|-------------|----------|
+| **Care Intelligence v1** (`deploy_member_agent`) | Member lookup + document search | Clinical care teams |
+| **Care Intelligence v2** (`deploy_agent_v2`) | v1 + benefits coverage analysis | Clinical care teams |
+| **Sales Coach** (`deploy_group_sales_agent`) | Group report card analysis, renewal prep, roleplay negotiation simulation, care management program recommendations | Account executives, sales reps |
 
-Both are registered in Unity Catalog via MLflow and evaluated with `evaluate_agents.py`.
+All agents are evaluated with `evaluate_agents.py`. The Sales Coach supports intent-based modes: full briefing ("prepare me for..."), renewal focus ("why rate increase"), care management ("what programs can I offer"), and negotiation roleplay ("simulate a renewal negotiation").
 
-## Databricks App — Command Center
+## Databricks Apps
 
-A full-stack application in `app/` providing a unified interface:
+### Command Center (`app/`)
+
+Clinical-focused application for care management teams:
 
 - **Backend**: FastAPI (Python), connects to Lakebase, SQL warehouse, and serving endpoints
-- **Frontend**: React with modern UI
-- **Features**: Member search, claims analysis, Genie-powered natural language queries, agent chat
-- **Config**: `app/app.yml` (environment variables for catalog, schema, Genie Space ID, warehouse)
+- **Frontend**: React + Vite + Tailwind (Databricks-branded dark theme)
+- **Features**: Member search, claims analysis, Genie-powered natural language queries, Care Intelligence agent chat
+- **Config**: `app/app.yml`
+
+### Group Reporting Portal (`app-group-reporting/`)
+
+Sales enablement application for account executives preparing employer group renewals:
+
+- **Backend**: FastAPI (Python), reads gold tables via Statement Execution API
+- **Frontend**: React + Vite + Tailwind (Databricks-branded dark theme)
+- **Pages**:
+  - **Group Search** — filter/search 200 employer groups by industry, funding type, renewal action
+  - **Report Card** — one-page executive summary with health score, peer percentile benchmarks, cost tier distribution, renewal projection
+  - **Standard Reports** — 5 canned reports: High-Cost Members, Claims Trend (PMPM chart), Top Drugs, Utilization Summary, Risk & Care Gaps
+  - **Sales Coach** — AI agent chat with negotiation roleplay and care management program recommendations
+- **Context Enrichment** (optional): Slack (account channel history), Glean (internal knowledge base), Salesforce (CRM account data) feed into the Sales Coach agent's context for richer renewal prep
+- **Config**: `app-group-reporting/app.yml`
 
 ## Dashboards
 
@@ -180,12 +204,27 @@ red-bricks-insurance/
 ├── app/                              # Command Center Databricks App
 │   ├── app.yml                       #   App configuration (env vars, command)
 │   ├── main.py                       #   FastAPI backend
-│   └── static/                       #   React frontend build
+│   ├── frontend/                     #   React + Vite + Tailwind source
+│   └── static/                       #   Built frontend output
+├── app-group-reporting/              # Group Reporting Portal Databricks App
+│   ├── app.yml                       #   App config (SQL warehouse, LLM endpoint, enrichment tokens)
+│   ├── main.py                       #   FastAPI backend
+│   ├── backend/
+│   │   ├── router.py                 #   API routes (groups, reports, agent, genie)
+│   │   ├── models.py                 #   Pydantic models
+│   │   ├── groups.py                 #   SQL queries via Statement Execution API
+│   │   ├── agent.py                  #   Sales Coach (LLM + group data + enrichment context)
+│   │   ├── enrichment.py             #   Slack, Glean, Salesforce context (each optional)
+│   │   └── genie.py                  #   Genie space integration
+│   ├── frontend/                     #   React + Vite + Tailwind source
+│   └── static/                       #   Built frontend output
 ├── resources/
-│   ├── full_demo_job.yml             # End-to-end orchestration (18 tasks)
+│   ├── full_demo_job.yml             # End-to-end orchestration (21 tasks)
+│   ├── refresh_demo_job.yml          # Refresh without Synthea (data gen → all downstream)
 │   ├── data_generation_job.yml       # Standalone data generation
 │   ├── dashboard.yml                 # Analytics dashboard
 │   ├── agent_comparison_dashboard.yml# Agent eval dashboard
+│   ├── app_group_reporting.yml       # Group Reporting Portal app resource
 │   ├── pipeline_members.yml          # Members & Enrollment SDP
 │   ├── pipeline_providers.yml        # Providers SDP
 │   ├── pipeline_claims.yml           # Claims SDP
@@ -194,7 +233,7 @@ red-bricks-insurance/
 │   ├── pipeline_documents.yml        # Documents SDP
 │   ├── pipeline_underwriting.yml     # Underwriting SDP
 │   ├── pipeline_risk_adjustment.yml  # Risk Adjustment SDP
-│   └── pipeline_gold_analytics.yml   # Cross-domain analytics (8 SQL files, 15+ gold views)
+│   └── pipeline_gold_analytics.yml   # Cross-domain analytics (9 SQL files, 20+ gold views)
 ├── src/
 │   ├── data_generation/              # Modular synthetic data generators
 │   │   ├── reference_data.py         #   ICD-10, CPT, DRG, HCC, CARC, LOB configs
@@ -202,7 +241,7 @@ red-bricks-insurance/
 │   │   ├── helpers.py                #   NPI generation, date utils, payment lag
 │   │   └── domains/                  #   One generator per domain
 │   │       ├── members.py            #     Demographics (Synthea-backed or Faker fallback)
-│   │       ├── enrollment.py         #     Plans, LOB (age-consistent when Synthea)
+│   │       ├── enrollment.py         #     Plans, LOB (age-consistent); min 5 members/group guaranteed
 │   │       ├── claims.py             #     Medical + pharmacy claims
 │   │       ├── providers.py          #     Provider directory
 │   │       ├── benefits.py           #     Plan benefit schedules
@@ -217,9 +256,10 @@ red-bricks-insurance/
 │   │   ├── build_member_months.py    #   Member month enrollment spans
 │   │   ├── create_metric_views.py    #   Governed semantic layer (DBR 17.2+)
 │   │   ├── setup_vector_search.py    #   Document vector index for RAG
-│   │   ├── deploy_member_agent.py    #   Agent v1 registration
-│   │   ├── deploy_agent_v2.py        #   Agent v2 registration
-│   │   └── evaluate_agents.py        #   v1 vs v2 evaluation
+│   │   ├── deploy_member_agent.py    #   Care Intelligence v1 registration
+│   │   ├── deploy_agent_v2.py        #   Care Intelligence v2 registration
+│   │   ├── deploy_group_sales_agent.py #  Sales Coach agent registration
+│   │   └── evaluate_agents.py        #   Agent evaluation
 │   ├── pipelines/
 │   │   ├── members/                  #   bronze.sql, silver.sql, gold.sql
 │   │   ├── providers/
@@ -229,10 +269,11 @@ red-bricks-insurance/
 │   │   ├── documents/                #   bronze.sql, silver.sql
 │   │   ├── underwriting/
 │   │   ├── risk_adjustment/
-│   │   ├── gold_analytics/           #   financial, quality, risk, ai, actuarial, groups, cost_of_care, member_360
+│   │   ├── gold_analytics/           #   financial, quality, risk, ai, actuarial, groups,
+│   │   │                             #   cost_of_care, member_360, group_report_card
 │   │   └── python/                   #   Python alternatives for all pipelines
 │   ├── dashboards/                   #   Lakeview dashboard JSON definitions
-│   └── agents/                       #   Agent tool definitions
+│   └── agents/                       #   Agent model definitions (Care Intel v1/v2, Sales Coach)
 ├── config/                           #   Genie setup, Lakebase config
 └── README.md
 ```
@@ -274,11 +315,14 @@ All tasks run on **serverless** compute except `synthea_generation` which requir
 # Validate bundle
 databricks bundle validate --target e2-field-eng
 
-# Deploy all resources (pipelines, jobs, dashboards, app)
+# Deploy all resources (pipelines, jobs, dashboards, apps)
 databricks bundle deploy --target e2-field-eng --force
 
 # --- End-to-end demo (synthea → data gen → all pipelines → agents → eval) ---
 databricks bundle run red_bricks_full_demo --target e2-field-eng
+
+# --- Refresh without Synthea (data gen → pipelines → analytics → agents) ---
+databricks bundle run red_bricks_refresh --target e2-field-eng
 
 # --- Individual components ---
 databricks bundle run red_bricks_data_generation   # Just generate insurance data
@@ -292,6 +336,22 @@ databricks bundle run underwriting_pipeline        # Just underwriting
 databricks bundle run risk_adjustment_pipeline     # Just risk adjustment
 databricks bundle run gold_analytics_pipeline      # Just cross-domain analytics
 ```
+
+## Apps — Frontend Build
+
+Both apps (`app/` Command Center, `app-group-reporting/` Group Reporting Portal) use React + Vite + Tailwind. **Frontends must be built before deploying the bundle** — the DAB deploys the pre-built `static/` directory, not the source.
+
+```bash
+# Command Center
+cd app/frontend && npm install && npm run build   # → outputs to app/static/
+
+# Group Reporting Portal
+cd app-group-reporting/frontend && npm install && npm run build   # → outputs to app-group-reporting/static/
+```
+
+The `.bundleignore` excludes `node_modules/`, `src/`, and other frontend build artifacts from the bundle upload. Only the `static/` directories are deployed.
+
+After building, deploy the bundle normally with `databricks bundle deploy`.
 
 ## Customization
 
@@ -313,3 +373,6 @@ This demo is designed to be modular for customer-specific showings:
 | `dbignite` | FHIR R4 bundle parsing (installed at runtime) |
 | `mlflow` | Agent registration and evaluation |
 | `databricks-sdk` | Agent deployment, API calls |
+| `fastapi` / `uvicorn` | App backends (Command Center, Group Reporting) |
+| `slack_sdk` | (Optional) Sales Coach Slack enrichment |
+| `simple_salesforce` | (Optional) Sales Coach Salesforce enrichment |

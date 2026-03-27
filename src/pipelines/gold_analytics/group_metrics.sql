@@ -93,11 +93,11 @@ SELECT
   -- Loss ratio
   ROUND((COALESCE(gm.medical_paid, 0) + COALESCE(gp.pharmacy_paid, 0))
     / NULLIF(gs.total_premium_revenue, 0), 4)                    AS loss_ratio,
-  -- Utilization per 1000
+  -- Utilization per 1000 member-months (normalizes for enrollment duration)
   ROUND(COALESCE(gm.inpatient_claims, 0) * 1000.0
-    / NULLIF(gs.total_members, 0), 1)                            AS ip_admits_per_1000,
+    / NULLIF(gs.total_member_months, 0), 1)                      AS ip_admits_per_1000,
   ROUND(COALESCE(gm.er_claims, 0) * 1000.0
-    / NULLIF(gs.total_members, 0), 1)                            AS er_visits_per_1000
+    / NULLIF(gs.total_member_months, 0), 1)                      AS er_visits_per_1000
 FROM group_summary gs
 INNER JOIN ${catalog}.${schema}.silver_groups g
   ON gs.group_id = g.group_id
@@ -205,17 +205,37 @@ WHERE g.funding_type IN ('Self-Funded', 'Level-Funded');
 CREATE OR REFRESH MATERIALIZED VIEW gold_group_renewal
 COMMENT 'Group renewal analytics: projected vs actual claims, trend factors, loss ratios, and credibility-weighted renewal premiums. Used for group renewal pricing and account reviews.'
 AS
-WITH group_experience AS (
+WITH group_premium AS (
+  -- Premium aggregated separately to avoid LEFT JOIN fan-out with claims
   SELECT
     e.group_number AS group_id,
-    SUM(c.paid_amount) AS total_claims_paid,
     COUNT(DISTINCT e.member_id) AS enrolled_members,
     SUM(e.monthly_premium * e.coverage_months) AS total_premium
   FROM ${catalog}.${schema}.silver_enrollment e
-  LEFT JOIN ${catalog}.${schema}.silver_claims_medical c
-    ON e.member_id = c.member_id
   WHERE e.group_number IS NOT NULL
   GROUP BY e.group_number
+),
+
+group_claims AS (
+  -- Claims aggregated separately per group via enrollment join
+  SELECT
+    e.group_number AS group_id,
+    SUM(c.paid_amount) AS total_claims_paid
+  FROM ${catalog}.${schema}.silver_claims_medical c
+  INNER JOIN ${catalog}.${schema}.silver_enrollment e
+    ON c.member_id = e.member_id
+  WHERE e.group_number IS NOT NULL
+  GROUP BY e.group_number
+),
+
+group_experience AS (
+  SELECT
+    gp.group_id,
+    COALESCE(gc.total_claims_paid, 0) AS total_claims_paid,
+    gp.enrolled_members,
+    gp.total_premium
+  FROM group_premium gp
+  LEFT JOIN group_claims gc ON gp.group_id = gc.group_id
 )
 
 SELECT

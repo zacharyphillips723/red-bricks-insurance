@@ -1,0 +1,40 @@
+resources:
+  apps:
+    group_reporting_portal:
+      name: "rb-group-reporting-${bundle.target}"
+      description: "Employer group analytics and sales enablement portal with AI-powered Sales Coach agent"
+      source_code_path: ../app-group-reporting
+      config:
+        command:
+          - uvicorn
+          - main:app
+          - --host=0.0.0.0
+          - --port=8000
+        env:
+          - name: SQL_WAREHOUSE_ID
+            value: ${var.warehouse_id}
+          - name: LLM_ENDPOINT
+            value: databricks-llama-4-maverick
+          - name: UC_CATALOG
+            value: ${var.catalog}
+          - name: UC_SCHEMA
+            value: ${var.schema}
+          - name: GENIE_SPACE_ID
+            value: ""
+          # Optional enrichment — leave empty to disable
+          - name: SLACK_BOT_TOKEN
+            value: ""
+          - name: GLEAN_API_TOKEN
+            value: ""
+          - name: GLEAN_API_URL
+            value: ""
+          - name: SF_INSTANCE_URL
+            value: ""
+          - name: SF_CLIENT_ID
+            value: ""
+          - name: SF_CLIENT_SECRET
+            value: ""
+          - name: SF_USERNAME
+            value: ""
+          - name: SF_PASSWORD
+            value: ""

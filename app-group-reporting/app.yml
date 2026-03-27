@@ -1,0 +1,34 @@
+command:
+  - uvicorn
+  - main:app
+  - --host=0.0.0.0
+  - --port=8000
+
+env:
+  - name: SQL_WAREHOUSE_ID
+    value: 781064a3466c0984
+  - name: LLM_ENDPOINT
+    value: databricks-llama-4-maverick
+  - name: UC_CATALOG
+    value: catalog_insurance_vpx9o6
+  - name: UC_SCHEMA
+    value: red_bricks_insurance_dev
+  - name: GENIE_SPACE_ID
+    value: ""
+  # Optional enrichment integrations — leave empty to disable
+  - name: SLACK_BOT_TOKEN
+    value: ""
+  - name: GLEAN_API_TOKEN
+    value: ""
+  - name: GLEAN_API_URL
+    value: ""
+  - name: SF_INSTANCE_URL
+    value: ""
+  - name: SF_CLIENT_ID
+    value: ""
+  - name: SF_CLIENT_SECRET
+    value: ""
+  - name: SF_USERNAME
+    value: ""
+  - name: SF_PASSWORD
+    value: ""

@@ -23,25 +23,58 @@ def generate_enrollment(
     When member_lob_map is provided, uses the pre-assigned LOB for each member
     (ensuring age-consistent assignment from Synthea demographics).
     When group_data is provided, assigns Commercial members to employer groups
-    based on group capacity instead of random group_number/group_name.
+    using a two-pass approach: first guarantees every group gets at least
+    MIN_PER_GROUP members, then distributes remaining members proportionally.
     """
     enrollments = []
     lob_names = list(reference_data.LOB_CONFIG.keys())
     lob_weights = [reference_data.LOB_CONFIG[l]["weight"] for l in lob_names]
 
-    # Build group assignment pool: repeat each group_id proportional to group_size
-    group_pool: List[Dict[str, Any]] = []
+    # Pre-determine LOB for all members so we know who is Commercial up front
+    member_lob_cache: Dict[str, str] = {}
+    for mid in member_ids:
+        if member_lob_map and mid in member_lob_map:
+            member_lob_cache[mid] = member_lob_map[mid]
+        else:
+            member_lob_cache[mid] = weighted_choice(lob_names, lob_weights)
+
+    # Build group assignment: two-pass approach ensures every group gets members.
+    # Pass 1: guarantee each group gets at least min(group_size, MIN_PER_GROUP).
+    # Pass 2: distribute remaining members proportionally by group_size.
+    MIN_PER_GROUP = 5
+    group_assignments: Dict[str, Dict[str, Any]] = {}  # member_id -> group dict
     if group_data:
+        actual_commercial = [
+            mid for mid in member_ids if member_lob_cache[mid] == "Commercial"
+        ]
+        random.shuffle(actual_commercial)
+        idx = 0
+
+        # Pass 1: guarantee minimum members per group
         for g in group_data:
-            group_pool.extend([g] * g["group_size"])
-        random.shuffle(group_pool)
-    group_idx = 0
+            guaranteed = min(g["group_size"], MIN_PER_GROUP)
+            for _ in range(guaranteed):
+                if idx < len(actual_commercial):
+                    group_assignments[actual_commercial[idx]] = g
+                    idx += 1
+
+        # Pass 2: distribute remaining members proportionally by group_size
+        remaining_members = actual_commercial[idx:]
+        if remaining_members:
+            total_remaining_capacity = sum(
+                max(g["group_size"] - MIN_PER_GROUP, 0) for g in group_data
+            )
+            if total_remaining_capacity > 0:
+                proportional_pool: List[Dict[str, Any]] = []
+                for g in group_data:
+                    extra = max(g["group_size"] - MIN_PER_GROUP, 0)
+                    proportional_pool.extend([g] * extra)
+                random.shuffle(proportional_pool)
+                for i, mid in enumerate(remaining_members):
+                    group_assignments[mid] = proportional_pool[i % len(proportional_pool)]
 
     for member_id in member_ids:
-        if member_lob_map and member_id in member_lob_map:
-            lob = member_lob_map[member_id]
-        else:
-            lob = weighted_choice(lob_names, lob_weights)
+        lob = member_lob_cache[member_id]
         config = reference_data.LOB_CONFIG.get(lob, reference_data.LOB_CONFIG["Commercial"])
         plan_type = random.choice(config["plan_types"])
         premium = round(
@@ -62,9 +95,8 @@ def generate_enrollment(
         risk_score = round(random.uniform(0.3, 4.5), 3) if lob == "Medicare Advantage" else round(random.uniform(0.3, 3.0), 3)
 
         # Assign group for Commercial members
-        if lob == "Commercial" and group_pool:
-            grp = group_pool[group_idx % len(group_pool)]
-            group_idx += 1
+        if lob == "Commercial" and member_id in group_assignments:
+            grp = group_assignments[member_id]
             group_number = grp["group_id"]
             group_name = grp["group_name"]
         elif lob == "Commercial":

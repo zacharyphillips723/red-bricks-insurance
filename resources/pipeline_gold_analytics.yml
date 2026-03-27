@@ -25,6 +25,8 @@ resources:
             path: ../src/pipelines/gold_analytics/group_metrics.sql
         - file:
             path: ../src/pipelines/gold_analytics/cost_of_care.sql
+        - file:
+            path: ../src/pipelines/gold_analytics/group_report_card.sql
       channel: PREVIEW
       serverless: true
       development: true

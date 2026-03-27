@@ -5,3 +5,12 @@ app/frontend/*.json
 app/frontend/*.ts
 app/frontend/*.js
 app/frontend/*.html
+
+# Exclude group reporting frontend source/node_modules — pre-built assets in app-group-reporting/static/
+app-group-reporting/frontend/node_modules/
+app-group-reporting/frontend/dist/
+app-group-reporting/frontend/src/
+app-group-reporting/frontend/*.json
+app-group-reporting/frontend/*.ts
+app-group-reporting/frontend/*.js
+app-group-reporting/frontend/*.html
