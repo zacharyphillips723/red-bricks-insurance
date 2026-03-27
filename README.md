@@ -13,8 +13,8 @@ Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB
             ▼
 ┌─────────────────────────┐
 │  Insurance Data Gen     │  Reads Synthea demographics → generates insurance domains
-│  (run_data_generation)  │  Members, Enrollment, Claims, Providers, Benefits,
-│                         │  Documents, Underwriting, Risk Adjustment
+│  (run_data_generation)  │  Members, Enrollment, Groups, Claims, Providers,
+│                         │  Benefits, Documents, Underwriting, Risk Adjustment
 └───────────┬─────────────┘
             │
      ┌──────┴───────┐  (9 domain pipelines run in parallel)
@@ -80,14 +80,15 @@ synthea_generation (ROOT — generates FHIR bundles + extracts demographics + as
 | Domain | Records | Format | Description |
 |--------|---------|--------|-------------|
 | **Synthea Clinical** | ~5,000 FHIR R4 bundles | JSON | Encounters, conditions, observations, medications (Synthea-generated) |
-| **Claims** | 40K medical + 15K pharmacy | Parquet | IP/OP/professional/ER; ICD-10/CPT, revenue codes, CARC denial codes, financials |
+| **Claims** | 150K medical + 50K pharmacy | Parquet | IP/OP/professional/ER; ICD-10/CPT, revenue codes, CARC denial codes, financials |
 | **Members** | 5,000 | Parquet | Demographics from Synthea (name, DOB, gender, address, NC counties) |
 | **Enrollment** | 5,000 | Parquet | LOB (Commercial/MA/Medicaid/ACA), plan, premium, risk_score; age-consistent LOB |
+| **Groups** | 200 | Parquet | Employer groups with SIC codes, funding types, stop-loss, admin fees, renewal dates |
 | **Benefits** | ~150K | Parquet | Plan benefit schedules, cost-sharing, actuarial values, utilization assumptions |
 | **Documents** | ~15K | PDF + JSON | Case notes, call transcripts, claims summaries with full text |
 | **Underwriting** | 5,000 | Parquet | Risk tier, smoker, BMI, occupation; correlated to risk_score |
 | **Providers** | 500 | Parquet | NPI, specialty, network status, group practice |
-| **Risk Adjustment** | 5K member + 2.5K provider | Parquet | RAF scores, HCC codes, provider attribution |
+| **Risk Adjustment** | 5K member + 10K provider | Parquet | RAF scores, HCC codes, provider attribution |
 
 **Data quality**: ~2% intentional defects (nulls, invalid codes, out-of-range dates) caught by SDP expectations at the silver layer.
 
@@ -112,9 +113,27 @@ Each domain has its own SDP pipeline with bronze → silver → gold tables:
 
 **AI-Powered (via `ai_query()`):** `gold_denial_classification` (LLM-classified denial reasons), `gold_denial_analysis` (denial trends by AI category), `gold_member_risk_narrative` (AI-generated clinical summaries)
 
-**Actuarial:** `gold_actuarial_metrics` (actuarial value calculations, cost trend analysis)
+**Actuarial:** `gold_utilization_per_1000` (utilization benchmarks), `gold_ibnr_triangle` (chain-ladder development), `gold_ibnr_completion_factors`, `gold_mlr_ai_insights` (LLM-generated actuarial recommendations)
+
+**Group Reporting:** `gold_group_experience` (claims PMPM, utilization, loss ratio by employer group), `gold_group_stop_loss` (specific & aggregate stop-loss tracking), `gold_group_renewal` (credibility-weighted renewal pricing)
+
+**Cost of Care:** `gold_member_tcoc` (member-level Total Cost of Care and Total Cost Index), `gold_tcoc_summary` (LOB-level TCOC distributions, cost tier breakdowns, spend concentration)
 
 **Member 360:** `gold_member_360` (unified member view joining clinical, claims, enrollment, risk)
+
+### Metric Views (Governed Semantic Layer)
+
+Metric views (`CREATE VIEW ... WITH METRICS`) define governed measures and dimensions as YAML, ensuring every consumer — actuaries, dashboards, Genie, AI/BI — computes metrics the same way. Queried via the `MEASURE()` function.
+
+| View | Source | Key Measures |
+|------|--------|-------------|
+| `mv_financial_overview` | `gold_pmpm` | PMPM Paid, PMPM Allowed, Total Paid, Member Months |
+| `mv_mlr_compliance` | `gold_mlr` | MLR, Admin Ratio, Total Claims Paid, Total Premiums |
+| `mv_utilization` | `gold_utilization_per_1000` | Claims/Patients/Cost per 1000, Admits per 1000 |
+| `mv_enrollment` | `silver_member_months` | Member Months, Active Members, Premium Revenue, Avg Risk Score |
+| `mv_ibnr` | `gold_ibnr_estimate` | Avg Payment Lag, Completion Rate, Claims Over 90 Days |
+| `mv_denials` | `gold_denial_analysis` | Denial Count, Total Denied Amount, Avg Denied Amount |
+| `mv_cost_of_care` | `gold_member_tcoc` | Avg TCOC, Avg TCI, Avg Actual PMPM, High Cost Members |
 
 ### Clinical Pipeline (Synthea → dbignite → SDP)
 
@@ -175,7 +194,7 @@ red-bricks-insurance/
 │   ├── pipeline_documents.yml        # Documents SDP
 │   ├── pipeline_underwriting.yml     # Underwriting SDP
 │   ├── pipeline_risk_adjustment.yml  # Risk Adjustment SDP
-│   └── pipeline_gold_analytics.yml   # Cross-domain analytics (6 gold views)
+│   └── pipeline_gold_analytics.yml   # Cross-domain analytics (8 SQL files, 15+ gold views)
 ├── src/
 │   ├── data_generation/              # Modular synthetic data generators
 │   │   ├── reference_data.py         #   ICD-10, CPT, DRG, HCC, CARC, LOB configs
@@ -187,6 +206,7 @@ red-bricks-insurance/
 │   │       ├── claims.py             #     Medical + pharmacy claims
 │   │       ├── providers.py          #     Provider directory
 │   │       ├── benefits.py           #     Plan benefit schedules
+│   │       ├── groups.py             #     Employer groups (stop-loss, funding, renewal)
 │   │       ├── documents.py          #     Case notes, call transcripts, claims summaries
 │   │       ├── underwriting.py       #     Risk assessment
 │   │       └── risk_adjustment.py    #     RAF scores, HCC codes
@@ -209,7 +229,7 @@ red-bricks-insurance/
 │   │   ├── documents/                #   bronze.sql, silver.sql
 │   │   ├── underwriting/
 │   │   ├── risk_adjustment/
-│   │   ├── gold_analytics/           #   financial, quality, risk, ai, actuarial, member_360
+│   │   ├── gold_analytics/           #   financial, quality, risk, ai, actuarial, groups, cost_of_care, member_360
 │   │   └── python/                   #   Python alternatives for all pipelines
 │   ├── dashboards/                   #   Lakeview dashboard JSON definitions
 │   └── agents/                       #   Agent tool definitions
@@ -223,8 +243,11 @@ red-bricks-insurance/
 
 - Databricks CLI configured with workspace profile
 - Unity Catalog workspace with catalog/schema permissions
-- Java 11+ on compute (DBR 16.x+ recommended) for Synthea generation
 - Foundation model endpoint (`databricks-meta-llama-3-3-70b-instruct`) for AI gold tables
+
+### Compute
+
+All tasks run on **serverless** compute except `synthea_generation` which requires a classic cluster (Java 17 for the Synthea JAR, DBR 16.x+). DLT pipelines are serverless SDP. Notebook tasks auto-provision and auto-scale — no cluster configuration needed.
 
 ### Targets
 

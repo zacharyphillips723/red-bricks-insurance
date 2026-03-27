@@ -306,9 +306,9 @@ print("Benefits:", df_benefits.count())
 
 import time as _time
 
-print("Generating 750K medical claims (may take a few minutes)...")
+print("Generating 150K medical claims...")
 _t0 = _time.time()
-medical_claims_data = dom_claims.generate_medical_claims(enrollment_data, providers_data, 750000)
+medical_claims_data = dom_claims.generate_medical_claims(enrollment_data, providers_data, 150000)
 print(f"  Medical claims generated in {_time.time() - _t0:.0f}s")
 medical_schema = T.StructType([
     T.StructField("claim_id", T.StringType()),
@@ -350,18 +350,12 @@ medical_schema = T.StructType([
     T.StructField("adjustment_reason", T.StringType()),
     T.StructField("source_system", T.StringType()),
 ])
-# Write medical claims in chunks to avoid driver OOM with 750K dicts
-CHUNK = 150_000
-for ci, start in enumerate(range(0, len(medical_claims_data), CHUNK)):
-    chunk = medical_claims_data[start : start + CHUNK]
-    mode = "overwrite" if ci == 0 else "append"
-    spark.createDataFrame(chunk, schema=medical_schema).write.mode(mode).parquet(f"{volume_base}/claims_medical/")
-    print(f"  Medical chunk {ci + 1}: {len(chunk):,} rows ({mode})")
+spark.createDataFrame(medical_claims_data, schema=medical_schema).write.mode("overwrite").parquet(f"{volume_base}/claims_medical/")
 print(f"  Medical claims total: {len(medical_claims_data):,}")
 
-print("Generating 250K pharmacy claims...")
+print("Generating 50K pharmacy claims...")
 _t1 = _time.time()
-pharmacy_claims_data = dom_claims.generate_pharmacy_claims(enrollment_data, providers_data, 250000)
+pharmacy_claims_data = dom_claims.generate_pharmacy_claims(enrollment_data, providers_data, 50000)
 print(f"  Pharmacy claims generated in {_time.time() - _t1:.0f}s")
 pharmacy_schema = T.StructType([
     T.StructField("claim_id", T.StringType()),
@@ -386,12 +380,7 @@ pharmacy_schema = T.StructType([
     T.StructField("formulary_tier", T.StringType()),
     T.StructField("mail_order_flag", T.StringType()),
 ])
-# Write pharmacy claims in chunks too
-for ci, start in enumerate(range(0, len(pharmacy_claims_data), CHUNK)):
-    chunk = pharmacy_claims_data[start : start + CHUNK]
-    mode = "overwrite" if ci == 0 else "append"
-    spark.createDataFrame(chunk, schema=pharmacy_schema).write.mode(mode).parquet(f"{volume_base}/claims_pharmacy/")
-    print(f"  Pharmacy chunk {ci + 1}: {len(chunk):,} rows ({mode})")
+spark.createDataFrame(pharmacy_claims_data, schema=pharmacy_schema).write.mode("overwrite").parquet(f"{volume_base}/claims_pharmacy/")
 print(f"  Pharmacy claims total: {len(pharmacy_claims_data):,}")
 
 # COMMAND ----------
