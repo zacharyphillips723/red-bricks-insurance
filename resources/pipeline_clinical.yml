@@ -16,4 +16,5 @@ resources:
         - file:
             path: ../src/pipelines/clinical/gold.sql
       channel: PREVIEW
+      serverless: true
       development: true

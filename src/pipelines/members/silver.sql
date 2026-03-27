@@ -91,3 +91,41 @@ AS SELECT
   source_file,
   ingestion_timestamp
 FROM STREAM(LIVE.bronze_enrollment);
+
+-- ---------------------------------------------------------------------------
+-- Silver Groups — cleansed employer group contracts
+-- ---------------------------------------------------------------------------
+CREATE OR REFRESH STREAMING TABLE silver_groups (
+  CONSTRAINT valid_group_id
+    EXPECT (group_id IS NOT NULL)
+    ON VIOLATION DROP ROW,
+  CONSTRAINT valid_group_name
+    EXPECT (group_name IS NOT NULL)
+    ON VIOLATION DROP ROW,
+  CONSTRAINT valid_funding_type
+    EXPECT (funding_type IN ('Self-Funded', 'Fully-Insured', 'Level-Funded'))
+)
+COMMENT 'Cleansed employer group contracts with validated funding types, stop-loss parameters, and admin fees.'
+TBLPROPERTIES (
+  'quality' = 'silver',
+  'domain'  = 'members'
+)
+AS SELECT
+  group_id,
+  group_name,
+  sic_code,
+  industry,
+  state,
+  group_size,
+  group_size_tier,
+  funding_type,
+  specific_stop_loss_attachment,
+  aggregate_stop_loss_attachment_pct,
+  expected_annual_claims,
+  admin_fee_pmpm,
+  stop_loss_premium_pmpm,
+  CAST(effective_date AS DATE) AS effective_date,
+  CAST(renewal_date AS DATE) AS renewal_date,
+  source_file,
+  ingestion_timestamp
+FROM STREAM(LIVE.bronze_groups);

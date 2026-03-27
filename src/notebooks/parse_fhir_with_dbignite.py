@@ -61,6 +61,7 @@ fhir_path = f"{volume_base}/synthea_raw/fhir"
 
 from dbignite.readers import read_from_directory
 from dbignite.fhir_mapping_model import FhirSchemaModel
+import time
 
 # Read all FHIR R4 JSON bundles from the volume
 fhir_data = read_from_directory(fhir_path)
@@ -68,28 +69,34 @@ fhir_data = read_from_directory(fhir_path)
 # Use R4 schema
 fhir_schema = FhirSchemaModel(schema_version="r4")
 
-# Parse entries with R4 schemas first — this caches the result internally.
-# bulk_table_write() will then reuse this cached DataFrame.
+# Parse entries with R4 schemas. On serverless, persist() is not supported,
+# but serverless Spark has aggressive disk caching and auto-scaling that
+# compensate. The count() below forces materialization of the lazy parse plan.
 entries_df = fhir_data.entry(schemas=fhir_schema)
 
+t0 = time.time()
+row_count = entries_df.count()
+print(f"Parsed {row_count:,} entry rows in {time.time() - t0:.0f}s")
 print(f"Loaded FHIR bundles from: {fhir_path}")
 print(f"Schema version: R4")
 print(f"Columns available: {[c for c in entries_df.columns if c not in ('id','timestamp','bundleUUID')]}")
 
 # COMMAND ----------
 
-# Write the four clinical domain tables to Unity Catalog
+# Write the four clinical domain tables to Unity Catalog.
+# bulk_table_write uses a ThreadPool to write tables in parallel.
 target_location = f"{catalog}.{schema}"
 
+t0 = time.time()
 fhir_data.bulk_table_write(
     location=target_location,
     write_mode="overwrite",
     columns=["Patient", "Encounter", "Condition", "Observation"],
 )
-
-print(f"Domain tables written to {target_location}:")
+print(f"Domain tables written to {target_location} in {time.time() - t0:.0f}s:")
 for t in ["Patient", "Encounter", "Condition", "Observation"]:
     print(f"  - {t}")
+
 
 # COMMAND ----------
 
@@ -105,7 +112,9 @@ for t in ["Patient", "Encounter", "Condition", "Observation"]:
 # COMMAND ----------
 
 import pyspark.sql.functions as F
-import random
+import time
+
+t0 = time.time()
 
 # --- Patient crosswalk ---
 df_crosswalk = spark.read.parquet(f"{volume_base}/synthea_demographics/crosswalk.parquet")
@@ -113,71 +122,63 @@ df_crosswalk.select("synthea_uuid", "member_id").write.mode("overwrite").saveAsT
     f"{catalog}.{schema}.synthea_crosswalk"
 )
 crosswalk_count = spark.table(f"{catalog}.{schema}.synthea_crosswalk").count()
-print(f"synthea_crosswalk: {crosswalk_count:,} rows")
+print(f"synthea_crosswalk: {crosswalk_count:,} rows ({time.time() - t0:.0f}s)")
 
 # --- Practitioner crosswalk ---
-# Extract unique practitioner UUIDs from Synthea FHIR bundles.
-# Check practitionerInformation files first, then fall back to scanning patient bundles.
-import os
-import json
-
-practitioner_uuids = set()
+# Use Spark to read all FHIR bundles in parallel and extract Practitioner UUIDs.
+# Much faster than serial Python file I/O over 5K+ JSON files.
+t1 = time.time()
 fhir_dir = f"{volume_base}/synthea_raw/fhir"
 
-# Source 1: dedicated practitionerInformation files
-for fname in os.listdir(fhir_dir):
-    if fname.startswith("practitionerInformation") and fname.endswith(".json"):
-        with open(os.path.join(fhir_dir, fname), "r") as f:
-            prac_bundle = json.load(f)
-        for entry in prac_bundle.get("entry", []):
-            resource = entry.get("resource", {})
-            if resource.get("resourceType") == "Practitioner":
-                practitioner_uuids.add(resource.get("id"))
+df_bundles = spark.read.option("multiLine", True).json(f"{fhir_dir}/*.json")
+df_practitioners = (
+    df_bundles
+    .select(F.explode("entry").alias("entry"))
+    .filter(F.col("entry.resource.resourceType") == "Practitioner")
+    .select(F.col("entry.resource.id").alias("synthea_practitioner_uuid"))
+    .distinct()
+    .filter(F.col("synthea_practitioner_uuid").isNotNull())
+)
 
-# Source 2: if no dedicated files found, scan patient bundles for Practitioner resources
-if not practitioner_uuids:
-    print("No practitionerInformation files found, scanning patient bundles...")
-    for fname in os.listdir(fhir_dir):
-        if not fname.endswith(".json") or fname.startswith(("hospitalInformation", "practitionerInformation")):
-            continue
-        with open(os.path.join(fhir_dir, fname), "r") as f:
-            bundle = json.load(f)
-        for entry in bundle.get("entry", []):
-            resource = entry.get("resource", {})
-            if resource.get("resourceType") == "Practitioner":
-                practitioner_uuids.add(resource.get("id"))
+prac_count = df_practitioners.count()
+print(f"Found {prac_count} unique Synthea practitioner UUIDs ({time.time() - t1:.0f}s)")
 
-practitioner_uuids = [u for u in practitioner_uuids if u]
-print(f"Found {len(practitioner_uuids)} unique Synthea practitioner UUIDs")
+# Read providers and randomly assign NPIs via a deterministic cross-join + row_number
+df_providers = (
+    spark.read.parquet(f"{volume_base}/providers/")
+    .select("npi")
+    .filter(F.col("npi").isNotNull())
+    .distinct()
+)
 
-# Read providers Parquet (generated by run_data_generation)
-df_providers = spark.read.parquet(f"{volume_base}/providers/")
-provider_npis = [row["npi"] for row in df_providers.select("npi").collect() if row["npi"]]
+# Assign each practitioner a deterministic NPI using hash-based modular mapping.
+# Collect providers to driver (small table, ~500 rows) and broadcast for the join.
+provider_npis = [row["npi"] for row in df_providers.collect()]
+provider_count = len(provider_npis)
 
-# Randomly assign NPIs to Synthea practitioner UUIDs
-random.seed(42)
-prac_crosswalk_rows = []
-for uuid in practitioner_uuids:
-    npi = random.choice(provider_npis)
-    prac_crosswalk_rows.append({"synthea_practitioner_uuid": uuid, "provider_npi": npi})
+# Build a small lookup DataFrame with index → NPI
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType
+prov_rows = [(i, npi) for i, npi in enumerate(provider_npis)]
+df_prov_lookup = spark.createDataFrame(prov_rows, ["_prov_idx", "npi"])
 
-if prac_crosswalk_rows:
-    df_prac_crosswalk = spark.createDataFrame(prac_crosswalk_rows)
-else:
-    # Empty crosswalk — create with explicit schema to avoid inference error
-    from pyspark.sql.types import StructType, StructField, StringType
-    prac_schema = StructType([
-        StructField("synthea_practitioner_uuid", StringType()),
-        StructField("provider_npi", StringType()),
-    ])
-    df_prac_crosswalk = spark.createDataFrame([], schema=prac_schema)
-    print("WARNING: No practitioner UUIDs found — writing empty crosswalk table")
+df_prac_numbered = df_practitioners.withColumn(
+    "_prac_hash", F.abs(F.hash("synthea_practitioner_uuid")) % F.lit(provider_count)
+)
+
+df_prac_crosswalk = (
+    df_prac_numbered
+    .join(F.broadcast(df_prov_lookup), df_prac_numbered["_prac_hash"] == df_prov_lookup["_prov_idx"])
+    .select(
+        F.col("synthea_practitioner_uuid"),
+        F.col("npi").alias("provider_npi")
+    )
+)
 
 df_prac_crosswalk.write.mode("overwrite").saveAsTable(
     f"{catalog}.{schema}.synthea_practitioner_crosswalk"
 )
-prac_count = spark.table(f"{catalog}.{schema}.synthea_practitioner_crosswalk").count()
-print(f"synthea_practitioner_crosswalk: {prac_count:,} rows")
+final_count = spark.table(f"{catalog}.{schema}.synthea_practitioner_crosswalk").count()
+print(f"synthea_practitioner_crosswalk: {final_count:,} rows ({time.time() - t1:.0f}s)")
 
 # COMMAND ----------
 
@@ -199,92 +200,20 @@ for table in ["Patient", "Encounter", "Condition", "Observation",
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Preview: Patient Table
-
-# COMMAND ----------
-
-display(spark.table(f"{catalog}.{schema}.Patient").limit(10))
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Preview: Condition Table (ICD-10 Diagnoses)
-
-# COMMAND ----------
-
-display(spark.table(f"{catalog}.{schema}.Condition").limit(10))
+# MAGIC ## Preview: Row Counts
+# MAGIC
+# MAGIC Previews are skipped in the pipeline (deeply nested FHIR structs exceed
+# MAGIC display limits). Query the tables directly or use the clinical pipeline
+# MAGIC silver views for flattened, queryable columns.
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Preview: Observation Table (Labs + Vitals with LOINC)
-
-# COMMAND ----------
-
-display(spark.table(f"{catalog}.{schema}.Observation").limit(10))
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Preview: Encounter Table
-
-# COMMAND ----------
-
-display(spark.table(f"{catalog}.{schema}.Encounter").limit(10))
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Summary Analytics
-
-# COMMAND ----------
-
-# Explore the schema of each domain table
-for table in ["Patient", "Encounter", "Condition", "Observation"]:
-    print(f"\n--- {table} schema ---")
-    df = spark.table(f"{catalog}.{schema}.{table}")
-    df.printSchema()
-
-# COMMAND ----------
-
-# Top diagnoses by frequency (navigate the nested FHIR struct)
-# Use SQL for reliable nested struct navigation — PySpark bracket notation
-# can conflict with dbignite's array-typed FHIR fields.
-try:
-    spark.sql(f"""
-        SELECT
-            Condition.code.coding[0].code   AS icd10_code,
-            Condition.code.coding[0].display AS diagnosis,
-            COUNT(*)                         AS condition_count,
-            COUNT(DISTINCT Condition.subject.reference) AS unique_patients
-        FROM {catalog}.{schema}.Condition
-        GROUP BY 1, 2
-        ORDER BY condition_count DESC
-        LIMIT 15
-    """).display()
-except Exception as e:
-    print(f"Condition summary skipped (schema exploration): {e}")
-
-# COMMAND ----------
-
-# Observation distribution (labs + vitals)
-try:
-    spark.sql(f"""
-        SELECT
-            Observation.code.coding[0].code    AS loinc_code,
-            Observation.code.coding[0].display  AS observation_name,
-            Observation.category[0].coding[0].code AS category,
-            COUNT(*)                            AS observation_count,
-            ROUND(AVG(Observation.valueQuantity.value), 2) AS avg_value,
-            ROUND(MIN(Observation.valueQuantity.value), 2) AS min_value,
-            ROUND(MAX(Observation.valueQuantity.value), 2) AS max_value
-        FROM {catalog}.{schema}.Observation
-        GROUP BY 1, 2, 3
-        ORDER BY observation_count DESC
-        LIMIT 20
-    """).display()
-except Exception as e:
-    print(f"Observation summary skipped (schema exploration): {e}")
+# MAGIC ## Summary
+# MAGIC
+# MAGIC Summary analytics (schema exploration, top diagnoses, observation distributions)
+# MAGIC are omitted from the pipeline run for speed. Use the preview tables above or
+# MAGIC query the gold analytics views for detailed breakdowns.
 
 # COMMAND ----------
 

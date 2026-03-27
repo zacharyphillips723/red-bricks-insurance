@@ -27,3 +27,14 @@ FROM STREAM read_files(
   '${source_volume}/enrollment/',
   format => 'parquet'
 );
+
+CREATE OR REFRESH STREAMING TABLE bronze_groups
+COMMENT 'Raw employer group contracts ingested from parquet source files. Includes stop-loss, funding type, and admin fees.'
+AS SELECT
+  *,
+  _metadata.file_path AS source_file,
+  current_timestamp() AS ingestion_timestamp
+FROM STREAM read_files(
+  '${source_volume}/groups/',
+  format => 'parquet'
+);

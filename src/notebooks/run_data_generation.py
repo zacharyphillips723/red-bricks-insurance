@@ -76,6 +76,7 @@ from src.data_generation.domains import underwriting as dom_underwriting
 from src.data_generation.domains import risk_adjustment as dom_risk
 from src.data_generation.domains import documents as dom_documents
 from src.data_generation.domains import benefits as dom_benefits
+from src.data_generation.domains import groups as dom_groups
 
 # COMMAND ----------
 
@@ -95,7 +96,7 @@ spark.sql(f"CREATE VOLUME IF NOT EXISTS {catalog}.{schema}.raw_sources")
 # Clean old data so Auto Loader doesn't re-ingest stale files on pipeline refresh
 for subdir in ["members", "enrollment", "providers", "claims_medical", "claims_pharmacy",
                "underwriting", "risk_adjustment_member",
-               "risk_adjustment_provider", "documents", "benefits"]:
+               "risk_adjustment_provider", "documents", "benefits", "groups"]:
     path = f"{volume_base}/{subdir}"
     try:
         dbutils.fs.rm(path, recurse=True)
@@ -158,6 +159,35 @@ except Exception as e:
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ### Employer Groups
+
+# COMMAND ----------
+
+groups_data = dom_groups.generate_groups(200)
+groups_schema = T.StructType([
+    T.StructField("group_id", T.StringType()),
+    T.StructField("group_name", T.StringType()),
+    T.StructField("sic_code", T.StringType()),
+    T.StructField("industry", T.StringType()),
+    T.StructField("state", T.StringType()),
+    T.StructField("group_size", T.IntegerType()),
+    T.StructField("group_size_tier", T.StringType()),
+    T.StructField("funding_type", T.StringType()),
+    T.StructField("specific_stop_loss_attachment", T.DoubleType()),
+    T.StructField("aggregate_stop_loss_attachment_pct", T.DoubleType()),
+    T.StructField("expected_annual_claims", T.DoubleType()),
+    T.StructField("admin_fee_pmpm", T.DoubleType()),
+    T.StructField("stop_loss_premium_pmpm", T.DoubleType()),
+    T.StructField("effective_date", T.StringType()),
+    T.StructField("renewal_date", T.StringType()),
+])
+df_groups = spark.createDataFrame(groups_data, schema=groups_schema)
+df_groups.write.mode("overwrite").parquet(f"{volume_base}/groups/")
+print("Groups:", df_groups.count())
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ### Members (demographics)
 
 # COMMAND ----------
@@ -190,7 +220,7 @@ print("Members:", len(member_ids))
 
 # COMMAND ----------
 
-enrollment_data = dom_enrollment.generate_enrollment(member_ids, member_lob_map=member_lob_map)
+enrollment_data = dom_enrollment.generate_enrollment(member_ids, member_lob_map=member_lob_map, group_data=groups_data)
 enrollment_schema = T.StructType([
     T.StructField("member_id", T.StringType()),
     T.StructField("subscriber_id", T.StringType()),
@@ -274,7 +304,12 @@ print("Benefits:", df_benefits.count())
 
 # COMMAND ----------
 
-medical_claims_data = dom_claims.generate_medical_claims(enrollment_data, providers_data, 40000)
+import time as _time
+
+print("Generating 750K medical claims (may take a few minutes)...")
+_t0 = _time.time()
+medical_claims_data = dom_claims.generate_medical_claims(enrollment_data, providers_data, 750000)
+print(f"  Medical claims generated in {_time.time() - _t0:.0f}s")
 medical_schema = T.StructType([
     T.StructField("claim_id", T.StringType()),
     T.StructField("claim_line_number", T.IntegerType()),
@@ -315,10 +350,19 @@ medical_schema = T.StructType([
     T.StructField("adjustment_reason", T.StringType()),
     T.StructField("source_system", T.StringType()),
 ])
-df_medical = spark.createDataFrame(medical_claims_data, schema=medical_schema)
-df_medical.write.mode("overwrite").parquet(f"{volume_base}/claims_medical/")
+# Write medical claims in chunks to avoid driver OOM with 750K dicts
+CHUNK = 150_000
+for ci, start in enumerate(range(0, len(medical_claims_data), CHUNK)):
+    chunk = medical_claims_data[start : start + CHUNK]
+    mode = "overwrite" if ci == 0 else "append"
+    spark.createDataFrame(chunk, schema=medical_schema).write.mode(mode).parquet(f"{volume_base}/claims_medical/")
+    print(f"  Medical chunk {ci + 1}: {len(chunk):,} rows ({mode})")
+print(f"  Medical claims total: {len(medical_claims_data):,}")
 
-pharmacy_claims_data = dom_claims.generate_pharmacy_claims(enrollment_data, providers_data, 15000)
+print("Generating 250K pharmacy claims...")
+_t1 = _time.time()
+pharmacy_claims_data = dom_claims.generate_pharmacy_claims(enrollment_data, providers_data, 250000)
+print(f"  Pharmacy claims generated in {_time.time() - _t1:.0f}s")
 pharmacy_schema = T.StructType([
     T.StructField("claim_id", T.StringType()),
     T.StructField("member_id", T.StringType()),
@@ -342,9 +386,13 @@ pharmacy_schema = T.StructType([
     T.StructField("formulary_tier", T.StringType()),
     T.StructField("mail_order_flag", T.StringType()),
 ])
-df_pharmacy = spark.createDataFrame(pharmacy_claims_data, schema=pharmacy_schema)
-df_pharmacy.write.mode("overwrite").parquet(f"{volume_base}/claims_pharmacy/")
-print("Medical claims:", df_medical.count(), "Pharmacy claims:", df_pharmacy.count())
+# Write pharmacy claims in chunks too
+for ci, start in enumerate(range(0, len(pharmacy_claims_data), CHUNK)):
+    chunk = pharmacy_claims_data[start : start + CHUNK]
+    mode = "overwrite" if ci == 0 else "append"
+    spark.createDataFrame(chunk, schema=pharmacy_schema).write.mode(mode).parquet(f"{volume_base}/claims_pharmacy/")
+    print(f"  Pharmacy chunk {ci + 1}: {len(chunk):,} rows ({mode})")
+print(f"  Pharmacy claims total: {len(pharmacy_claims_data):,}")
 
 # COMMAND ----------
 
@@ -466,7 +514,7 @@ df_risk_member = spark.createDataFrame(risk_member_data, schema=risk_member_sche
 df_risk_member.write.mode("overwrite").parquet(f"{volume_base}/risk_adjustment_member/")
 
 risk_provider_data = dom_risk.generate_risk_adjustment_provider(
-    provider_npis, risk_member_data, n_assignments=2500
+    provider_npis, risk_member_data, n_assignments=10000
 )
 if risk_provider_data:
     risk_provider_schema = T.StructType([
@@ -495,9 +543,10 @@ print(f"Volume: {volume_base}")
 print(f"Synthea demographics: {'YES' if synthea_demographics else 'NO (Faker fallback)'}")
 print("  providers/               -> Parquet")
 print("  members/                 -> Parquet")
+print("  groups/                  -> Parquet")
 print("  enrollment/              -> Parquet")
-print("  claims_medical/          -> Parquet")
-print("  claims_pharmacy/         -> Parquet")
+print("  claims_medical/          -> Parquet (750K)")
+print("  claims_pharmacy/         -> Parquet (250K)")
 print("  documents/case_notes/    -> PDF")
 print("  documents/call_transcripts/ -> PDF")
 print("  documents/claims_summaries/ -> PDF")

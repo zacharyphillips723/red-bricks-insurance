@@ -12,11 +12,6 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
               schema: ${var.schema}
-          new_cluster:
-            spark_version: "16.4.x-scala2.12"
-            node_type_id: ${var.node_type_small}
-            num_workers: 1
-            data_security_mode: SINGLE_USER
 
         # Step 2: Domain pipelines (run in parallel after data generation)
         - task_key: members_pipeline
@@ -80,16 +75,6 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
               schema: ${var.schema}
-          new_cluster:
-            spark_version: "16.4.x-scala2.12"
-            node_type_id: ${var.node_type_small}
-            num_workers: 0
-            data_security_mode: SINGLE_USER
-            spark_conf:
-              spark.databricks.cluster.profile: singleNode
-              spark.master: "local[*]"
-            custom_tags:
-              ResourceClass: SingleNode
 
         # Step 2d: Synthea clinical data pipeline
         # Synthea generation (ROOT) → data_generation reads demographics
@@ -115,11 +100,6 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
               schema: ${var.schema}
-          new_cluster:
-            spark_version: "16.4.x-scala2.12"
-            node_type_id: ${var.node_type_small}
-            num_workers: 1
-            data_security_mode: SINGLE_USER
 
         - task_key: clinical_pipeline
           depends_on:
@@ -153,16 +133,6 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
               schema: ${var.schema}
-          new_cluster:
-            spark_version: "17.3.x-scala2.13"
-            node_type_id: ${var.node_type_small}
-            num_workers: 0
-            data_security_mode: SINGLE_USER
-            spark_conf:
-              spark.databricks.cluster.profile: singleNode
-              spark.master: "local[*]"
-            custom_tags:
-              ResourceClass: SingleNode
 
         # Step 4: Vector Search index (depends on documents pipeline)
         - task_key: setup_vector_search
@@ -173,16 +143,6 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
               schema: ${var.schema}
-          new_cluster:
-            spark_version: "16.4.x-scala2.12"
-            node_type_id: ${var.node_type_small}
-            num_workers: 0
-            data_security_mode: SINGLE_USER
-            spark_conf:
-              spark.databricks.cluster.profile: singleNode
-              spark.master: "local[*]"
-            custom_tags:
-              ResourceClass: SingleNode
 
         # Step 5: Register Care Intelligence Agent in Unity Catalog (depends on vector search + gold analytics)
         - task_key: deploy_member_agent
@@ -194,21 +154,7 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
               schema: ${var.schema}
-          libraries:
-            - pypi:
-                package: mlflow>=2.14.0
-            - pypi:
-                package: databricks-sdk>=0.30.0
-          new_cluster:
-            spark_version: "16.4.x-scala2.12"
-            node_type_id: ${var.node_type_small}
-            num_workers: 0
-            data_security_mode: SINGLE_USER
-            spark_conf:
-              spark.databricks.cluster.profile: singleNode
-              spark.master: "local[*]"
-            custom_tags:
-              ResourceClass: SingleNode
+          environment_key: agent_env
 
         # Step 6: Register Care Intelligence Agent v2 (depends on vector search + gold analytics + benefits)
         - task_key: deploy_agent_v2
@@ -221,21 +167,7 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
               schema: ${var.schema}
-          libraries:
-            - pypi:
-                package: mlflow>=2.14.0
-            - pypi:
-                package: databricks-sdk>=0.30.0
-          new_cluster:
-            spark_version: "16.4.x-scala2.12"
-            node_type_id: ${var.node_type_small}
-            num_workers: 0
-            data_security_mode: SINGLE_USER
-            spark_conf:
-              spark.databricks.cluster.profile: singleNode
-              spark.master: "local[*]"
-            custom_tags:
-              ResourceClass: SingleNode
+          environment_key: agent_env
 
         # Step 7: Evaluate v1 vs v2 agents (depends on both being registered)
         - task_key: evaluate_agents
@@ -247,23 +179,22 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
               schema: ${var.schema}
-          libraries:
-            - pypi:
-                package: mlflow>=2.14.0
-            - pypi:
-                package: databricks-sdk>=0.30.0
-            - pypi:
-                package: pandas
-          new_cluster:
-            spark_version: "16.4.x-scala2.12"
-            node_type_id: ${var.node_type_small}
-            num_workers: 0
-            data_security_mode: SINGLE_USER
-            spark_conf:
-              spark.databricks.cluster.profile: singleNode
-              spark.master: "local[*]"
-            custom_tags:
-              ResourceClass: SingleNode
+          environment_key: agent_eval_env
+
+      environments:
+        - environment_key: agent_env
+          spec:
+            client: "1"
+            dependencies:
+              - mlflow>=2.14.0
+              - databricks-sdk>=0.30.0
+        - environment_key: agent_eval_env
+          spec:
+            client: "1"
+            dependencies:
+              - mlflow>=2.14.0
+              - databricks-sdk>=0.30.0
+              - pandas
 
       tags:
         project: red-bricks-insurance

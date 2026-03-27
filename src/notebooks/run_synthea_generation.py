@@ -50,7 +50,7 @@ LOCAL_OUTPUT_DIR = f"{LOCAL_WORK_DIR}/output"
 VOLUME_SYNTHEA_RAW = f"{volume_base}/synthea_raw/fhir"
 
 # Generation parameters
-NUM_PATIENTS = 500
+NUM_PATIENTS = 5000
 STATE = "North Carolina"
 CITY = None  # None = all cities in the state
 SEED = 42
@@ -291,10 +291,16 @@ def _copy_and_extract(src_path: str):
         if resource.get("resourceType") == "Patient":
             names = resource.get("name", [{}])
             addrs = resource.get("address", [{}])
+            # Strip trailing digits Synthea appends to names (e.g., "Aaron208" → "Aaron")
+            import re
+            raw_first = (names[0].get("given") or [""])[0]
+            raw_last = names[0].get("family") or ""
+            clean_first = re.sub(r'\d+$', '', raw_first)
+            clean_last = re.sub(r'\d+$', '', raw_last)
             return {
                 "synthea_uuid": resource.get("id"),
-                "first_name": (names[0].get("given") or [""])[0],
-                "last_name": names[0].get("family"),
+                "first_name": clean_first,
+                "last_name": clean_last,
                 "date_of_birth": resource.get("birthDate"),
                 "gender": resource.get("gender"),
                 "address_line_1": (addrs[0].get("line") or [""])[0],

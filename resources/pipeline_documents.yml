@@ -12,4 +12,5 @@ resources:
         - file:
             path: ../src/pipelines/documents/silver.sql
       channel: PREVIEW
+      serverless: true
       development: true

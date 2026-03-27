@@ -16,4 +16,5 @@ resources:
         - file:
             path: ../src/pipelines/benefits/gold.sql
       channel: PREVIEW
+      serverless: true
       development: true

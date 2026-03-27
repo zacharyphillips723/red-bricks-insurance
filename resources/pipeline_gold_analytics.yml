@@ -21,5 +21,10 @@ resources:
             path: ../src/pipelines/gold_analytics/member_360.sql
         - file:
             path: ../src/pipelines/gold_analytics/actuarial_metrics.sql
+        - file:
+            path: ../src/pipelines/gold_analytics/group_metrics.sql
+        - file:
+            path: ../src/pipelines/gold_analytics/cost_of_care.sql
       channel: PREVIEW
+      serverless: true
       development: true

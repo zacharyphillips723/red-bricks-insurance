@@ -294,6 +294,60 @@ print("✓ mv_denials created")
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ## mv_cost_of_care
+# MAGIC Total Cost of Care and Total Cost Index for population health benchmarking.
+# MAGIC Source: `gold_member_tcoc`
+
+# COMMAND ----------
+
+spark.sql(f"""
+CREATE OR REPLACE VIEW {catalog}.{schema}.mv_cost_of_care
+WITH METRICS
+LANGUAGE YAML
+AS {DD}
+  version: 1.1
+  comment: "Governed Total Cost of Care (TCOC) and Total Cost Index (TCI) metrics. TCOC normalizes cost for risk acuity; TCI benchmarks members against LOB averages."
+  source: {catalog}.{schema}.gold_member_tcoc
+  dimensions:
+    - name: line_of_business
+      expr: line_of_business
+    - name: cost_tier
+      expr: cost_tier
+    - name: is_high_risk
+      expr: is_high_risk
+  measures:
+    - name: Avg TCOC
+      expr: AVG(tcoc)
+      comment: "Average Total Cost of Care — risk-adjusted paid amount per member month"
+    - name: Avg TCI
+      expr: AVG(tci)
+      comment: "Average Total Cost Index — 1.0 = expected for LOB, >1.0 = above expected"
+    - name: Avg Actual PMPM
+      expr: AVG(actual_pmpm)
+      comment: "Average actual (unadjusted) per member per month cost"
+    - name: Total Paid
+      expr: SUM(total_paid)
+      comment: "Total paid claims (medical + pharmacy)"
+    - name: Total Members
+      expr: COUNT(DISTINCT member_id)
+      comment: "Distinct member count"
+    - name: Total Member Months
+      expr: SUM(member_months)
+      comment: "Total member months of exposure"
+    - name: Avg RAF Score
+      expr: AVG(raf_score)
+      comment: "Average Risk Adjustment Factor score"
+    - name: High Cost Members
+      expr: COUNT(DISTINCT member_id) FILTER (WHERE cost_tier IN ('Extreme Outlier', 'High Cost'))
+      comment: "Members with TCI >= 2.0 — candidates for care management outreach"
+{DD}
+""")
+
+print("✓ mv_cost_of_care created")
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## Verification
 # MAGIC List all metric views and run sample `MEASURE()` queries.
 
@@ -304,7 +358,7 @@ print("Metric Views Created")
 print("=" * 60)
 
 metric_views = ["mv_financial_overview", "mv_mlr_compliance", "mv_utilization",
-                "mv_enrollment", "mv_ibnr", "mv_denials"]
+                "mv_enrollment", "mv_ibnr", "mv_denials", "mv_cost_of_care"]
 
 for mv in metric_views:
     try:
@@ -363,4 +417,19 @@ display(spark.sql(f"""
     FROM {catalog}.{schema}.mv_enrollment
     GROUP BY `line_of_business`
     ORDER BY member_months DESC
+"""))
+
+# COMMAND ----------
+
+# Total Cost of Care by LOB and cost tier
+print("Total Cost of Care by LOB:")
+display(spark.sql(f"""
+    SELECT `line_of_business`, `cost_tier`,
+           MEASURE(`Avg TCOC`) AS avg_tcoc,
+           MEASURE(`Avg TCI`) AS avg_tci,
+           MEASURE(`Total Members`) AS members,
+           MEASURE(`Avg RAF Score`) AS avg_raf
+    FROM {catalog}.{schema}.mv_cost_of_care
+    GROUP BY `line_of_business`, `cost_tier`
+    ORDER BY avg_tci DESC
 """))
