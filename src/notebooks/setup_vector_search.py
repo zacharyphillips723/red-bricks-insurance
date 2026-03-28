@@ -9,16 +9,14 @@
 # COMMAND ----------
 
 dbutils.widgets.text("catalog", "main", "Catalog")
-dbutils.widgets.text("schema", "red_bricks_insurance_dev", "Schema")
 
 catalog = dbutils.widgets.get("catalog")
-schema = dbutils.widgets.get("schema")
 
 VS_ENDPOINT_NAME = "red-bricks-vs-endpoint"
-VS_INDEX_NAME = f"{catalog}.{schema}.case_notes_vs_index"
-SOURCE_TABLE = f"{catalog}.{schema}.silver_case_notes_chunks"
+VS_INDEX_NAME = f"{catalog}.documents.case_notes_vs_index"
+SOURCE_TABLE = f"{catalog}.documents.silver_case_notes_chunks"
 
-print(f"Catalog: {catalog}, Schema: {schema}")
+print(f"Catalog: {catalog}")
 print(f"VS Endpoint: {VS_ENDPOINT_NAME}")
 print(f"VS Index: {VS_INDEX_NAME}")
 print(f"Source Table: {SOURCE_TABLE}")

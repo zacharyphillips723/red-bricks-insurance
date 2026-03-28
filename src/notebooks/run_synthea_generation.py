@@ -14,13 +14,11 @@
 # COMMAND ----------
 
 dbutils.widgets.text("catalog", "main", "Catalog")
-dbutils.widgets.text("schema", "red_bricks_insurance_dev", "Schema")
 
 catalog = dbutils.widgets.get("catalog")
-schema = dbutils.widgets.get("schema")
-volume_base = f"/Volumes/{catalog}/{schema}/raw_sources"
+volume_base = f"/Volumes/{catalog}/raw/raw_sources"
 
-print(f"Catalog: {catalog}, Schema: {schema}")
+print(f"Catalog: {catalog}")
 print(f"Volume base: {volume_base}")
 
 # COMMAND ----------

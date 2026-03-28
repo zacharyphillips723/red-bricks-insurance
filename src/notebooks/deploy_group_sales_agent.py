@@ -11,14 +11,12 @@
 # COMMAND ----------
 
 dbutils.widgets.text("catalog", "main", "Catalog")
-dbutils.widgets.text("schema", "red_bricks_insurance_dev", "Schema")
 
 catalog = dbutils.widgets.get("catalog")
-schema = dbutils.widgets.get("schema")
 
-REPORT_CARD_TABLE = f"{catalog}.{schema}.gold_group_report_card"
+REPORT_CARD_TABLE = f"{catalog}.analytics.gold_group_report_card"
 LLM_ENDPOINT = "databricks-llama-4-maverick"
-MODEL_NAME = f"{catalog}.{schema}.group_sales_coach_agent"
+MODEL_NAME = f"{catalog}.analytics.group_sales_coach_agent"
 
 print(f"Report Card:     {REPORT_CARD_TABLE}")
 print(f"LLM Endpoint:    {LLM_ENDPOINT}")
@@ -118,7 +116,6 @@ assert os.path.exists(agent_code_path), f"Agent code not found at {agent_code_pa
 
 model_config = {
     "UC_CATALOG": catalog,
-    "UC_SCHEMA": schema,
     "SQL_WAREHOUSE_ID": "781064a3466c0984",
     "LLM_ENDPOINT": LLM_ENDPOINT,
     "report_card_table": REPORT_CARD_TABLE,

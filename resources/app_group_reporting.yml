@@ -18,7 +18,7 @@ resources:
           - name: UC_CATALOG
             value: ${var.catalog}
           - name: UC_SCHEMA
-            value: ${var.schema}
+            value: analytics
           - name: GENIE_SPACE_ID
             value: ""
           # Optional enrichment — leave empty to disable

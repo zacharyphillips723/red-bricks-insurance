@@ -10,7 +10,7 @@ resources:
             notebook_path: ../src/notebooks/run_data_generation.py
             base_parameters:
               catalog: ${var.catalog}
-              schema: ${var.schema}
+
           new_cluster:
             spark_version: "16.4.x-scala2.12"
             node_type_id: ${var.node_type_small}

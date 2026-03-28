@@ -20,16 +20,14 @@
 # COMMAND ----------
 
 dbutils.widgets.text("catalog", "main", "Catalog")
-dbutils.widgets.text("schema", "red_bricks_insurance_dev", "Schema")
 
 catalog = dbutils.widgets.get("catalog")
-schema = dbutils.widgets.get("schema")
 
-VS_INDEX_NAME = f"{catalog}.{schema}.case_notes_vs_index"
-MEMBER_360_TABLE = f"{catalog}.{schema}.gold_member_360"
-BENEFIT_UTIL_TABLE = f"{catalog}.{schema}.gold_member_benefit_utilization"
+VS_INDEX_NAME = f"{catalog}.documents.case_notes_vs_index"
+MEMBER_360_TABLE = f"{catalog}.analytics.gold_member_360"
+BENEFIT_UTIL_TABLE = f"{catalog}.benefits.gold_member_benefit_utilization"
 LLM_ENDPOINT = "databricks-llama-4-maverick"
-MODEL_NAME = f"{catalog}.{schema}.care_intelligence_agent_v2"
+MODEL_NAME = f"{catalog}.analytics.care_intelligence_agent_v2"
 
 print(f"VS Index:        {VS_INDEX_NAME}")
 print(f"Member 360:      {MEMBER_360_TABLE}")
@@ -197,7 +195,6 @@ assert os.path.exists(agent_code_path), f"Agent v2 code not found at {agent_code
 
 model_config = {
     "UC_CATALOG": catalog,
-    "UC_SCHEMA": schema,
     "SQL_WAREHOUSE_ID": "781064a3466c0984",
     "LLM_ENDPOINT": LLM_ENDPOINT,
     "vs_index": VS_INDEX_NAME,

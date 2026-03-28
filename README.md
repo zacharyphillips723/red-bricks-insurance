@@ -294,9 +294,9 @@ All tasks run on **serverless** compute except `synthea_generation` which requir
 
 | Target | Profile | Catalog | Use Case |
 |--------|---------|---------|----------|
-| `dev` (default) | `fe-vm-red-bricks-insurance` | `catalog_insurance_vpx9o6` | Development |
+| `dev` (default) | `fe-vm-red-bricks-insurance` | `red_bricks_insurance` | Development |
 | `e2-field-eng` | `fe-demo-field-eng` | `zack_phillips_demos` | Field engineering demos (AWS) |
-| `prod` | `fe-vm-red-bricks-insurance` | `catalog_insurance_vpx9o6` | Production |
+| `prod` | `fe-vm-red-bricks-insurance` | `red_bricks_insurance` | Production |
 
 ### Variables
 

@@ -13,13 +13,11 @@
 # COMMAND ----------
 
 dbutils.widgets.text("catalog", "main", "Catalog")
-dbutils.widgets.text("schema", "red_bricks_insurance_dev", "Schema")
 
 catalog = dbutils.widgets.get("catalog")
-schema = dbutils.widgets.get("schema")
-volume_base = f"/Volumes/{catalog}/{schema}/raw_sources"
+volume_base = f"/Volumes/{catalog}/raw/raw_sources"
 
-print(f"Catalog: {catalog}, Schema: {schema}")
+print(f"Catalog: {catalog}")
 print(f"Volume base: {volume_base}")
 
 # COMMAND ----------
@@ -34,8 +32,7 @@ dbutils.library.restartPython()
 
 # Re-read widgets after Python restart
 catalog = dbutils.widgets.get("catalog")
-schema = dbutils.widgets.get("schema")
-volume_base = f"/Volumes/{catalog}/{schema}/raw_sources"
+volume_base = f"/Volumes/{catalog}/raw/raw_sources"
 
 # COMMAND ----------
 
@@ -90,8 +87,17 @@ try:
     spark.sql(f"CREATE CATALOG IF NOT EXISTS {catalog}")
 except Exception as e:
     print(f"Catalog creation skipped (may already exist): {e}")
-spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema}")
-spark.sql(f"CREATE VOLUME IF NOT EXISTS {catalog}.{schema}.raw_sources")
+
+# Create all domain schemas
+DOMAIN_SCHEMAS = [
+    "raw", "members", "claims", "providers", "documents",
+    "risk_adjustment", "underwriting", "clinical", "benefits", "analytics",
+]
+for s in DOMAIN_SCHEMAS:
+    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{s}")
+    print(f"  Schema: {catalog}.{s}")
+
+spark.sql(f"CREATE VOLUME IF NOT EXISTS {catalog}.raw.raw_sources")
 
 # Clean old data so Auto Loader doesn't re-ingest stale files on pipeline refresh
 for subdir in ["members", "enrollment", "providers", "claims_medical", "claims_pharmacy",
@@ -422,14 +428,14 @@ for doc in documents_data:
 
 # Ensure target directories exist
 for doc_type in ["case_notes", "call_transcripts", "claims_summarys"]:
-    os.makedirs(f"/Volumes/{catalog}/{schema}/raw_sources/documents/{doc_type}", exist_ok=True)
+    os.makedirs(f"/Volumes/{catalog}/raw/raw_sources/documents/{doc_type}", exist_ok=True)
 
 # Write PDFs in parallel using ThreadPoolExecutor
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def _write_pdf(doc):
     doc_type = doc["document_type"]
-    pdf_path = f"/Volumes/{catalog}/{schema}/raw_sources/documents/{doc_type}s/{doc['file_name']}"
+    pdf_path = f"/Volumes/{catalog}/raw/raw_sources/documents/{doc_type}s/{doc['file_name']}"
     with open(pdf_path, "wb") as f:
         f.write(doc["pdf_bytes"])
 

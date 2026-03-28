@@ -21,15 +21,13 @@
 # COMMAND ----------
 
 dbutils.widgets.text("catalog", "main", "Catalog")
-dbutils.widgets.text("schema", "red_bricks_insurance_dev", "Schema")
 
 catalog = dbutils.widgets.get("catalog")
-schema = dbutils.widgets.get("schema")
 
-V1_MODEL_NAME = f"{catalog}.{schema}.care_intelligence_agent"
-V2_MODEL_NAME = f"{catalog}.{schema}.care_intelligence_agent_v2"
-RESULTS_TABLE = f"{catalog}.{schema}.agent_evaluation_results"
-SUMMARY_TABLE = f"{catalog}.{schema}.agent_evaluation_summary"
+V1_MODEL_NAME = f"{catalog}.analytics.care_intelligence_agent"
+V2_MODEL_NAME = f"{catalog}.analytics.care_intelligence_agent_v2"
+RESULTS_TABLE = f"{catalog}.analytics.agent_evaluation_results"
+SUMMARY_TABLE = f"{catalog}.analytics.agent_evaluation_summary"
 JUDGE_ENDPOINT = "databricks-claude-sonnet-4"
 
 print(f"v1 Model:       {V1_MODEL_NAME}")
@@ -51,7 +49,7 @@ import pandas as pd
 high_risk_df = spark.sql(f"""
     SELECT member_id, raf_score, hcc_count, line_of_business,
            top_diagnoses, hedis_gap_measures
-    FROM {catalog}.{schema}.gold_member_360
+    FROM {catalog}.analytics.gold_member_360
     WHERE raf_score > 2.0
     ORDER BY raf_score DESC
     LIMIT 8

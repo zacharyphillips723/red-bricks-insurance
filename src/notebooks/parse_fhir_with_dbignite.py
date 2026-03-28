@@ -20,15 +20,14 @@
 # COMMAND ----------
 
 dbutils.widgets.text("catalog", "main", "Catalog")
-dbutils.widgets.text("schema", "red_bricks_insurance_dev", "Schema")
 
 catalog = dbutils.widgets.get("catalog")
-schema = dbutils.widgets.get("schema")
-volume_base = f"/Volumes/{catalog}/{schema}/raw_sources"
+volume_base = f"/Volumes/{catalog}/raw/raw_sources"
 fhir_path = f"{volume_base}/synthea_raw/fhir"
+clinical_schema = f"{catalog}.clinical"
 
 print(f"Catalog: {catalog}")
-print(f"Schema: {schema}")
+print(f"Clinical schema: {clinical_schema}")
 print(f"FHIR bundles path: {fhir_path}")
 
 # COMMAND ----------
@@ -45,9 +44,9 @@ dbutils.library.restartPython()
 
 # Re-read widgets after Python restart
 catalog = dbutils.widgets.get("catalog")
-schema = dbutils.widgets.get("schema")
-volume_base = f"/Volumes/{catalog}/{schema}/raw_sources"
+volume_base = f"/Volumes/{catalog}/raw/raw_sources"
 fhir_path = f"{volume_base}/synthea_raw/fhir"
+clinical_schema = f"{catalog}.clinical"
 
 # COMMAND ----------
 
@@ -85,7 +84,7 @@ print(f"Columns available: {[c for c in entries_df.columns if c not in ('id','ti
 
 # Write the four clinical domain tables to Unity Catalog.
 # bulk_table_write uses a ThreadPool to write tables in parallel.
-target_location = f"{catalog}.{schema}"
+target_location = clinical_schema
 
 t0 = time.time()
 fhir_data.bulk_table_write(
@@ -119,9 +118,9 @@ t0 = time.time()
 # --- Patient crosswalk ---
 df_crosswalk = spark.read.parquet(f"{volume_base}/synthea_demographics/crosswalk.parquet")
 df_crosswalk.select("synthea_uuid", "member_id").write.mode("overwrite").saveAsTable(
-    f"{catalog}.{schema}.synthea_crosswalk"
+    f"{clinical_schema}.synthea_crosswalk"
 )
-crosswalk_count = spark.table(f"{catalog}.{schema}.synthea_crosswalk").count()
+crosswalk_count = spark.table(f"{clinical_schema}.synthea_crosswalk").count()
 print(f"synthea_crosswalk: {crosswalk_count:,} rows ({time.time() - t0:.0f}s)")
 
 # --- Practitioner crosswalk ---
@@ -175,9 +174,9 @@ df_prac_crosswalk = (
 )
 
 df_prac_crosswalk.write.mode("overwrite").saveAsTable(
-    f"{catalog}.{schema}.synthea_practitioner_crosswalk"
+    f"{clinical_schema}.synthea_practitioner_crosswalk"
 )
-final_count = spark.table(f"{catalog}.{schema}.synthea_practitioner_crosswalk").count()
+final_count = spark.table(f"{clinical_schema}.synthea_practitioner_crosswalk").count()
 print(f"synthea_practitioner_crosswalk: {final_count:,} rows ({time.time() - t1:.0f}s)")
 
 # COMMAND ----------
@@ -190,7 +189,7 @@ print(f"synthea_practitioner_crosswalk: {final_count:,} rows ({time.time() - t1:
 for table in ["Patient", "Encounter", "Condition", "Observation",
               "synthea_crosswalk", "synthea_practitioner_crosswalk"]:
     try:
-        df = spark.table(f"{catalog}.{schema}.{table}")
+        df = spark.table(f"{clinical_schema}.{table}")
         count = df.count()
         cols = len(df.columns)
         print(f"  {table}: {count:,} rows, {cols} columns")

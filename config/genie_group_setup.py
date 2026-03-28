@@ -11,15 +11,14 @@ from databricks.sdk import WorkspaceClient
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-CATALOG = "catalog_insurance_vpx9o6"
-SCHEMA = "red_bricks_insurance_dev"
+CATALOG = "red_bricks_insurance"
 
 TABLES = [
-    f"{CATALOG}.{SCHEMA}.gold_group_report_card",
-    f"{CATALOG}.{SCHEMA}.gold_group_experience",
-    f"{CATALOG}.{SCHEMA}.gold_group_renewal",
-    f"{CATALOG}.{SCHEMA}.gold_group_stop_loss",
-    f"{CATALOG}.{SCHEMA}.gold_tcoc_summary",
+    f"{CATALOG}.analytics.gold_group_report_card",
+    f"{CATALOG}.analytics.gold_group_experience",
+    f"{CATALOG}.analytics.gold_group_renewal",
+    f"{CATALOG}.analytics.gold_group_stop_loss",
+    f"{CATALOG}.analytics.gold_tcoc_summary",
 ]
 
 # ---------------------------------------------------------------------------

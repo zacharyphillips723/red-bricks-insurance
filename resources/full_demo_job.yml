@@ -11,7 +11,7 @@ resources:
             notebook_path: ../src/notebooks/run_data_generation.py
             base_parameters:
               catalog: ${var.catalog}
-              schema: ${var.schema}
+
 
         # Step 2: Domain pipelines (run in parallel after data generation)
         - task_key: members_pipeline
@@ -74,7 +74,7 @@ resources:
             notebook_path: ../src/notebooks/build_member_months.py
             base_parameters:
               catalog: ${var.catalog}
-              schema: ${var.schema}
+
 
         # Step 2d: Synthea clinical data pipeline
         # Synthea generation (ROOT) → data_generation reads demographics
@@ -84,7 +84,7 @@ resources:
             notebook_path: ../src/notebooks/run_synthea_generation.py
             base_parameters:
               catalog: ${var.catalog}
-              schema: ${var.schema}
+
           new_cluster:
             spark_version: "16.4.x-scala2.12"
             node_type_id: ${var.node_type_small}
@@ -99,7 +99,7 @@ resources:
             notebook_path: ../src/notebooks/parse_fhir_with_dbignite.py
             base_parameters:
               catalog: ${var.catalog}
-              schema: ${var.schema}
+
 
         - task_key: clinical_pipeline
           depends_on:
@@ -132,7 +132,7 @@ resources:
             notebook_path: ../src/notebooks/create_metric_views.py
             base_parameters:
               catalog: ${var.catalog}
-              schema: ${var.schema}
+
 
         # Step 4: Vector Search index (depends on documents pipeline)
         - task_key: setup_vector_search
@@ -142,7 +142,7 @@ resources:
             notebook_path: ../src/notebooks/setup_vector_search.py
             base_parameters:
               catalog: ${var.catalog}
-              schema: ${var.schema}
+
 
         # Step 5: Register Care Intelligence Agent in Unity Catalog (depends on vector search + gold analytics)
         - task_key: deploy_member_agent
@@ -153,7 +153,7 @@ resources:
             notebook_path: ../src/notebooks/deploy_member_agent.py
             base_parameters:
               catalog: ${var.catalog}
-              schema: ${var.schema}
+
           environment_key: agent_env
 
         # Step 6: Register Care Intelligence Agent v2 (depends on vector search + gold analytics + benefits)
@@ -166,7 +166,7 @@ resources:
             notebook_path: ../src/notebooks/deploy_agent_v2.py
             base_parameters:
               catalog: ${var.catalog}
-              schema: ${var.schema}
+
           environment_key: agent_env
 
         # Step 6b: Register Group Sales Coach Agent (depends on gold analytics)
@@ -177,7 +177,7 @@ resources:
             notebook_path: ../src/notebooks/deploy_group_sales_agent.py
             base_parameters:
               catalog: ${var.catalog}
-              schema: ${var.schema}
+
           environment_key: agent_env
 
         # Step 7: Evaluate v1 vs v2 agents (depends on both being registered)
@@ -189,7 +189,7 @@ resources:
             notebook_path: ../src/notebooks/evaluate_agents.py
             base_parameters:
               catalog: ${var.catalog}
-              schema: ${var.schema}
+
           environment_key: agent_eval_env
 
       environments:

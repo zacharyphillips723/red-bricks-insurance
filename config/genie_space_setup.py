@@ -10,28 +10,30 @@ from databricks.sdk import WorkspaceClient
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-CATALOG = "catalog_insurance_vpx9o6"
-SCHEMA = "red_bricks_insurance_dev"
+CATALOG = "red_bricks_insurance"
 
 TABLES = [
-    f"{CATALOG}.{SCHEMA}.gold_claims_summary",
-    f"{CATALOG}.{SCHEMA}.gold_pharmacy_summary",
-    f"{CATALOG}.{SCHEMA}.gold_enrollment_summary",
-    f"{CATALOG}.{SCHEMA}.gold_member_demographics",
-    f"{CATALOG}.{SCHEMA}.gold_pmpm",
-    f"{CATALOG}.{SCHEMA}.gold_mlr",
-    f"{CATALOG}.{SCHEMA}.gold_denial_analysis",
-    f"{CATALOG}.{SCHEMA}.gold_denial_classification",
-    f"{CATALOG}.{SCHEMA}.gold_member_risk_narrative",
-    f"{CATALOG}.{SCHEMA}.gold_risk_adjustment_analysis",
-    f"{CATALOG}.{SCHEMA}.gold_hedis_member",
-    f"{CATALOG}.{SCHEMA}.gold_hedis_provider",
-    f"{CATALOG}.{SCHEMA}.gold_stars_provider",
-    f"{CATALOG}.{SCHEMA}.gold_provider_directory",
-    f"{CATALOG}.{SCHEMA}.gold_underwriting_summary",
-    f"{CATALOG}.{SCHEMA}.silver_claims_medical",
-    f"{CATALOG}.{SCHEMA}.silver_enrollment",
-    f"{CATALOG}.{SCHEMA}.silver_members",
+    # Cross-domain gold analytics tables
+    f"{CATALOG}.analytics.gold_pmpm",
+    f"{CATALOG}.analytics.gold_mlr",
+    f"{CATALOG}.analytics.gold_denial_analysis",
+    f"{CATALOG}.analytics.gold_denial_classification",
+    f"{CATALOG}.analytics.gold_member_risk_narrative",
+    f"{CATALOG}.analytics.gold_risk_adjustment_analysis",
+    f"{CATALOG}.analytics.gold_hedis_member",
+    f"{CATALOG}.analytics.gold_hedis_provider",
+    f"{CATALOG}.analytics.gold_stars_provider",
+    # Domain-level gold tables
+    f"{CATALOG}.claims.gold_claims_summary",
+    f"{CATALOG}.claims.gold_pharmacy_summary",
+    f"{CATALOG}.members.gold_enrollment_summary",
+    f"{CATALOG}.members.gold_member_demographics",
+    f"{CATALOG}.providers.gold_provider_directory",
+    f"{CATALOG}.underwriting.gold_underwriting_summary",
+    # Domain silver tables
+    f"{CATALOG}.claims.silver_claims_medical",
+    f"{CATALOG}.members.silver_enrollment",
+    f"{CATALOG}.members.silver_members",
 ]
 
 # ---------------------------------------------------------------------------

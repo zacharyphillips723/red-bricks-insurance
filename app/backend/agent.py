@@ -13,14 +13,13 @@ import traceback
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import StatementParameterListItem
 
-UC_CATALOG = os.environ.get("UC_CATALOG", "catalog_insurance_vpx9o6")
-UC_SCHEMA = os.environ.get("UC_SCHEMA", "red_bricks_insurance_dev")
+UC_CATALOG = os.environ.get("UC_CATALOG", "red_bricks_insurance")
 SQL_WAREHOUSE_ID = os.environ.get("SQL_WAREHOUSE_ID", "781064a3466c0984")
 LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT", "databricks-meta-llama-3-3-70b-instruct")
 
-MEMBER_360_TABLE = f"{UC_CATALOG}.{UC_SCHEMA}.gold_member_360"
-CASE_NOTES_TABLE = f"{UC_CATALOG}.{UC_SCHEMA}.silver_case_notes"
-VS_INDEX_NAME = f"{UC_CATALOG}.{UC_SCHEMA}.case_notes_vs_index"
+MEMBER_360_TABLE = f"{UC_CATALOG}.analytics.gold_member_360"
+CASE_NOTES_TABLE = f"{UC_CATALOG}.documents.silver_case_notes"
+VS_INDEX_NAME = f"{UC_CATALOG}.documents.case_notes_vs_index"
 
 SYSTEM_PROMPT = """You are a care management assistant for Red Bricks Insurance.
 You help care managers prepare for member outreach by synthesizing structured data

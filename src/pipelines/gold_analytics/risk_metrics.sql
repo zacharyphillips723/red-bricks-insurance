@@ -43,8 +43,8 @@ SELECT
     WHEN e.line_of_business = 'Large Group'        THEN 9000
     ELSE 8000
   END                                                              AS estimated_annual_revenue
-FROM ${catalog}.${schema}.silver_risk_adjustment_member r
-INNER JOIN ${catalog}.${schema}.silver_enrollment e
+FROM ${catalog}.risk_adjustment.silver_risk_adjustment_member r
+INNER JOIN ${catalog}.members.silver_enrollment e
   ON r.member_id = e.member_id
 GROUP BY
   e.line_of_business,
@@ -83,7 +83,7 @@ WITH chronic_diagnoses AS (
       WHEN c.primary_diagnosis_code LIKE 'J44%' THEN 'HCC111'
       WHEN c.primary_diagnosis_code LIKE 'N18%' THEN 'HCC134,HCC135'
     END AS expected_hcc
-  FROM ${catalog}.${schema}.silver_claims_medical c
+  FROM ${catalog}.claims.silver_claims_medical c
   WHERE c.primary_diagnosis_code LIKE 'E11%'
      OR c.primary_diagnosis_code LIKE 'I50%'
      OR c.primary_diagnosis_code LIKE 'J44%'
@@ -119,5 +119,5 @@ SELECT
     ELSE 0
   END AS coding_gap
 FROM hcc_lookup hl
-LEFT JOIN ${catalog}.${schema}.silver_risk_adjustment_member ram
+LEFT JOIN ${catalog}.risk_adjustment.silver_risk_adjustment_member ram
   ON hl.member_id = ram.member_id;

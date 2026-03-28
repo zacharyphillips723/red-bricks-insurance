@@ -19,7 +19,7 @@ latest_enrollment AS (
     SELECT
       e.*,
       ROW_NUMBER() OVER (PARTITION BY e.member_id ORDER BY e.eligibility_start_date DESC) AS rn
-    FROM ${catalog}.${schema}.silver_enrollment e
+    FROM ${catalog}.members.silver_enrollment e
   )
   WHERE rn = 1
 ),
@@ -50,7 +50,7 @@ medical_agg AS (
         1, 3
       )
     ) AS top_diagnoses
-  FROM ${catalog}.${schema}.silver_claims_medical
+  FROM ${catalog}.claims.silver_claims_medical
   GROUP BY member_id
 ),
 
@@ -61,7 +61,7 @@ pharmacy_agg AS (
     COUNT(DISTINCT claim_id)  AS pharmacy_claim_count,
     SUM(plan_paid)            AS pharmacy_spend_ytd,
     SUM(member_copay)         AS pharmacy_member_copay_ytd
-  FROM ${catalog}.${schema}.silver_claims_pharmacy
+  FROM ${catalog}.claims.silver_claims_pharmacy
   GROUP BY member_id
 ),
 
@@ -76,7 +76,7 @@ risk AS (
       hcc_count,
       is_high_risk,
       ROW_NUMBER() OVER (PARTITION BY member_id ORDER BY raf_score DESC) AS rn
-    FROM ${catalog}.${schema}.silver_risk_adjustment_member
+    FROM ${catalog}.risk_adjustment.silver_risk_adjustment_member
   )
   WHERE rn = 1
 ),
@@ -91,7 +91,7 @@ hedis_gaps AS (
         CASE WHEN is_compliant = 0 THEN measure_name END
       )
     ) AS hedis_gap_measures
-  FROM ${catalog}.${schema}.gold_hedis_member
+  FROM gold_hedis_member
   GROUP BY member_id
 ),
 
@@ -105,7 +105,7 @@ latest_encounter AS (
       enc.encounter_type      AS last_encounter_type,
       enc.provider_npi        AS pcp_npi,
       ROW_NUMBER() OVER (PARTITION BY enc.member_id ORDER BY enc.date_of_service DESC) AS rn
-    FROM ${catalog}.${schema}.silver_encounters enc
+    FROM ${catalog}.clinical.silver_encounters enc
   )
   WHERE rn = 1
 )
@@ -177,7 +177,7 @@ SELECT
 FROM (
   SELECT * FROM (
     SELECT *, ROW_NUMBER() OVER (PARTITION BY member_id ORDER BY member_id) AS m_rn
-    FROM ${catalog}.${schema}.silver_members
+    FROM ${catalog}.members.silver_members
   ) WHERE m_rn = 1
 ) m
 LEFT JOIN latest_enrollment e        ON m.member_id = e.member_id

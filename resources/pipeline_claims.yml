@@ -3,7 +3,7 @@ resources:
     claims_pipeline:
       name: "[${bundle.target}] Red Bricks — Claims Pipeline"
       catalog: ${var.catalog}
-      target: ${var.schema}
+      target: claims
       configuration:
         source_volume: ${var.source_volume}
       libraries:

@@ -23,7 +23,7 @@ WITH group_enrollment AS (
     e.monthly_premium,
     e.coverage_months,
     e.is_active
-  FROM ${catalog}.${schema}.silver_enrollment e
+  FROM ${catalog}.members.silver_enrollment e
   WHERE e.group_number IS NOT NULL
 ),
 
@@ -37,7 +37,7 @@ group_medical AS (
     COUNT(DISTINCT CASE WHEN c.claim_type = 'Institutional IP' THEN c.claim_id END) AS inpatient_claims,
     COUNT(DISTINCT CASE WHEN c.claim_type = 'ER' THEN c.claim_id END)              AS er_claims
   FROM group_enrollment ge
-  INNER JOIN ${catalog}.${schema}.silver_claims_medical c
+  INNER JOIN ${catalog}.claims.silver_claims_medical c
     ON ge.member_id = c.member_id
   GROUP BY ge.group_id
 ),
@@ -50,7 +50,7 @@ group_pharmacy AS (
     SUM(p.total_cost)          AS pharmacy_total_cost,
     SUM(CASE WHEN p.is_specialty THEN p.plan_paid ELSE 0 END) AS specialty_rx_paid
   FROM group_enrollment ge
-  INNER JOIN ${catalog}.${schema}.silver_claims_pharmacy p
+  INNER JOIN ${catalog}.claims.silver_claims_pharmacy p
     ON ge.member_id = p.member_id
   GROUP BY ge.group_id
 ),
@@ -99,7 +99,7 @@ SELECT
   ROUND(COALESCE(gm.er_claims, 0) * 1000.0
     / NULLIF(gs.total_member_months, 0), 1)                      AS er_visits_per_1000
 FROM group_summary gs
-INNER JOIN ${catalog}.${schema}.silver_groups g
+INNER JOIN ${catalog}.members.silver_groups g
   ON gs.group_id = g.group_id
 LEFT JOIN group_medical gm
   ON gs.group_id = gm.group_id
@@ -122,8 +122,8 @@ WITH member_annual_claims AS (
     c.member_id,
     YEAR(c.service_from_date) AS claim_year,
     SUM(c.paid_amount)        AS annual_paid
-  FROM ${catalog}.${schema}.silver_claims_medical c
-  INNER JOIN ${catalog}.${schema}.silver_enrollment e
+  FROM ${catalog}.claims.silver_claims_medical c
+  INNER JOIN ${catalog}.members.silver_enrollment e
     ON c.member_id = e.member_id
   WHERE e.group_number IS NOT NULL
   GROUP BY e.group_number, c.member_id, YEAR(c.service_from_date)
@@ -149,7 +149,7 @@ specific_sl AS (
     COUNT(DISTINCT mac.member_id) AS members_exceeding_specific_sl,
     COALESCE(SUM(mac.annual_paid - g.specific_stop_loss_attachment), 0) AS specific_sl_excess_amount
   FROM member_annual_claims mac
-  INNER JOIN ${catalog}.${schema}.silver_groups g
+  INNER JOIN ${catalog}.members.silver_groups g
     ON mac.group_id = g.group_id
   WHERE g.specific_stop_loss_attachment IS NOT NULL
     AND mac.annual_paid > g.specific_stop_loss_attachment
@@ -188,7 +188,7 @@ SELECT
     / NULLIF(g.expected_annual_claims * COALESCE(g.aggregate_stop_loss_attachment_pct, 1.25), 0), 4)
     AS aggregate_attachment_ratio
 FROM group_annual ga
-INNER JOIN ${catalog}.${schema}.silver_groups g
+INNER JOIN ${catalog}.members.silver_groups g
   ON ga.group_id = g.group_id
 LEFT JOIN specific_sl ssl
   ON ga.group_id = ssl.group_id
@@ -211,7 +211,7 @@ WITH group_premium AS (
     e.group_number AS group_id,
     COUNT(DISTINCT e.member_id) AS enrolled_members,
     SUM(e.monthly_premium * e.coverage_months) AS total_premium
-  FROM ${catalog}.${schema}.silver_enrollment e
+  FROM ${catalog}.members.silver_enrollment e
   WHERE e.group_number IS NOT NULL
   GROUP BY e.group_number
 ),
@@ -221,8 +221,8 @@ group_claims AS (
   SELECT
     e.group_number AS group_id,
     SUM(c.paid_amount) AS total_claims_paid
-  FROM ${catalog}.${schema}.silver_claims_medical c
-  INNER JOIN ${catalog}.${schema}.silver_enrollment e
+  FROM ${catalog}.claims.silver_claims_medical c
+  INNER JOIN ${catalog}.members.silver_enrollment e
     ON c.member_id = e.member_id
   WHERE e.group_number IS NOT NULL
   GROUP BY e.group_number
@@ -316,5 +316,5 @@ SELECT
     ELSE 'Favorable - Hold or Decrease'
   END AS renewal_action
 FROM group_experience ge
-INNER JOIN ${catalog}.${schema}.silver_groups g
+INNER JOIN ${catalog}.members.silver_groups g
   ON ge.group_id = g.group_id;

@@ -3,11 +3,11 @@ resources:
     clinical_pipeline:
       name: "[${bundle.target}] Red Bricks — Clinical Pipeline"
       catalog: ${var.catalog}
-      target: ${var.schema}
+      target: clinical
       configuration:
         source_volume: ${var.source_volume}
         catalog: ${var.catalog}
-        schema: ${var.schema}
+        schema: clinical
       libraries:
         - file:
             path: ../src/pipelines/clinical/bronze.sql

@@ -6,19 +6,18 @@ import traceback
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import StatementParameterListItem
 
-UC_CATALOG = os.environ.get("UC_CATALOG", "catalog_insurance_vpx9o6")
-UC_SCHEMA = os.environ.get("UC_SCHEMA", "red_bricks_insurance_dev")
+UC_CATALOG = os.environ.get("UC_CATALOG", "red_bricks_insurance")
 SQL_WAREHOUSE_ID = os.environ.get("SQL_WAREHOUSE_ID", "781064a3466c0984")
 
-REPORT_CARD_TABLE = f"{UC_CATALOG}.{UC_SCHEMA}.gold_group_report_card"
-EXPERIENCE_TABLE = f"{UC_CATALOG}.{UC_SCHEMA}.gold_group_experience"
-STOP_LOSS_TABLE = f"{UC_CATALOG}.{UC_SCHEMA}.gold_group_stop_loss"
-RENEWAL_TABLE = f"{UC_CATALOG}.{UC_SCHEMA}.gold_group_renewal"
-TCOC_TABLE = f"{UC_CATALOG}.{UC_SCHEMA}.gold_member_tcoc"
-ENROLLMENT_TABLE = f"{UC_CATALOG}.{UC_SCHEMA}.silver_enrollment"
-MEMBER_360_TABLE = f"{UC_CATALOG}.{UC_SCHEMA}.gold_member_360"
-CLAIMS_MEDICAL_TABLE = f"{UC_CATALOG}.{UC_SCHEMA}.silver_claims_medical"
-CLAIMS_PHARMACY_TABLE = f"{UC_CATALOG}.{UC_SCHEMA}.silver_claims_pharmacy"
+REPORT_CARD_TABLE = f"{UC_CATALOG}.analytics.gold_group_report_card"
+EXPERIENCE_TABLE = f"{UC_CATALOG}.analytics.gold_group_experience"
+STOP_LOSS_TABLE = f"{UC_CATALOG}.analytics.gold_group_stop_loss"
+RENEWAL_TABLE = f"{UC_CATALOG}.analytics.gold_group_renewal"
+TCOC_TABLE = f"{UC_CATALOG}.analytics.gold_member_tcoc"
+ENROLLMENT_TABLE = f"{UC_CATALOG}.members.silver_enrollment"
+MEMBER_360_TABLE = f"{UC_CATALOG}.analytics.gold_member_360"
+CLAIMS_MEDICAL_TABLE = f"{UC_CATALOG}.claims.silver_claims_medical"
+CLAIMS_PHARMACY_TABLE = f"{UC_CATALOG}.claims.silver_claims_pharmacy"
 
 
 def _execute_sql(sql: str, params: list | None = None) -> list[dict]:

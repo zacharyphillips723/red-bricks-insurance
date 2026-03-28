@@ -10,7 +10,7 @@ resources:
             notebook_path: ../src/notebooks/run_data_generation.py
             base_parameters:
               catalog: ${var.catalog}
-              schema: ${var.schema}
+
 
         # Step 2: Domain pipelines (run in parallel after data generation)
         - task_key: members_pipeline
@@ -71,7 +71,7 @@ resources:
             notebook_path: ../src/notebooks/build_member_months.py
             base_parameters:
               catalog: ${var.catalog}
-              schema: ${var.schema}
+
 
         # Step 3: Gold analytics (depends on domain pipelines + member months)
         # NOTE: clinical_pipeline is NOT re-run — Synthea data unchanged
@@ -95,7 +95,7 @@ resources:
             notebook_path: ../src/notebooks/create_metric_views.py
             base_parameters:
               catalog: ${var.catalog}
-              schema: ${var.schema}
+
 
         # Step 4: Vector search + agents
         - task_key: setup_vector_search
@@ -105,7 +105,7 @@ resources:
             notebook_path: ../src/notebooks/setup_vector_search.py
             base_parameters:
               catalog: ${var.catalog}
-              schema: ${var.schema}
+
 
         - task_key: deploy_member_agent
           depends_on:
@@ -115,7 +115,7 @@ resources:
             notebook_path: ../src/notebooks/deploy_member_agent.py
             base_parameters:
               catalog: ${var.catalog}
-              schema: ${var.schema}
+
           environment_key: agent_env
 
         - task_key: deploy_agent_v2
@@ -127,7 +127,7 @@ resources:
             notebook_path: ../src/notebooks/deploy_agent_v2.py
             base_parameters:
               catalog: ${var.catalog}
-              schema: ${var.schema}
+
           environment_key: agent_env
 
         - task_key: deploy_group_sales_agent
@@ -137,7 +137,7 @@ resources:
             notebook_path: ../src/notebooks/deploy_group_sales_agent.py
             base_parameters:
               catalog: ${var.catalog}
-              schema: ${var.schema}
+
           environment_key: agent_env
 
         - task_key: evaluate_agents
@@ -148,7 +148,7 @@ resources:
             notebook_path: ../src/notebooks/evaluate_agents.py
             base_parameters:
               catalog: ${var.catalog}
-              schema: ${var.schema}
+
           environment_key: agent_eval_env
 
       environments:

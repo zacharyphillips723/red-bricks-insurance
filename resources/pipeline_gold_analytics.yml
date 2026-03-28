@@ -3,11 +3,10 @@ resources:
     gold_analytics_pipeline:
       name: "[${bundle.target}] Red Bricks — Gold Analytics Pipeline"
       catalog: ${var.catalog}
-      target: ${var.schema}
+      target: analytics
       configuration:
         source_volume: ${var.source_volume}
         catalog: ${var.catalog}
-        schema: ${var.schema}
       libraries:
         - file:
             path: ../src/pipelines/gold_analytics/financial_metrics.sql

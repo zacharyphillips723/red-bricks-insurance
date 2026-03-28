@@ -28,8 +28,7 @@ INSTANCE_NAME = "red-bricks-command-center"
 DATABASE_NAME = "red_bricks_alerts"
 CAPACITY = "CU_1"
 
-CATALOG = "catalog_insurance_vpx9o6"
-SCHEMA = "red_bricks_insurance_dev"
+CATALOG = "red_bricks_insurance"
 
 # ---------------------------------------------------------------------------
 # Step 1: Create Lakebase instance
@@ -161,7 +160,7 @@ def seed_alerts_from_gold(w: WorkspaceClient, spark: SparkSession) -> None:
     risk_df = spark.sql(f"""
         SELECT member_id, raf_score, hcc_codes, hcc_count,
                line_of_business, risk_rank, clinical_summary
-        FROM {CATALOG}.{SCHEMA}.gold_member_risk_narrative
+        FROM {CATALOG}.analytics.gold_member_risk_narrative
         WHERE risk_rank <= 100
         ORDER BY risk_rank
     """).collect()
@@ -219,12 +218,12 @@ def seed_alerts_from_gold(w: WorkspaceClient, spark: SparkSession) -> None:
         FROM (
             SELECT member_id, line_of_business, measure_name, is_compliant,
                    ROW_NUMBER() OVER (PARTITION BY member_id ORDER BY measure_name) as rn
-            FROM {CATALOG}.{SCHEMA}.gold_hedis_member
+            FROM {CATALOG}.analytics.gold_hedis_member
             WHERE is_compliant = 0
         ) m
         LEFT JOIN (
             SELECT line_of_business, AVG(avg_risk_score) as avg_risk_score
-            FROM {CATALOG}.{SCHEMA}.gold_enrollment_summary
+            FROM {CATALOG}.members.gold_enrollment_summary
             GROUP BY line_of_business
         ) e ON m.line_of_business = e.line_of_business
         WHERE m.rn = 1
@@ -269,7 +268,7 @@ def seed_alerts_from_gold(w: WorkspaceClient, spark: SparkSession) -> None:
         SELECT d.line_of_business, d.denial_category,
                SUM(d.denial_count) as total_denials,
                ROUND(SUM(d.total_denied_amount), 2) as total_denied_amt
-        FROM {CATALOG}.{SCHEMA}.gold_denial_analysis d
+        FROM {CATALOG}.analytics.gold_denial_analysis d
         GROUP BY d.line_of_business, d.denial_category
         HAVING SUM(d.denial_count) > 500
         ORDER BY total_denials DESC

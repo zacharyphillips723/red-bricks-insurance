@@ -3,7 +3,7 @@ resources:
     members_pipeline:
       name: "[${bundle.target}] Red Bricks — Members & Enrollment Pipeline"
       catalog: ${var.catalog}
-      target: ${var.schema}
+      target: members
       configuration:
         source_volume: ${var.source_volume}
       libraries:

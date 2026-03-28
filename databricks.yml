@@ -6,16 +6,13 @@ bundle:
 variables:
   catalog:
     description: Unity Catalog catalog name
-    default: main
-  schema:
-    description: Target schema for raw and pipeline tables
     default: red_bricks_insurance
+  source_volume:
+    description: Volume path for raw generated source files
+    default: /Volumes/${var.catalog}/raw/raw_sources
   warehouse_id:
     description: SQL warehouse for jobs (optional)
     default: ""
-  source_volume:
-    description: Volume path for raw generated source files
-    default: /Volumes/${var.catalog}/${var.schema}/raw_sources
   node_type_small:
     description: Small node type (4 vCPU, 14GB) — Azure DS3_v2 or AWS m5.xlarge
     default: Standard_DS3_v2
@@ -33,8 +30,7 @@ targets:
     workspace:
       profile: fe-vm-red-bricks-insurance
     variables:
-      catalog: catalog_insurance_vpx9o6
-      schema: red_bricks_insurance_dev
+      catalog: red_bricks_insurance
       warehouse_id: 781064a3466c0984
 
   e2-field-eng:
@@ -43,7 +39,6 @@ targets:
       profile: fe-demo-field-eng
     variables:
       catalog: zack_phillips_demos
-      schema: red_bricks_insurance_dev
       warehouse_id: 03560442e95cb440
       node_type_small: m5.xlarge
       node_type_large: m5.4xlarge
@@ -53,6 +48,5 @@ targets:
     workspace:
       profile: fe-vm-red-bricks-insurance
     variables:
-      catalog: catalog_insurance_vpx9o6
-      schema: red_bricks_insurance
+      catalog: red_bricks_insurance
       warehouse_id: 781064a3466c0984

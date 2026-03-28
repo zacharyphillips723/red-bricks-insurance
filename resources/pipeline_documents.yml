@@ -3,7 +3,7 @@ resources:
     documents_pipeline:
       name: "[${bundle.target}] Red Bricks — Documents Pipeline"
       catalog: ${var.catalog}
-      target: ${var.schema}
+      target: documents
       configuration:
         source_volume: ${var.source_volume}
       libraries:

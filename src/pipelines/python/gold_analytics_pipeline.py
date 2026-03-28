@@ -40,10 +40,16 @@ from pyspark.sql.window import Window
 # -----------------------------------------------------------------------------
 # Helper: read a published table from the catalog
 # -----------------------------------------------------------------------------
-def _read_table(spark, table_name: str):
-    """Read a published silver/gold table using fully-qualified name."""
+def _read_table(spark, table_name: str, schema: str = None):
+    """Read a published silver/gold table using fully-qualified name.
+
+    Args:
+        schema: Domain schema override (e.g. 'claims', 'members'). If None,
+                reads from the pipeline's own target schema (analytics).
+    """
     catalog = spark.conf.get("catalog")
-    schema = spark.conf.get("schema")
+    if schema is None:
+        schema = "analytics"
     return spark.read.table(f"{catalog}.{schema}.{table_name}")
 
 

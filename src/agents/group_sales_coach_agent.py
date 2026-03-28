@@ -115,17 +115,16 @@ class GroupSalesCoachAgent(ChatModel):
 
         self.w = WorkspaceClient()
 
-        self.catalog = os.environ.get("UC_CATALOG", "catalog_insurance_vpx9o6")
-        self.schema = os.environ.get("UC_SCHEMA", "red_bricks_insurance_dev")
+        self.catalog = os.environ.get("UC_CATALOG", "red_bricks_insurance")
         self.warehouse_id = os.environ.get("SQL_WAREHOUSE_ID", "781064a3466c0984")
         self.llm_endpoint = os.environ.get(
             "LLM_ENDPOINT", "databricks-llama-4-maverick"
         )
-        self.report_card_table = f"{self.catalog}.{self.schema}.gold_group_report_card"
-        self.experience_table = f"{self.catalog}.{self.schema}.gold_group_experience"
-        self.stop_loss_table = f"{self.catalog}.{self.schema}.gold_group_stop_loss"
-        self.renewal_table = f"{self.catalog}.{self.schema}.gold_group_renewal"
-        self.tcoc_table = f"{self.catalog}.{self.schema}.gold_member_tcoc"
+        self.report_card_table = f"{self.catalog}.analytics.gold_group_report_card"
+        self.experience_table = f"{self.catalog}.analytics.gold_group_experience"
+        self.stop_loss_table = f"{self.catalog}.analytics.gold_group_stop_loss"
+        self.renewal_table = f"{self.catalog}.analytics.gold_group_renewal"
+        self.tcoc_table = f"{self.catalog}.analytics.gold_member_tcoc"
 
     def predict(
         self, context, messages: List[ChatMessage], params: Optional[ChatParams] = None
@@ -275,7 +274,7 @@ class GroupSalesCoachAgent(ChatModel):
               ROUND(AVG(t.tci), 3) AS avg_tci,
               ROUND(SUM(t.total_paid), 2) AS total_paid
             FROM {self.tcoc_table} t
-            INNER JOIN {self.catalog}.{self.schema}.silver_enrollment e
+            INNER JOIN {self.catalog}.members.silver_enrollment e
               ON t.member_id = e.member_id
             WHERE e.group_number = :gid
             GROUP BY t.cost_tier

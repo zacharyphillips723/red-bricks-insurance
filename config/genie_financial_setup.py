@@ -11,42 +11,41 @@ from databricks.sdk import WorkspaceClient
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-CATALOG = "catalog_insurance_vpx9o6"
-SCHEMA = "red_bricks_insurance_dev"
+CATALOG = "red_bricks_insurance"
 
 TABLES = [
     # Core financial metrics
-    f"{CATALOG}.{SCHEMA}.gold_pmpm",
-    f"{CATALOG}.{SCHEMA}.gold_mlr",
-    f"{CATALOG}.{SCHEMA}.gold_mlr_ai_insights",
+    f"{CATALOG}.analytics.gold_pmpm",
+    f"{CATALOG}.analytics.gold_mlr",
+    f"{CATALOG}.analytics.gold_mlr_ai_insights",
 
     # Actuarial / utilization
-    f"{CATALOG}.{SCHEMA}.gold_utilization_per_1000",
-    f"{CATALOG}.{SCHEMA}.gold_ibnr_estimate",
-    f"{CATALOG}.{SCHEMA}.gold_ibnr_triangle",
-    f"{CATALOG}.{SCHEMA}.gold_ibnr_completion_factors",
+    f"{CATALOG}.analytics.gold_utilization_per_1000",
+    f"{CATALOG}.analytics.gold_ibnr_estimate",
+    f"{CATALOG}.analytics.gold_ibnr_triangle",
+    f"{CATALOG}.analytics.gold_ibnr_completion_factors",
 
     # Denial analysis (financial impact)
-    f"{CATALOG}.{SCHEMA}.gold_denial_analysis",
-    f"{CATALOG}.{SCHEMA}.gold_claims_summary",
+    f"{CATALOG}.analytics.gold_denial_analysis",
+    f"{CATALOG}.claims.gold_claims_summary",
 
     # Enrollment & exposure
-    f"{CATALOG}.{SCHEMA}.gold_enrollment_summary",
-    f"{CATALOG}.{SCHEMA}.silver_member_months",
-    f"{CATALOG}.{SCHEMA}.silver_enrollment",
+    f"{CATALOG}.members.gold_enrollment_summary",
+    f"{CATALOG}.members.silver_member_months",
+    f"{CATALOG}.members.silver_enrollment",
 
     # Supporting drill-down
-    f"{CATALOG}.{SCHEMA}.silver_claims_medical",
-    f"{CATALOG}.{SCHEMA}.silver_claims_pharmacy",
-    f"{CATALOG}.{SCHEMA}.gold_pharmacy_summary",
+    f"{CATALOG}.claims.silver_claims_medical",
+    f"{CATALOG}.claims.silver_claims_pharmacy",
+    f"{CATALOG}.claims.gold_pharmacy_summary",
 
     # Metric views (governed semantic layer)
-    f"{CATALOG}.{SCHEMA}.mv_financial_overview",
-    f"{CATALOG}.{SCHEMA}.mv_mlr_compliance",
-    f"{CATALOG}.{SCHEMA}.mv_utilization",
-    f"{CATALOG}.{SCHEMA}.mv_enrollment",
-    f"{CATALOG}.{SCHEMA}.mv_ibnr",
-    f"{CATALOG}.{SCHEMA}.mv_denials",
+    f"{CATALOG}.analytics.mv_financial_overview",
+    f"{CATALOG}.analytics.mv_mlr_compliance",
+    f"{CATALOG}.analytics.mv_utilization",
+    f"{CATALOG}.analytics.mv_enrollment",
+    f"{CATALOG}.analytics.mv_ibnr",
+    f"{CATALOG}.analytics.mv_denials",
 ]
 
 # ---------------------------------------------------------------------------

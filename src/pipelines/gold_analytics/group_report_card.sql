@@ -31,8 +31,8 @@ WITH group_tcoc AS (
       ' | Expected: ', SUM(CASE WHEN t.cost_tier = 'Expected' THEN 1 ELSE 0 END),
       ' | Low Utilizer: ', SUM(CASE WHEN t.cost_tier = 'Low Utilizer' THEN 1 ELSE 0 END)
     ) AS cost_tier_distribution
-  FROM ${catalog}.${schema}.silver_enrollment e
-  INNER JOIN ${catalog}.${schema}.gold_member_tcoc t
+  FROM ${catalog}.members.silver_enrollment e
+  INNER JOIN gold_member_tcoc t
     ON e.member_id = t.member_id
   WHERE e.group_number IS NOT NULL
   GROUP BY e.group_number
@@ -77,14 +77,14 @@ base AS (
     gt.pct_high_cost,
     gt.high_cost_members,
     gt.cost_tier_distribution
-  FROM ${catalog}.${schema}.gold_group_experience exp
+  FROM gold_group_experience exp
   LEFT JOIN (
     -- Latest year per group from stop-loss
     SELECT *
-    FROM ${catalog}.${schema}.gold_group_stop_loss
+    FROM gold_group_stop_loss
     QUALIFY ROW_NUMBER() OVER (PARTITION BY group_id ORDER BY claim_year DESC) = 1
   ) sl ON exp.group_id = sl.group_id
-  LEFT JOIN ${catalog}.${schema}.gold_group_renewal ren
+  LEFT JOIN gold_group_renewal ren
     ON exp.group_id = ren.group_id
   LEFT JOIN group_tcoc gt
     ON exp.group_id = gt.group_id

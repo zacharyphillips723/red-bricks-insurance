@@ -13,13 +13,11 @@
 # COMMAND ----------
 
 dbutils.widgets.text("catalog", "main", "Catalog")
-dbutils.widgets.text("schema", "red_bricks_insurance_dev", "Schema")
 
 catalog = dbutils.widgets.get("catalog")
-schema = dbutils.widgets.get("schema")
 
-TABLE_NAME = f"{catalog}.{schema}.silver_member_months"
-SOURCE_TABLE = f"{catalog}.{schema}.silver_enrollment"
+TABLE_NAME = f"{catalog}.members.silver_member_months"
+SOURCE_TABLE = f"{catalog}.members.silver_enrollment"
 
 print(f"Source:  {SOURCE_TABLE}")
 print(f"Target:  {TABLE_NAME}")

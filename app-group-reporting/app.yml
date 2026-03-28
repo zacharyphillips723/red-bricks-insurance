@@ -10,9 +10,9 @@ env:
   - name: LLM_ENDPOINT
     value: databricks-llama-4-maverick
   - name: UC_CATALOG
-    value: catalog_insurance_vpx9o6
+    value: red_bricks_insurance
   - name: UC_SCHEMA
-    value: red_bricks_insurance_dev
+    value: analytics
   - name: GENIE_SPACE_ID
     value: ""
   # Optional enrichment integrations — leave empty to disable

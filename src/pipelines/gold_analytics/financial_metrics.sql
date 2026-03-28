@@ -20,8 +20,8 @@ SELECT
   COUNT(DISTINCT c.member_id)                               AS member_months,
   SUM(c.paid_amount) / NULLIF(COUNT(DISTINCT c.member_id), 0)   AS pmpm_paid,
   SUM(c.allowed_amount) / NULLIF(COUNT(DISTINCT c.member_id), 0) AS pmpm_allowed
-FROM ${catalog}.${schema}.silver_claims_medical c
-INNER JOIN ${catalog}.${schema}.silver_enrollment e
+FROM ${catalog}.claims.silver_claims_medical c
+INNER JOIN ${catalog}.members.silver_enrollment e
   ON c.member_id = e.member_id
 GROUP BY
   e.line_of_business,
@@ -41,8 +41,8 @@ WITH medical_claims AS (
     e.line_of_business,
     YEAR(c.service_from_date) AS service_year,
     SUM(c.paid_amount)        AS medical_paid
-  FROM ${catalog}.${schema}.silver_claims_medical c
-  INNER JOIN ${catalog}.${schema}.silver_enrollment e
+  FROM ${catalog}.claims.silver_claims_medical c
+  INNER JOIN ${catalog}.members.silver_enrollment e
     ON c.member_id = e.member_id
   GROUP BY e.line_of_business, YEAR(c.service_from_date)
 ),
@@ -52,8 +52,8 @@ pharmacy_claims AS (
     e.line_of_business,
     YEAR(p.fill_date) AS service_year,
     SUM(p.plan_paid)  AS pharmacy_paid
-  FROM ${catalog}.${schema}.silver_claims_pharmacy p
-  INNER JOIN ${catalog}.${schema}.silver_enrollment e
+  FROM ${catalog}.claims.silver_claims_pharmacy p
+  INNER JOIN ${catalog}.members.silver_enrollment e
     ON p.member_id = e.member_id
   GROUP BY e.line_of_business, YEAR(p.fill_date)
 ),
@@ -63,7 +63,7 @@ premiums AS (
     line_of_business,
     YEAR(eligibility_start_date) AS service_year,
     SUM(monthly_premium * coverage_months) AS total_premiums
-  FROM ${catalog}.${schema}.silver_enrollment
+  FROM ${catalog}.members.silver_enrollment
   GROUP BY line_of_business, YEAR(eligibility_start_date)
 )
 
@@ -113,7 +113,7 @@ SELECT
     / NULLIF(COUNT(*), 0)                                         AS pct_over_90,
   SUM(CASE WHEN DATEDIFF(paid_date, service_from_date) < 90 THEN 1 ELSE 0 END)
     / NULLIF(COUNT(*), 0)                                         AS completion_factor
-FROM ${catalog}.${schema}.silver_claims_medical
+FROM ${catalog}.claims.silver_claims_medical
 WHERE paid_date IS NOT NULL
   AND service_from_date IS NOT NULL
 GROUP BY service_year_month;

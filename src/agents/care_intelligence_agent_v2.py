@@ -61,15 +61,14 @@ class CareIntelligenceAgentV2(ChatModel):
 
         self.w = WorkspaceClient()
 
-        self.catalog = os.environ.get("UC_CATALOG", "catalog_insurance_vpx9o6")
-        self.schema = os.environ.get("UC_SCHEMA", "red_bricks_insurance_dev")
+        self.catalog = os.environ.get("UC_CATALOG", "red_bricks_insurance")
         self.warehouse_id = os.environ.get("SQL_WAREHOUSE_ID", "781064a3466c0984")
         self.llm_endpoint = os.environ.get(
             "LLM_ENDPOINT", "databricks-llama-4-maverick"
         )
-        self.vs_index = f"{self.catalog}.{self.schema}.case_notes_vs_index"
-        self.member_360_table = f"{self.catalog}.{self.schema}.gold_member_360"
-        self.benefit_util_table = f"{self.catalog}.{self.schema}.gold_member_benefit_utilization"
+        self.vs_index = f"{self.catalog}.documents.case_notes_vs_index"
+        self.member_360_table = f"{self.catalog}.analytics.gold_member_360"
+        self.benefit_util_table = f"{self.catalog}.benefits.gold_member_benefit_utilization"
 
     def predict(
         self, context, messages: List[ChatMessage], params: Optional[ChatParams] = None
