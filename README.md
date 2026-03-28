@@ -99,6 +99,25 @@ A **refresh job** (`red_bricks_refresh`) runs the same DAG minus Synthea/FHIR/cl
 
 **Data quality**: ~2% intentional defects (nulls, invalid codes, out-of-range dates) caught by SDP expectations at the silver layer.
 
+## Schema Architecture
+
+Tables are organized into **10 domain schemas** within the catalog, each owned by its domain pipeline:
+
+| Schema | Contents | Example Tables |
+|--------|----------|----------------|
+| `raw` | Raw data volumes | `raw_sources/` (Parquet, JSON, PDF) |
+| `members` | Member demographics & enrollment | `silver_members`, `silver_enrollment`, `gold_enrollment_summary`, `gold_member_demographics` |
+| `claims` | Medical & pharmacy claims | `silver_claims_medical`, `silver_claims_pharmacy`, `gold_claims_summary`, `gold_pharmacy_summary` |
+| `providers` | Provider directory | `silver_providers`, `gold_provider_directory` |
+| `clinical` | Synthea FHIR clinical data | `bronze_encounters`, `silver_conditions`, `gold_clinical_summary` |
+| `documents` | Case notes, call transcripts | `silver_case_notes`, `case_notes_vs_index` |
+| `benefits` | Plan benefit schedules | `silver_benefits`, `gold_benefits_summary` |
+| `underwriting` | Risk assessment | `silver_underwriting`, `gold_underwriting_summary` |
+| `risk_adjustment` | RAF scores, HCC codes | `silver_risk_adjustment_member`, `gold_risk_adjustment_summary` |
+| `analytics` | Cross-domain gold tables & metric views | `gold_pmpm`, `gold_mlr`, `gold_hedis_member`, `gold_member_360`, `mv_financial_overview` |
+
+**Key design principle**: Each domain pipeline writes bronze/silver/gold tables to its own schema. Only cross-domain gold analytics (tables that JOIN across multiple domains) land in the `analytics` schema.
+
 ## SDP Pipelines (Medallion Architecture)
 
 Each domain has its own SDP pipeline with bronze → silver → gold tables:
@@ -107,8 +126,8 @@ Each domain has its own SDP pipeline with bronze → silver → gold tables:
 |-------|-------------|--------------|
 | **Bronze** | Raw ingestion from UC Volume via `read_files()` | Streaming tables, source lineage metadata |
 | **Silver** | Cleansed, typed, validated | DQ expectations (DROP ROW for critical, track for soft), date casting, computed columns |
-| **Gold** | Domain-level aggregates | Summary views per domain |
-| **Gold Analytics** | Cross-domain KPIs | Financial, quality, risk metrics + AI classification |
+| **Gold** | Domain-level aggregates | Summary views in the domain's own schema |
+| **Gold Analytics** | Cross-domain KPIs in `analytics` schema | Financial, quality, risk metrics + AI classification |
 
 ### Gold Analytics Tables
 
@@ -303,8 +322,7 @@ All tasks run on **serverless** compute except `synthea_generation` which requir
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `catalog` | `main` | Unity Catalog catalog |
-| `schema` | `red_bricks_insurance` | Target schema (dev: `_dev` suffix) |
-| `source_volume` | `/Volumes/{catalog}/{schema}/raw_sources` | Raw data volume |
+| `source_volume` | `/Volumes/{catalog}/raw/raw_sources` | Raw data volume path |
 | `warehouse_id` | `""` | SQL warehouse (optional) |
 | `node_type_small` | `Standard_DS3_v2` | Small compute (4 vCPU, 14GB) |
 | `node_type_large` | `Standard_DS5_v2` | Large compute (16 vCPU, 56GB) |
