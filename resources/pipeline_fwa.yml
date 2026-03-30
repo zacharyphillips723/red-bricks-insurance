@@ -1,0 +1,19 @@
+resources:
+  pipelines:
+    fwa_pipeline:
+      name: "[${bundle.target}] Red Bricks — FWA Pipeline"
+      catalog: ${var.catalog}
+      target: fwa
+      configuration:
+        source_volume: ${var.source_volume}
+        catalog: ${var.catalog}
+      libraries:
+        - file:
+            path: ../src/pipelines/fwa/bronze.sql
+        - file:
+            path: ../src/pipelines/fwa/silver.sql
+        - file:
+            path: ../src/pipelines/fwa/gold.sql
+      channel: PREVIEW
+      serverless: true
+      development: true

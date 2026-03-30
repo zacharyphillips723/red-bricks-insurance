@@ -1,0 +1,36 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --color-databricks-red: #FF3621;
+    --color-databricks-dark: #1B3139;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-databricks-red text-white px-4 py-2 rounded-lg font-medium
+           hover:bg-red-700 transition-colors duration-150 disabled:opacity-50;
+  }
+  .btn-secondary {
+    @apply bg-white text-databricks-gray border border-gray-300 px-4 py-2
+           rounded-lg font-medium hover:bg-gray-50 transition-colors duration-150;
+  }
+  .card {
+    @apply bg-white rounded-xl border border-gray-200 shadow-sm;
+  }
+  .badge-critical {
+    @apply bg-red-100 text-red-800 text-xs font-semibold px-2.5 py-0.5 rounded-full;
+  }
+  .badge-high {
+    @apply bg-orange-100 text-orange-800 text-xs font-semibold px-2.5 py-0.5 rounded-full;
+  }
+  .badge-medium {
+    @apply bg-yellow-100 text-yellow-800 text-xs font-semibold px-2.5 py-0.5 rounded-full;
+  }
+  .badge-low {
+    @apply bg-green-100 text-green-800 text-xs font-semibold px-2.5 py-0.5 rounded-full;
+  }
+}

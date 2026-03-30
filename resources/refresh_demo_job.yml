@@ -64,6 +64,15 @@ resources:
             pipeline_id: ${resources.pipelines.documents_pipeline.id}
             full_refresh: true
 
+        - task_key: fwa_pipeline
+          depends_on:
+            - task_key: data_generation
+            - task_key: members_pipeline
+            - task_key: claims_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.fwa_pipeline.id}
+            full_refresh: true
+
         - task_key: build_member_months
           depends_on:
             - task_key: members_pipeline
@@ -73,7 +82,7 @@ resources:
               catalog: ${var.catalog}
 
 
-        # Step 3: Gold analytics (depends on domain pipelines + member months)
+        # Step 3: Gold analytics (depends on domain pipelines + member months + FWA)
         # NOTE: clinical_pipeline is NOT re-run — Synthea data unchanged
         - task_key: gold_analytics_pipeline
           depends_on:
@@ -83,6 +92,7 @@ resources:
             - task_key: underwriting_pipeline
             - task_key: risk_adjustment_pipeline
             - task_key: build_member_months
+            - task_key: fwa_pipeline
           pipeline_task:
             pipeline_id: ${resources.pipelines.gold_analytics_pipeline.id}
             full_refresh: true
@@ -140,6 +150,28 @@ resources:
 
           environment_key: agent_env
 
+        - task_key: train_fwa_model
+          depends_on:
+            - task_key: fwa_pipeline
+            - task_key: gold_analytics_pipeline
+          notebook_task:
+            notebook_path: ../src/notebooks/train_fwa_model.py
+            base_parameters:
+              catalog: ${var.catalog}
+          environment_key: ml_training_env
+
+        - task_key: deploy_fwa_agent
+          depends_on:
+            - task_key: gold_analytics_pipeline
+            - task_key: fwa_pipeline
+            - task_key: train_fwa_model
+          notebook_task:
+            notebook_path: ../src/notebooks/deploy_fwa_agent.py
+            base_parameters:
+              catalog: ${var.catalog}
+
+          environment_key: agent_env
+
         - task_key: evaluate_agents
           depends_on:
             - task_key: deploy_member_agent
@@ -165,6 +197,14 @@ resources:
               - mlflow>=2.14.0
               - databricks-sdk>=0.30.0
               - pandas
+        - environment_key: ml_training_env
+          spec:
+            client: "1"
+            dependencies:
+              - xgboost>=2.0.0
+              - scikit-learn>=1.4.0
+              - mlflow>=2.14.0
+              - databricks-sdk>=0.30.0
 
       tags:
         project: red-bricks-insurance

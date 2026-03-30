@@ -11,11 +11,6 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
 
-          new_cluster:
-            spark_version: "16.4.x-scala2.12"
-            node_type_id: ${var.node_type_small}
-            num_workers: 1
-            data_security_mode: SINGLE_USER
       tags:
         project: red-bricks-insurance
         domain: data_generation

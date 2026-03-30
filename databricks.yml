@@ -43,6 +43,16 @@ targets:
       node_type_small: m5.xlarge
       node_type_large: m5.4xlarge
 
+  hls-financial:
+    mode: development
+    workspace:
+      profile: hls-financial-foundation
+    variables:
+      catalog: hls_financial_foundation_catalog
+      warehouse_id: 8bfdf551dc136232
+      node_type_small: m5.xlarge
+      node_type_large: m5.4xlarge
+
   prod:
     mode: production
     workspace:

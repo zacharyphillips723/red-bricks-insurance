@@ -355,12 +355,75 @@ print("✓ mv_cost_of_care created")
 
 # COMMAND ----------
 
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## mv_fwa_risk
+# MAGIC FWA risk metrics: signal counts, estimated overpayment, fraud scores, severity.
+# MAGIC Source: `gold_fwa_summary`
+
+# COMMAND ----------
+
+spark.sql(f"""
+CREATE OR REPLACE VIEW {catalog}.{ANALYTICS_SCHEMA}.mv_fwa_risk
+WITH METRICS
+LANGUAGE YAML
+AS {DD}
+  version: 1.1
+  comment: "Governed FWA risk metrics — signal counts, estimated overpayment, average fraud scores, and severity distribution by fraud type and LOB."
+  source: {catalog}.fwa.gold_fwa_summary
+  dimensions:
+    - name: fraud_type
+      expr: fraud_type
+    - name: severity
+      expr: severity
+    - name: line_of_business
+      expr: line_of_business
+    - name: detection_method
+      expr: detection_method
+    - name: service_year_month
+      expr: service_year_month
+  measures:
+    - name: Signal Count
+      expr: SUM(signal_count)
+      comment: "Total FWA signals detected"
+    - name: Estimated Overpayment
+      expr: SUM(total_estimated_overpayment)
+      comment: "Total estimated overpayment across all flagged claims"
+    - name: Avg Fraud Score
+      expr: SUM(total_estimated_overpayment * avg_fraud_score) / NULLIF(SUM(total_estimated_overpayment), 0)
+      comment: "Weighted average fraud score (weighted by overpayment)"
+    - name: High Severity Signals
+      expr: SUM(signal_count) FILTER (WHERE severity IN ('Critical', 'High'))
+      comment: "Count of Critical and High severity signals"
+    - name: Distinct Providers
+      expr: SUM(distinct_providers)
+      comment: "Distinct providers with FWA signals"
+    - name: Distinct Members
+      expr: SUM(distinct_members)
+      comment: "Distinct members with FWA signals"
+    - name: Overpayment Ratio
+      expr: SUM(total_estimated_overpayment) / NULLIF(SUM(total_paid_amount), 0)
+      comment: "Estimated overpayment as percentage of total paid — higher means more waste"
+{DD}
+""")
+
+print("✓ mv_fwa_risk created")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Verification
+# MAGIC List all metric views and run sample `MEASURE()` queries.
+
+# COMMAND ----------
+
 print("=" * 60)
 print("Metric Views Created")
 print("=" * 60)
 
 metric_views = ["mv_financial_overview", "mv_mlr_compliance", "mv_utilization",
-                "mv_enrollment", "mv_ibnr", "mv_denials", "mv_cost_of_care"]
+                "mv_enrollment", "mv_ibnr", "mv_denials", "mv_cost_of_care", "mv_fwa_risk"]
 
 for mv in metric_views:
     try:

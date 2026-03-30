@@ -1,0 +1,33 @@
+resources:
+  apps:
+    red_bricks_fwa_portal:
+      name: "red-bricks-fwa-portal-app"
+      description: "Red Bricks Insurance — FWA Investigation Portal"
+      source_code_path: ../app-fwa
+      config:
+        command:
+          - uvicorn
+          - main:app
+          - --host=0.0.0.0
+          - --port=8000
+        env:
+          - name: LAKEBASE_INSTANCE_NAME
+            value: fwa-investigations
+          - name: LAKEBASE_DATABASE_NAME
+            value: fwa_cases
+          - name: SQL_WAREHOUSE_ID
+            value: 781064a3466c0984
+          - name: LLM_ENDPOINT
+            value: databricks-llama-4-maverick
+          - name: UC_CATALOG
+            value: ${var.catalog}
+          - name: UC_SCHEMA
+            value: fwa
+          - name: FWA_MODEL_ENDPOINT
+            value: fwa-fraud-scorer
+      resources:
+        - name: fwa-lakebase
+          database:
+            instance_name: fwa-investigations
+            database_name: fwa_cases
+            permission: CAN_CONNECT_AND_CREATE

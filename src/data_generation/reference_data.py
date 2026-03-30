@@ -200,6 +200,69 @@ LOB_CONFIG = {
     },
 }
 
+# ---------------------------------------------------------------------------
+# FWA (Fraud, Waste & Abuse) reference data
+# ---------------------------------------------------------------------------
+
+# Fraud types with weights (sum = 100)
+FWA_FRAUD_TYPES = [
+    ("duplicate_billing", "Duplicate Billing — Same member, date, and procedure billed on multiple claims", 20),
+    ("upcoding", "Upcoding — Professional claims coded at higher E&M level than warranted", 20),
+    ("unbundling", "Unbundling — Related CPT codes billed separately instead of bundled", 15),
+    ("impossible_day", "Impossible Day — Provider billing >50 patients/day or >24 hrs of services", 8),
+    ("phantom_billing", "Phantom Billing — Claims with no other clinical activity at provider within ±90 days", 7),
+    ("provider_ring", "Provider Ring — Cluster of 3-5 providers sharing members at unusually high rates", 5),
+    ("doctor_shopping", "Doctor Shopping — Member seeing 5+ providers for same diagnosis in 90 days", 10),
+    ("short_refill", "Short Refill — Pharmacy fill where next fill occurs before 75% of days_supply", 8),
+    ("drug_switching", "Drug Switching — Generic to brand-name switch within same therapeutic class in 60 days", 7),
+]
+
+# Detection methods
+FWA_DETECTION_METHODS = [
+    "rules_engine",
+    "statistical_outlier",
+    "peer_comparison",
+    "temporal_pattern",
+    "geographic_analysis",
+    "network_analysis",
+    "ai_model_v1",
+    "tip_hotline",
+    "audit_sample",
+]
+
+# Severity levels with weights
+FWA_SEVERITY_LEVELS = [
+    ("Critical", 10),
+    ("High", 25),
+    ("Medium", 40),
+    ("Low", 25),
+]
+
+# Provider thresholds for anomaly detection
+FWA_PROVIDER_THRESHOLDS = {
+    "max_patients_per_day": 50,
+    "max_hours_per_day": 24,
+    "e5_visit_pct_threshold": 0.40,       # >40% level-5 visits is suspicious
+    "billed_to_allowed_threshold": 2.0,    # >2x billed-to-allowed is suspicious
+    "member_overlap_pct_threshold": 0.30,  # >30% shared members between providers
+    "short_refill_threshold": 0.75,        # Next fill < 75% of days_supply
+    "drug_switch_window_days": 60,         # Generic→brand switch window
+    "doctor_shopping_providers": 5,        # 5+ providers for same dx in 90 days
+    "doctor_shopping_window_days": 90,
+}
+
+# Investigation statuses for pre-seeded cases
+FWA_INVESTIGATION_STATUSES = [
+    ("Open", 25),
+    ("Under Review", 20),
+    ("Evidence Gathering", 20),
+    ("Referred to SIU", 10),
+    ("Recovery In Progress", 5),
+    ("Closed — Confirmed Fraud", 10),
+    ("Closed — No Fraud", 7),
+    ("Closed — Insufficient Evidence", 3),
+]
+
 # HCC codes for risk adjustment (simplified; code, description, typical factor)
 HCC_CODES = [
     ("HCC18", "Diabetes with chronic complications", 0.4),

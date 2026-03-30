@@ -14,3 +14,12 @@ app-group-reporting/frontend/*.json
 app-group-reporting/frontend/*.ts
 app-group-reporting/frontend/*.js
 app-group-reporting/frontend/*.html
+
+# Exclude FWA app frontend source/node_modules — pre-built assets in app-fwa/static/
+app-fwa/frontend/node_modules/
+app-fwa/frontend/dist/
+app-fwa/frontend/src/
+app-fwa/frontend/*.json
+app-fwa/frontend/*.ts
+app-fwa/frontend/*.js
+app-fwa/frontend/*.html

@@ -1,7 +1,7 @@
 resources:
   apps:
     group_reporting_portal:
-      name: "rb-group-reporting-${bundle.target}"
+      name: "rb-grp-rpt-${bundle.target}"
       description: "Employer group analytics and sales enablement portal with AI-powered Sales Coach agent"
       source_code_path: ../app-group-reporting
       config:

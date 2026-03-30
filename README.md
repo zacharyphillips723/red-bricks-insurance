@@ -1,6 +1,6 @@
 # Red Bricks Insurance
 
-Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB). One deployable bundle that runs end-to-end: Synthea clinical generation → synthetic insurance data → bronze/silver/gold SDP pipelines → cross-domain analytics with AI classification → intelligent agents → two purpose-built applications.
+Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB). One deployable bundle that runs end-to-end: Synthea clinical generation → synthetic insurance data → bronze/silver/gold SDP pipelines → cross-domain analytics with AI classification → ML model training → intelligent agents → three purpose-built applications.
 
 ## Architecture
 
@@ -14,10 +14,10 @@ Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB
 ┌─────────────────────────┐
 │  Insurance Data Gen     │  Reads Synthea demographics → generates insurance domains
 │  (run_data_generation)  │  Members, Enrollment, Groups, Claims, Providers,
-│                         │  Benefits, Documents, Underwriting, Risk Adjustment
+│                         │  Benefits, Documents, Underwriting, Risk Adjustment, FWA
 └───────────┬─────────────┘
             │
-     ┌──────┴───────┐  (9 domain pipelines run in parallel)
+     ┌──────┴───────┐  (10 domain pipelines run in parallel)
      ▼              ▼
 ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐ ┌───────────────┐
 │ Members  │ │Providers │ │ Claims   │ │ Clinical │ │ Underwriting │ │Risk Adjustment│
@@ -35,8 +35,8 @@ Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB
                          ┌──────────▼──────────┐
                          │  Gold Analytics     │  Cross-domain metrics
                          │  Financial, Quality,│  Group Report Card
-                         │  Risk, AI, Actuarial│  TCOC / TCI
-                         │  Member 360         │
+                         │  Risk, AI, Actuarial│  TCOC / TCI / FWA
+                         │  Member 360, ML     │
                          └──────────┬──────────┘
                                     │
                ┌────────────────────┼────────────────────┐
@@ -45,36 +45,40 @@ Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB
         │ Dashboards │       │  Genie     │       │ AI Agents    │
         │ (AI/BI)    │       │  Spaces    │       │ Care Intel   │
         └────────────┘       └────────────┘       │ Sales Coach  │
+                                                  │ FWA Agent    │
                                                   └──────┬───────┘
                                                          │
-                                    ┌────────────────────┼────────────────────┐
-                                    ▼                                         ▼
-                             ┌──────────────┐                         ┌──────────────────┐
-                             │  Command     │                         │  Group Reporting  │
-                             │  Center App  │                         │  Portal App      │
-                             │  (React+API) │                         │  (React+API)     │
-                             │  Clinical    │                         │  Sales Enablement │
-                             └──────────────┘                         └──────────────────┘
+                       ┌─────────────────────────────────┼────────────────────┐
+                       ▼                                 ▼                    ▼
+                ┌──────────────┐                  ┌──────────────────┐ ┌──────────────────┐
+                │  Command     │                  │  Group Reporting │ │  FWA Portal      │
+                │  Center App  │                  │  Portal App      │ │  App             │
+                │  (React+API) │                  │  (React+API)     │ │  (React+API)     │
+                │  Clinical    │                  │  Sales Enablement│ │  Investigations  │
+                └──────────────┘                  └──────────────────┘ └──────────────────┘
 ```
 
 ## Pipeline DAG
 
-The full demo job (`red_bricks_full_demo`) orchestrates 21 tasks:
+The full demo job (`red_bricks_full_demo`) orchestrates 25+ tasks:
 
 ```
 synthea_generation (ROOT — generates FHIR bundles + extracts demographics + assigns MBR IDs)
-  → data_generation (reads Synthea demographics, generates insurance domains only)
+  → data_generation (reads Synthea demographics, generates insurance domains + FWA signals)
       → [members, providers, claims, enrollment, benefits, underwriting,
-         documents, risk_adjustment pipelines]
+         documents, risk_adjustment, fwa pipelines]
       → parse_fhir_with_dbignite (reads raw synthea_raw/fhir/, writes crosswalk Delta tables)
           → clinical_pipeline (bronze.sql JOINs crosswalk for MBR IDs + NPIs)
   → build_member_months (depends on members_pipeline)
-  → gold_analytics_pipeline (depends on all domain pipelines + member months)
-      → create_metric_views (governed semantic layer)
+  → fwa_pipeline (depends on data_generation — bronze/silver/gold FWA signals + provider profiles)
+  → gold_analytics_pipeline (depends on all domain pipelines + member months + fwa_pipeline)
+      → create_metric_views (governed semantic layer + FWA risk metrics)
+  → train_fwa_model (depends on fwa_pipeline + gold_analytics — AutoML fraud scorer)
   → setup_vector_search (depends on documents_pipeline)
       → deploy_member_agent (v1)
       → deploy_agent_v2 (v2 with benefits)
       → deploy_group_sales_agent (Sales Coach for group reporting)
+      → deploy_fwa_agent (FWA Investigation agent with tool-calling)
           → evaluate_agents (v1 vs v2 vs sales coach comparison)
 ```
 
@@ -96,12 +100,13 @@ A **refresh job** (`red_bricks_refresh`) runs the same DAG minus Synthea/FHIR/cl
 | **Underwriting** | 5,000 | Parquet | Risk tier, smoker, BMI, occupation; correlated to risk_score |
 | **Providers** | 500 | Parquet | NPI, specialty, network status, group practice |
 | **Risk Adjustment** | 5K member + 10K provider | Parquet | RAF scores, HCC codes, provider attribution |
+| **FWA Signals** | ~10K signals + 500 profiles + 75 cases | Parquet | Fraud signals (9 types), provider risk profiles, investigation cases |
 
 **Data quality**: ~2% intentional defects (nulls, invalid codes, out-of-range dates) caught by SDP expectations at the silver layer.
 
 ## Schema Architecture
 
-Tables are organized into **10 domain schemas** within the catalog, each owned by its domain pipeline:
+Tables are organized into **11 domain schemas** within the catalog, each owned by its domain pipeline:
 
 | Schema | Contents | Example Tables |
 |--------|----------|----------------|
@@ -114,7 +119,8 @@ Tables are organized into **10 domain schemas** within the catalog, each owned b
 | `benefits` | Plan benefit schedules | `silver_benefits`, `gold_benefits_summary` |
 | `underwriting` | Risk assessment | `silver_underwriting`, `gold_underwriting_summary` |
 | `risk_adjustment` | RAF scores, HCC codes | `silver_risk_adjustment_member`, `gold_risk_adjustment_summary` |
-| `analytics` | Cross-domain gold tables & metric views | `gold_pmpm`, `gold_mlr`, `gold_hedis_member`, `gold_member_360`, `mv_financial_overview` |
+| `fwa` | Fraud, Waste & Abuse detection | `silver_fwa_signals`, `gold_fwa_provider_risk`, `gold_fwa_claim_flags`, `gold_fwa_summary` |
+| `analytics` | Cross-domain gold tables & metric views | `gold_pmpm`, `gold_mlr`, `gold_hedis_member`, `gold_member_360`, `gold_fwa_member_risk`, `fwa_model_inference`, `mv_financial_overview` |
 
 **Key design principle**: Each domain pipeline writes bronze/silver/gold tables to its own schema. Only cross-domain gold analytics (tables that JOIN across multiple domains) land in the `analytics` schema.
 
@@ -147,6 +153,10 @@ Each domain has its own SDP pipeline with bronze → silver → gold tables:
 
 **Member 360:** `gold_member_360` (unified member view joining clinical, claims, enrollment, risk)
 
+**FWA Analytics:** `gold_fwa_network_analysis` (provider referral ring detection), `gold_fwa_member_risk` (member-level fraud indicators: doctor shopping, pharmacy abuse), `gold_fwa_ai_classification` (AI-generated investigation narratives for top signals), `gold_fwa_model_scores` (AutoML model batch scoring of all claims)
+
+**ML Model:** XGBoost claim-level fraud scorer (`fwa_scoring_model`), trained with 5-fold stratified CV and hyperparameter tuning, registered in Unity Catalog. Served via `fwa-fraud-scorer` endpoint with inference table logging. Predictions written to `analytics.fwa_model_inference`. An AutoML alternative (`train_fwa_model_automl.py`) is also available.
+
 ### Metric Views (Governed Semantic Layer)
 
 Metric views (`CREATE VIEW ... WITH METRICS`) define governed measures and dimensions as YAML, ensuring every consumer — actuaries, dashboards, Genie, AI/BI — computes metrics the same way. Queried via the `MEASURE()` function.
@@ -160,6 +170,7 @@ Metric views (`CREATE VIEW ... WITH METRICS`) define governed measures and dimen
 | `mv_ibnr` | `gold_ibnr_estimate` | Avg Payment Lag, Completion Rate, Claims Over 90 Days |
 | `mv_denials` | `gold_denial_analysis` | Denial Count, Total Denied Amount, Avg Denied Amount |
 | `mv_cost_of_care` | `gold_member_tcoc` | Avg TCOC, Avg TCI, Avg Actual PMPM, High Cost Members |
+| `mv_fwa_risk` | `gold_fwa_summary` | Signal Count, Estimated Overpayment, Avg Fraud Score, High Severity Signals |
 
 ### Clinical Pipeline (Synthea → dbignite → SDP)
 
@@ -178,8 +189,9 @@ Three agents are deployed and registered in Unity Catalog via MLflow:
 | **Care Intelligence v1** (`deploy_member_agent`) | Member lookup + document search | Clinical care teams |
 | **Care Intelligence v2** (`deploy_agent_v2`) | v1 + benefits coverage analysis | Clinical care teams |
 | **Sales Coach** (`deploy_group_sales_agent`) | Group report card analysis, renewal prep, roleplay negotiation simulation, care management program recommendations | Account executives, sales reps |
+| **FWA Investigation** (`deploy_fwa_agent`) | Tool-calling agent that dynamically queries UC tables (provider risk, claims, ML predictions), generates structured investigation briefings | SIU analysts, compliance teams |
 
-All agents are evaluated with `evaluate_agents.py`. The Sales Coach supports intent-based modes: full briefing ("prepare me for..."), renewal focus ("why rate increase"), care management ("what programs can I offer"), and negotiation roleplay ("simulate a renewal negotiation").
+All agents are evaluated with `evaluate_agents.py`. The FWA Investigation agent uses a multi-turn tool-calling pattern — the LLM autonomously composes SQL queries against allowed Unity Catalog schemas, retrieves data, and synthesizes findings. The Sales Coach supports intent-based modes: full briefing ("prepare me for..."), renewal focus ("why rate increase"), care management ("what programs can I offer"), and negotiation roleplay ("simulate a renewal negotiation").
 
 ## Databricks Apps
 
@@ -205,6 +217,23 @@ Sales enablement application for account executives preparing employer group ren
   - **Sales Coach** — AI agent chat with negotiation roleplay and care management program recommendations
 - **Context Enrichment** (optional): Slack (account channel history), Glean (internal knowledge base), Salesforce (CRM account data) feed into the Sales Coach agent's context for richer renewal prep
 - **Config**: `app-group-reporting/app.yml`
+
+### FWA Investigation Portal (`app-fwa/`)
+
+SIU-focused application for fraud, waste, and abuse investigation:
+
+- **Backend**: FastAPI (Python), connects to Lakebase (`fwa-investigations` instance), SQL warehouse (Statement Execution API for gold table queries), and Foundation Model API (Llama 4 Maverick)
+- **Frontend**: React + Vite + Tailwind (Databricks-branded dark theme)
+- **Pages**:
+  - **Dashboard** — KPIs (total/open/critical/closed investigations), financial metrics (estimated overpayment, recovered, recovery rate), breakdowns by status/severity/type
+  - **Investigation Queue** — filterable/searchable table with status, severity, type, investigator filters; sorted by severity + risk score
+  - **Investigation Detail** — full case view with key metrics, fraud types, agent chat panel, evidence list, immutable audit trail, and action sidebar (assign investigator, update status, add notes, record recovery)
+  - **Provider Analysis** — NPI search with risk scorecard, metrics grid (18 metrics), ML model predictions table, rules-based flagged claims table
+  - **FWA Agent** — standalone AI agent chat with `[INV-XXXX]`/`[PRV-NPI]` prefix targeting; the agent dynamically queries Unity Catalog tables via tool-calling
+  - **Genie Search** — natural language SQL exploration over FWA gold tables
+  - **Caseload** — investigator capacity dashboard with utilization bars
+- **Data Architecture**: Hybrid — Lakebase for transactional investigation state (status changes, assignments, audit log, evidence) + Statement Execution API for analytics (provider risk profiles, flagged claims, ML predictions from gold tables)
+- **Config**: `app-fwa/app.yml`, DAB resource: `resources/app_fwa.yml`
 
 ## Dashboards
 
@@ -237,13 +266,25 @@ red-bricks-insurance/
 │   │   └── genie.py                  #   Genie space integration
 │   ├── frontend/                     #   React + Vite + Tailwind source
 │   └── static/                       #   Built frontend output
+├── app-fwa/                             # FWA Investigation Portal Databricks App
+│   ├── app.yml                       #   App config (Lakebase, SQL warehouse, LLM, ML model endpoint)
+│   ├── main.py                       #   FastAPI backend
+│   ├── backend/
+│   │   ├── router.py                 #   API routes (dashboard, investigations, providers, agent, genie)
+│   │   ├── models.py                 #   Pydantic models (8 investigation statuses, 9 fraud types)
+│   │   ├── database.py               #   Lakebase connection with OAuth token refresh
+│   │   ├── agent.py                  #   FWA agent (tool-calling with dynamic UC table queries)
+│   │   └── genie.py                  #   Genie space integration
+│   ├── frontend/                     #   React + Vite + Tailwind source
+│   └── static/                       #   Built frontend output
 ├── resources/
-│   ├── full_demo_job.yml             # End-to-end orchestration (21 tasks)
+│   ├── full_demo_job.yml             # End-to-end orchestration (25+ tasks)
 │   ├── refresh_demo_job.yml          # Refresh without Synthea (data gen → all downstream)
 │   ├── data_generation_job.yml       # Standalone data generation
 │   ├── dashboard.yml                 # Analytics dashboard
 │   ├── agent_comparison_dashboard.yml# Agent eval dashboard
 │   ├── app_group_reporting.yml       # Group Reporting Portal app resource
+│   ├── app_fwa.yml                  # FWA Investigation Portal app resource
 │   ├── pipeline_members.yml          # Members & Enrollment SDP
 │   ├── pipeline_providers.yml        # Providers SDP
 │   ├── pipeline_claims.yml           # Claims SDP
@@ -252,7 +293,8 @@ red-bricks-insurance/
 │   ├── pipeline_documents.yml        # Documents SDP
 │   ├── pipeline_underwriting.yml     # Underwriting SDP
 │   ├── pipeline_risk_adjustment.yml  # Risk Adjustment SDP
-│   └── pipeline_gold_analytics.yml   # Cross-domain analytics (9 SQL files, 20+ gold views)
+│   ├── pipeline_fwa.yml              # FWA domain SDP (signals, profiles, investigations)
+│   └── pipeline_gold_analytics.yml   # Cross-domain analytics (10 SQL files, 25+ gold views)
 ├── src/
 │   ├── data_generation/              # Modular synthetic data generators
 │   │   ├── reference_data.py         #   ICD-10, CPT, DRG, HCC, CARC, LOB configs
@@ -267,7 +309,8 @@ red-bricks-insurance/
 │   │       ├── groups.py             #     Employer groups (stop-loss, funding, renewal)
 │   │       ├── documents.py          #     Case notes, call transcripts, claims summaries
 │   │       ├── underwriting.py       #     Risk assessment
-│   │       └── risk_adjustment.py    #     RAF scores, HCC codes
+│   │       ├── risk_adjustment.py    #     RAF scores, HCC codes
+│   │       └── fwa.py               #     FWA signals, provider profiles, investigation cases
 │   ├── notebooks/
 │   │   ├── run_synthea_generation.py #   Synthea JAR → FHIR bundles → demographic crosswalk
 │   │   ├── run_data_generation.py    #   Insurance domain generation (reads Synthea demographics)
@@ -278,6 +321,10 @@ red-bricks-insurance/
 │   │   ├── deploy_member_agent.py    #   Care Intelligence v1 registration
 │   │   ├── deploy_agent_v2.py        #   Care Intelligence v2 registration
 │   │   ├── deploy_group_sales_agent.py #  Sales Coach agent registration
+│   │   ├── train_fwa_model.py        #   XGBoost fraud scorer training + UC registration
+│   │   ├── train_fwa_model_automl.py #   AutoML fraud scorer (alternative approach)
+│   │   ├── deploy_fwa_agent.py       #   FWA Investigation agent registration
+│   │   ├── seed_fwa_lakebase.py      #   Seed FWA investigations into Lakebase
 │   │   └── evaluate_agents.py        #   Agent evaluation
 │   ├── pipelines/
 │   │   ├── members/                  #   bronze.sql, silver.sql, gold.sql
@@ -288,11 +335,13 @@ red-bricks-insurance/
 │   │   ├── documents/                #   bronze.sql, silver.sql
 │   │   ├── underwriting/
 │   │   ├── risk_adjustment/
+│   │   ├── fwa/                      #   bronze.sql, silver.sql, gold.sql (FWA signals + provider risk)
 │   │   ├── gold_analytics/           #   financial, quality, risk, ai, actuarial, groups,
-│   │   │                             #   cost_of_care, member_360, group_report_card
+│   │   │                             #   cost_of_care, member_360, group_report_card, fwa_analytics
 │   │   └── python/                   #   Python alternatives for all pipelines
 │   ├── dashboards/                   #   Lakeview dashboard JSON definitions
-│   └── agents/                       #   Agent model definitions (Care Intel v1/v2, Sales Coach)
+│   ├── fwa_lakebase_schema.sql       #   FWA Lakebase DDL (investigations, audit log, evidence)
+│   └── agents/                       #   Agent model definitions (Care Intel v1/v2, Sales Coach, FWA)
 ├── config/                           #   Genie setup, Lakebase config
 └── README.md
 ```
@@ -315,6 +364,7 @@ All tasks run on **serverless** compute except `synthea_generation` which requir
 |--------|---------|---------|----------|
 | `dev` (default) | `fe-vm-red-bricks-insurance` | `red_bricks_insurance` | Development |
 | `e2-field-eng` | `fe-demo-field-eng` | `zack_phillips_demos` | Field engineering demos (AWS) |
+| `hls-financial` | `hls-financial-foundation` | `hls_financial_foundation_catalog` | HLS Financial Foundation workspace (AWS) |
 | `prod` | `fe-vm-red-bricks-insurance` | `red_bricks_insurance` | Production |
 
 ### Variables
@@ -353,11 +403,12 @@ databricks bundle run documents_pipeline           # Just documents
 databricks bundle run underwriting_pipeline        # Just underwriting
 databricks bundle run risk_adjustment_pipeline     # Just risk adjustment
 databricks bundle run gold_analytics_pipeline      # Just cross-domain analytics
+databricks bundle run fwa_pipeline                 # Just FWA domain (signals, profiles, investigations)
 ```
 
 ## Apps — Frontend Build
 
-Both apps (`app/` Command Center, `app-group-reporting/` Group Reporting Portal) use React + Vite + Tailwind. **Frontends must be built before deploying the bundle** — the DAB deploys the pre-built `static/` directory, not the source.
+All three apps (`app/` Command Center, `app-group-reporting/` Group Reporting Portal, `app-fwa/` FWA Investigation Portal) use React + Vite + Tailwind. **Frontends must be built before deploying the bundle** — the DAB deploys the pre-built `static/` directory, not the source.
 
 ```bash
 # Command Center
@@ -365,11 +416,81 @@ cd app/frontend && npm install && npm run build   # → outputs to app/static/
 
 # Group Reporting Portal
 cd app-group-reporting/frontend && npm install && npm run build   # → outputs to app-group-reporting/static/
+
+# FWA Investigation Portal
+cd app-fwa/frontend && npm install && npm run build   # → outputs to app-fwa/static/
 ```
 
 The `.bundleignore` excludes `node_modules/`, `src/`, and other frontend build artifacts from the bundle upload. Only the `static/` directories are deployed.
 
 After building, deploy the bundle normally with `databricks bundle deploy`.
+
+## FWA Investigation Portal — Setup
+
+The FWA app requires additional setup beyond the standard bundle deploy:
+
+### 1. Lakebase Instance
+
+The app uses a Lakebase Provisioned PostgreSQL instance for investigation state management.
+
+```bash
+# Create the instance (one-time, takes ~2 minutes)
+databricks database create-database-instance fwa-investigations --capacity CU_1
+
+# Create the database (connect via psycopg to the 'postgres' default DB)
+# Then apply the schema DDL:
+#   src/fwa_lakebase_schema.sql
+```
+
+### 2. Seed Investigation Data
+
+After the FWA pipeline has run and gold tables are populated:
+
+```bash
+# Seed investigators + investigation cases + evidence + audit log
+# Run as a one-off job (requires Spark for UC table reads):
+databricks jobs submit --json '{
+  "run_name": "Seed FWA Lakebase",
+  "tasks": [{
+    "task_key": "seed_fwa_lakebase",
+    "notebook_task": {
+      "notebook_path": "/Users/<your-email>/.bundle/red-bricks-insurance/dev/files/src/notebooks/seed_fwa_lakebase"
+    },
+    "environment_key": "seed_env"
+  }],
+  "environments": [{
+    "environment_key": "seed_env",
+    "spec": {"client": "1", "dependencies": ["psycopg[binary]", "databricks-sdk>=0.30.0"]}
+  }]
+}'
+```
+
+### 3. FWA Model Training
+
+Two model training notebooks are available:
+
+| Notebook | Approach | Runtime |
+|----------|----------|---------|
+| `train_fwa_model.py` | XGBoost with manual CV + hyperparameter tuning | Serverless (ml_training_env) |
+| `train_fwa_model_automl.py` | Databricks AutoML | Classic ML Runtime cluster |
+
+The full demo job uses `train_fwa_model.py` (XGBoost) by default.
+
+**Note:** Both notebooks cast all feature columns to `float64` before inference (`inference_pd[feature_cols].astype("float64")`). This is required because MLflow's schema enforcement rejects integer columns (e.g., `member_total_claims` as int64) when the model signature specifies double.
+
+### 4. App Environment Variables
+
+Set in `resources/app_fwa.yml`:
+
+| Variable | Description |
+|----------|-------------|
+| `LAKEBASE_INSTANCE_NAME` | `fwa-investigations` |
+| `LAKEBASE_DATABASE_NAME` | `fwa_cases` |
+| `SQL_WAREHOUSE_ID` | Serverless SQL warehouse ID for Statement Execution API |
+| `LLM_ENDPOINT` | Foundation Model API endpoint (e.g., `databricks-llama-4-maverick`) |
+| `UC_CATALOG` | Unity Catalog name (e.g., `red_bricks_insurance`) |
+| `FWA_MODEL_ENDPOINT` | Model serving endpoint for real-time scoring (optional) |
+| `GENIE_SPACE_ID` | Genie space ID for natural language SQL queries |
 
 ## Customization
 
@@ -391,6 +512,8 @@ This demo is designed to be modular for customer-specific showings:
 | `dbignite` | FHIR R4 bundle parsing (installed at runtime) |
 | `mlflow` | Agent registration and evaluation |
 | `databricks-sdk` | Agent deployment, API calls |
-| `fastapi` / `uvicorn` | App backends (Command Center, Group Reporting) |
+| `databricks-automl-runtime` | FWA fraud scorer model training (AutoML) |
+| `fastapi` / `uvicorn` | App backends (Command Center, Group Reporting, FWA Portal) |
+| `psycopg` | Lakebase PostgreSQL connections (Command Center, FWA Portal) |
 | `slack_sdk` | (Optional) Sales Coach Slack enrichment |
 | `simple_salesforce` | (Optional) Sales Coach Salesforce enrichment |

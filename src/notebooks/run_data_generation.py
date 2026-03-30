@@ -74,6 +74,7 @@ from src.data_generation.domains import risk_adjustment as dom_risk
 from src.data_generation.domains import documents as dom_documents
 from src.data_generation.domains import benefits as dom_benefits
 from src.data_generation.domains import groups as dom_groups
+from src.data_generation.domains import fwa as dom_fwa
 
 # COMMAND ----------
 
@@ -91,7 +92,7 @@ except Exception as e:
 # Create all domain schemas
 DOMAIN_SCHEMAS = [
     "raw", "members", "claims", "providers", "documents",
-    "risk_adjustment", "underwriting", "clinical", "benefits", "analytics",
+    "risk_adjustment", "underwriting", "clinical", "benefits", "analytics", "fwa",
 ]
 for s in DOMAIN_SCHEMAS:
     spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{s}")
@@ -102,7 +103,8 @@ spark.sql(f"CREATE VOLUME IF NOT EXISTS {catalog}.raw.raw_sources")
 # Clean old data so Auto Loader doesn't re-ingest stale files on pipeline refresh
 for subdir in ["members", "enrollment", "providers", "claims_medical", "claims_pharmacy",
                "underwriting", "risk_adjustment_member",
-               "risk_adjustment_provider", "documents", "benefits", "groups"]:
+               "risk_adjustment_provider", "documents", "benefits", "groups",
+               "fwa_signals", "fwa_provider_profiles", "fwa_investigation_cases"]:
     path = f"{volume_base}/{subdir}"
     try:
         dbutils.fs.rm(path, recurse=True)
@@ -392,6 +394,120 @@ print(f"  Pharmacy claims total: {len(pharmacy_claims_data):,}")
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ### FWA Signals, Provider Profiles, and Investigation Cases
+# MAGIC
+# MAGIC Derived domain — analyzes existing claims/providers/members to generate
+# MAGIC FWA signal records, provider risk profiles, and pre-seeded investigation cases.
+
+# COMMAND ----------
+
+print("Generating FWA signals from medical + pharmacy claims...")
+_t_fwa = _time.time()
+fwa_signals_data = dom_fwa.generate_fwa_signals(
+    medical_claims=medical_claims_data,
+    pharmacy_claims=pharmacy_claims_data,
+    providers=providers_data,
+    members=members_data,
+    fraud_rate=0.07,
+)
+print(f"  FWA signals generated in {_time.time() - _t_fwa:.0f}s")
+
+fwa_signals_schema = T.StructType([
+    T.StructField("signal_id", T.StringType()),
+    T.StructField("claim_id", T.StringType()),
+    T.StructField("member_id", T.StringType()),
+    T.StructField("provider_npi", T.StringType()),
+    T.StructField("fraud_type", T.StringType()),
+    T.StructField("fraud_type_desc", T.StringType()),
+    T.StructField("fraud_score", T.DoubleType()),
+    T.StructField("severity", T.StringType()),
+    T.StructField("detection_method", T.StringType()),
+    T.StructField("evidence_summary", T.StringType()),
+    T.StructField("evidence_detail_json", T.StringType()),
+    T.StructField("service_date", T.StringType()),
+    T.StructField("paid_amount", T.DoubleType()),
+    T.StructField("estimated_overpayment", T.DoubleType()),
+    T.StructField("detection_date", T.StringType()),
+])
+spark.createDataFrame(fwa_signals_data, schema=fwa_signals_schema).write.mode("overwrite").parquet(f"{volume_base}/fwa_signals/")
+print(f"  FWA signals total: {len(fwa_signals_data):,}")
+
+# COMMAND ----------
+
+print("Generating FWA provider profiles...")
+fwa_provider_profiles_data = dom_fwa.generate_fwa_provider_profiles(
+    medical_claims=medical_claims_data,
+    providers=providers_data,
+    fwa_signals=fwa_signals_data,
+)
+
+fwa_profiles_schema = T.StructType([
+    T.StructField("provider_npi", T.StringType()),
+    T.StructField("provider_name", T.StringType()),
+    T.StructField("specialty", T.StringType()),
+    T.StructField("total_claims", T.IntegerType()),
+    T.StructField("total_billed", T.DoubleType()),
+    T.StructField("total_paid", T.DoubleType()),
+    T.StructField("avg_billed_per_claim", T.DoubleType()),
+    T.StructField("billed_to_allowed_ratio", T.DoubleType()),
+    T.StructField("e5_visit_pct", T.DoubleType()),
+    T.StructField("unique_members", T.IntegerType()),
+    T.StructField("denial_rate", T.DoubleType()),
+    T.StructField("fwa_signal_count", T.IntegerType()),
+    T.StructField("fwa_score_avg", T.DoubleType()),
+    T.StructField("risk_tier", T.StringType()),
+    T.StructField("behavioral_flags", T.StringType()),
+])
+spark.createDataFrame(fwa_provider_profiles_data, schema=fwa_profiles_schema).write.mode("overwrite").parquet(f"{volume_base}/fwa_provider_profiles/")
+print(f"  FWA provider profiles total: {len(fwa_provider_profiles_data):,}")
+
+# COMMAND ----------
+
+print("Generating FWA investigation cases...")
+fwa_investigation_cases_data = dom_fwa.generate_fwa_investigation_cases(
+    fwa_signals=fwa_signals_data,
+    provider_profiles=fwa_provider_profiles_data,
+    n_cases=75,
+)
+
+fwa_cases_schema = T.StructType([
+    T.StructField("investigation_id", T.StringType()),
+    T.StructField("investigation_type", T.StringType()),
+    T.StructField("target_type", T.StringType()),
+    T.StructField("target_id", T.StringType()),
+    T.StructField("target_name", T.StringType()),
+    T.StructField("fraud_types", T.StringType()),
+    T.StructField("severity", T.StringType()),
+    T.StructField("status", T.StringType()),
+    T.StructField("estimated_overpayment", T.DoubleType()),
+    T.StructField("claims_involved_count", T.IntegerType()),
+    T.StructField("investigation_summary", T.StringType()),
+    T.StructField("evidence_summary", T.StringType()),
+    T.StructField("rules_risk_score", T.DoubleType()),
+    T.StructField("ml_risk_score", T.DoubleType()),
+    T.StructField("created_date", T.StringType()),
+])
+spark.createDataFrame(fwa_investigation_cases_data, schema=fwa_cases_schema).write.mode("overwrite").parquet(f"{volume_base}/fwa_investigation_cases/")
+print(f"  FWA investigation cases total: {len(fwa_investigation_cases_data):,}")
+
+# COMMAND ----------
+
+# Create empty fwa_ml_predictions table so gold_fwa_model_scores MV can reference it
+# before the ML model training notebook populates it with real scores.
+spark.sql(f"""
+    CREATE TABLE IF NOT EXISTS {catalog}.analytics.fwa_ml_predictions (
+        claim_id STRING,
+        ml_fraud_probability DOUBLE,
+        ml_risk_tier STRING,
+        model_version STRING,
+        scored_at STRING
+    ) USING DELTA
+""")
+print(f"  Created (if not exists): {catalog}.analytics.fwa_ml_predictions")
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ### Documents (case notes, call transcripts, claims summaries — PDF + metadata)
 # MAGIC
 # MAGIC Clinical data (encounters, labs, vitals, FHIR bundles) is now generated by Synthea
@@ -550,5 +666,8 @@ print("  underwriting/            -> Parquet")
 print("  risk_adjustment_member/  -> Parquet")
 print("  risk_adjustment_provider/-> Parquet")
 print("  benefits/                -> Parquet")
+print("  fwa_signals/             -> Parquet")
+print("  fwa_provider_profiles/   -> Parquet")
+print("  fwa_investigation_cases/ -> Parquet")
 print("NOTE: Clinical data (encounters, labs, vitals, FHIR) comes from Synthea via parse_fhir_with_dbignite.")
 print("Data quality: ~2% defects in key fields for SDP expectations.")
