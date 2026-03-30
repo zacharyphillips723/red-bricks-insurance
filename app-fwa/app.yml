@@ -4,19 +4,16 @@ command:
   - --host=0.0.0.0
   - --port=8000
 
+# NOTE: SQL_WAREHOUSE_ID and UC_CATALOG are injected by DAB resource config
+# (resources/app_fwa.yml) via ${var.*} substitution.
+# If not set, env_config.py auto-detects warehouse and catalog at runtime.
 env:
   - name: LAKEBASE_INSTANCE_NAME
     value: fwa-investigations
   - name: LAKEBASE_DATABASE_NAME
     value: fwa_cases
-  - name: GENIE_SPACE_ID
-    value: ""
-  - name: SQL_WAREHOUSE_ID
-    value: ""
   - name: LLM_ENDPOINT
     value: databricks-llama-4-maverick
-  - name: UC_CATALOG
-    value: ""
   - name: UC_SCHEMA
     value: fwa
   - name: FWA_MODEL_ENDPOINT

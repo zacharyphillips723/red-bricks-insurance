@@ -339,12 +339,13 @@ if app_sps:
         app_name = sp_info["app_name"]
         print(f"  --- {app_name} (SP: {sp_name}) ---")
 
-        # USE CATALOG
-        try:
-            spark.sql(f"GRANT USE CATALOG ON CATALOG {catalog} TO `{sp_name}`")
-            print(f"    USE CATALOG on {catalog}")
-        except Exception as e:
-            print(f"    USE CATALOG: {e}")
+        # USE CATALOG + BROWSE (BROWSE enables catalog/warehouse auto-detection in apps)
+        for priv in ["USE CATALOG", "BROWSE"]:
+            try:
+                spark.sql(f"GRANT {priv} ON CATALOG {catalog} TO `{sp_name}`")
+                print(f"    {priv} on {catalog}")
+            except Exception as e:
+                print(f"    {priv}: {e}")
 
         # USE SCHEMA + SELECT on each domain schema
         for schema in UC_SCHEMAS:
