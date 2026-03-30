@@ -380,6 +380,57 @@ All tasks run on **serverless** compute except `synthea_generation` which requir
 | `node_type_small` | `Standard_DS3_v2` | Small compute (4 vCPU, 14GB) |
 | `node_type_large` | `Standard_DS5_v2` | Large compute (16 vCPU, 56GB) |
 
+### Deploying to a New Workspace
+
+This bundle is designed to be portable. To deploy to any Databricks workspace:
+
+**1. Add a new target** in `databricks.yml`:
+
+```yaml
+  my-workspace:
+    mode: development
+    workspace:
+      profile: my-workspace-profile    # Databricks CLI profile name
+    variables:
+      catalog: my_catalog_name         # Unity Catalog catalog to use
+      warehouse_id: abc123def456       # SQL warehouse ID (find in SQL Warehouses UI)
+      node_type_small: m5.xlarge       # AWS — or Standard_DS3_v2 for Azure
+      node_type_large: m5.4xlarge      # AWS — or Standard_DS5_v2 for Azure
+```
+
+**2. Configuration flow** — the DAB variables propagate automatically:
+
+| Layer | How Values Are Set | Example |
+|-------|-------------------|---------|
+| **DAB variables** (`databricks.yml`) | Set per target in `variables:` | `catalog: my_catalog` |
+| **Job parameters** (`base_parameters`) | Auto-injected from `${var.catalog}`, `${var.warehouse_id}` | Notebook receives `catalog=my_catalog` |
+| **Notebook widgets** (`dbutils.widgets`) | Populated by job params; defaults used for manual runs | `dbutils.widgets.get("catalog")` |
+| **App env vars** (`app.yml` / DAB resource) | Set in `resources/app_*.yml` via `${var.catalog}` | `UC_CATALOG=my_catalog` |
+| **Config scripts** (`config/*.py`) | Accept CLI arg or `UC_CATALOG` env var | `python genie_setup.py my_catalog` |
+
+**3. Key environment variables** used by apps and agents:
+
+| Variable | Used By | Description |
+|----------|---------|-------------|
+| `UC_CATALOG` | All apps, all agents | Unity Catalog catalog name |
+| `SQL_WAREHOUSE_ID` | All apps, agent deploys | SQL warehouse for Statement Execution API |
+| `LLM_ENDPOINT` | All apps, agent deploys | Foundation Model API endpoint (e.g., `databricks-llama-4-maverick`) |
+| `LAKEBASE_INSTANCE_NAME` | Command Center, FWA app | Lakebase PostgreSQL instance name |
+| `LAKEBASE_DATABASE_NAME` | Command Center, FWA app | Lakebase database name |
+| `GENIE_SPACE_ID` | All apps | Genie space ID for natural language queries |
+| `FWA_MODEL_ENDPOINT` | FWA app | Model serving endpoint for real-time fraud scoring |
+
+All values have sensible defaults (`red_bricks_insurance`, `databricks-llama-4-maverick`, etc.) so the bundle works out of the box for the default catalog. Override only what differs in your workspace.
+
+**4. Deploy and run:**
+
+```bash
+databricks bundle deploy --target my-workspace
+databricks bundle run red_bricks_full_demo --target my-workspace
+```
+
+The `bootstrap_workspace` task runs automatically at the end and handles Lakebase provisioning, UC/warehouse grants for app service principals, and operational data seeding.
+
 ### Commands
 
 ```bash
