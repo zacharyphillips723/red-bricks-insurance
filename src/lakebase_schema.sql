@@ -3,46 +3,57 @@
 --
 -- Run this against your Lakebase Provisioned instance to create the
 -- operational tables that power the Population Health Command Center app.
+--
+-- IDEMPOTENT: Safe to run multiple times (uses IF NOT EXISTS / DO blocks).
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
 -- Enum types for controlled vocabularies
 -- ---------------------------------------------------------------------------
 
-CREATE TYPE risk_tier AS ENUM (
-    'Critical',
-    'High',
-    'Elevated',
-    'Moderate',
-    'Low'
-);
+DO $$ BEGIN
+    CREATE TYPE risk_tier AS ENUM (
+        'Critical',
+        'High',
+        'Elevated',
+        'Moderate',
+        'Low'
+    );
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
 
-CREATE TYPE care_cycle_status AS ENUM (
-    'Unassigned',            -- Alert generated, no care manager yet
-    'Assigned',              -- Care manager has claimed the patient
-    'Outreach Attempted',    -- Initial contact attempted (call, letter, portal)
-    'Outreach Successful',   -- Patient contacted and engaged
-    'Assessment In Progress',-- Clinical assessment / care plan underway
-    'Intervention Active',   -- Active care plan being executed
-    'Follow-Up Scheduled',   -- Intervention complete, follow-up pending
-    'Resolved',              -- Care gap closed or risk mitigated
-    'Escalated',             -- Escalated to physician / specialist / supervisor
-    'Closed — Unable to Reach' -- Exhausted outreach attempts
-);
+DO $$ BEGIN
+    CREATE TYPE care_cycle_status AS ENUM (
+        'Unassigned',            -- Alert generated, no care manager yet
+        'Assigned',              -- Care manager has claimed the patient
+        'Outreach Attempted',    -- Initial contact attempted (call, letter, portal)
+        'Outreach Successful',   -- Patient contacted and engaged
+        'Assessment In Progress',-- Clinical assessment / care plan underway
+        'Intervention Active',   -- Active care plan being executed
+        'Follow-Up Scheduled',   -- Intervention complete, follow-up pending
+        'Resolved',              -- Care gap closed or risk mitigated
+        'Escalated',             -- Escalated to physician / specialist / supervisor
+        'Closed — Unable to Reach' -- Exhausted outreach attempts
+    );
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
 
-CREATE TYPE alert_source AS ENUM (
-    'High Glucose No Insulin',   -- From gold_high_glucose_no_insulin
-    'ED High Utilizer',          -- From gold_ed_high_utilizers
-    'SDOH Risk',                 -- Future: from sdoh_indicators
-    'Readmission Risk',          -- Future: ML model prediction
-    'Manual'                     -- Manually created by care manager
-);
+DO $$ BEGIN
+    CREATE TYPE alert_source AS ENUM (
+        'High Glucose No Insulin',   -- From gold_high_glucose_no_insulin
+        'ED High Utilizer',          -- From gold_ed_high_utilizers
+        'SDOH Risk',                 -- Future: from sdoh_indicators
+        'Readmission Risk',          -- Future: ML model prediction
+        'Manual'                     -- Manually created by care manager
+    );
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
 
 -- ---------------------------------------------------------------------------
 -- Care managers (lookup table)
 -- ---------------------------------------------------------------------------
 
-CREATE TABLE care_managers (
+CREATE TABLE IF NOT EXISTS care_managers (
     care_manager_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email               TEXT NOT NULL UNIQUE,
     display_name        TEXT NOT NULL,
@@ -56,13 +67,13 @@ CREATE TABLE care_managers (
     updated_at          TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE INDEX idx_care_managers_active ON care_managers(is_active) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_care_managers_active ON care_managers(is_active) WHERE is_active = TRUE;
 
 -- ---------------------------------------------------------------------------
 -- Risk stratification alerts (core table)
 -- ---------------------------------------------------------------------------
 
-CREATE TABLE risk_stratification_alerts (
+CREATE TABLE IF NOT EXISTS risk_stratification_alerts (
     alert_id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     patient_id              TEXT NOT NULL,           -- Links to Unity Catalog patient_id
     mrn                     TEXT,                    -- Medical Record Number
@@ -105,20 +116,20 @@ CREATE TABLE risk_stratification_alerts (
 );
 
 -- Primary query patterns: by status, by care manager, by risk tier, by patient
-CREATE INDEX idx_alerts_status          ON risk_stratification_alerts(status);
-CREATE INDEX idx_alerts_care_manager    ON risk_stratification_alerts(assigned_care_manager_id)
+CREATE INDEX IF NOT EXISTS idx_alerts_status          ON risk_stratification_alerts(status);
+CREATE INDEX IF NOT EXISTS idx_alerts_care_manager    ON risk_stratification_alerts(assigned_care_manager_id)
     WHERE assigned_care_manager_id IS NOT NULL;
-CREATE INDEX idx_alerts_risk_tier       ON risk_stratification_alerts(risk_tier);
-CREATE INDEX idx_alerts_patient         ON risk_stratification_alerts(patient_id);
-CREATE INDEX idx_alerts_source          ON risk_stratification_alerts(alert_source);
-CREATE INDEX idx_alerts_unassigned      ON risk_stratification_alerts(risk_tier, created_at)
+CREATE INDEX IF NOT EXISTS idx_alerts_risk_tier       ON risk_stratification_alerts(risk_tier);
+CREATE INDEX IF NOT EXISTS idx_alerts_patient         ON risk_stratification_alerts(patient_id);
+CREATE INDEX IF NOT EXISTS idx_alerts_source          ON risk_stratification_alerts(alert_source);
+CREATE INDEX IF NOT EXISTS idx_alerts_unassigned      ON risk_stratification_alerts(risk_tier, created_at)
     WHERE status = 'Unassigned';
 
 -- ---------------------------------------------------------------------------
 -- Alert activity log (audit trail for status changes and notes)
 -- ---------------------------------------------------------------------------
 
-CREATE TABLE alert_activity_log (
+CREATE TABLE IF NOT EXISTS alert_activity_log (
     activity_id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     alert_id            UUID NOT NULL REFERENCES risk_stratification_alerts(alert_id),
     care_manager_id     UUID REFERENCES care_managers(care_manager_id),
@@ -132,7 +143,7 @@ CREATE TABLE alert_activity_log (
     created_at          TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE INDEX idx_activity_alert ON alert_activity_log(alert_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_activity_alert ON alert_activity_log(alert_id, created_at DESC);
 
 -- ---------------------------------------------------------------------------
 -- Auto-update timestamps
@@ -160,10 +171,12 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_alerts_updated_at ON risk_stratification_alerts;
 CREATE TRIGGER trg_alerts_updated_at
     BEFORE UPDATE ON risk_stratification_alerts
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
+DROP TRIGGER IF EXISTS trg_care_managers_updated_at ON care_managers;
 CREATE TRIGGER trg_care_managers_updated_at
     BEFORE UPDATE ON care_managers
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
@@ -173,7 +186,7 @@ CREATE TRIGGER trg_care_managers_updated_at
 -- ---------------------------------------------------------------------------
 
 -- Unassigned alerts queue (what clinicians see when they open the app)
-CREATE VIEW v_unassigned_alerts AS
+CREATE OR REPLACE VIEW v_unassigned_alerts AS
 SELECT
     a.alert_id,
     a.patient_id,
@@ -203,7 +216,7 @@ ORDER BY
     a.created_at ASC;
 
 -- Care manager caseload dashboard
-CREATE VIEW v_care_manager_caseload AS
+CREATE OR REPLACE VIEW v_care_manager_caseload AS
 SELECT
     cm.care_manager_id,
     cm.display_name,
@@ -220,7 +233,7 @@ WHERE cm.is_active = TRUE
 GROUP BY cm.care_manager_id, cm.display_name, cm.role, cm.max_caseload;
 
 -- Patient 360 view (all alerts for a single patient)
-CREATE VIEW v_patient_alert_history AS
+CREATE OR REPLACE VIEW v_patient_alert_history AS
 SELECT
     a.alert_id,
     a.patient_id,

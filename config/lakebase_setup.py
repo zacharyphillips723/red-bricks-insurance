@@ -36,7 +36,13 @@ CATALOG = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("UC_CATALOG", "re
 # ---------------------------------------------------------------------------
 
 def create_instance(w: WorkspaceClient) -> None:
-    """Create the Lakebase Provisioned instance."""
+    """Create the Lakebase Provisioned instance (idempotent)."""
+    try:
+        inst = w.database.get_database_instance(name=INSTANCE_NAME)
+        print(f"Instance '{INSTANCE_NAME}' already exists (state: {inst.state})")
+        return
+    except Exception:
+        pass
     print(f"Creating Lakebase instance '{INSTANCE_NAME}'...")
     instance = w.database.create_database_instance(
         name=INSTANCE_NAME,

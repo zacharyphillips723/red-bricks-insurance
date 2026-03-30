@@ -3,52 +3,66 @@
 --
 -- Run this against the fwa-investigations Lakebase instance to create the
 -- operational tables that power the FWA Investigation Portal app.
+--
+-- IDEMPOTENT: Safe to run multiple times (uses IF NOT EXISTS / DO blocks).
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
 -- Enum types for controlled vocabularies
 -- ---------------------------------------------------------------------------
 
-CREATE TYPE investigation_status AS ENUM (
-    'Open',                         -- Newly created, not yet reviewed
-    'Under Review',                 -- Analyst has begun initial review
-    'Evidence Gathering',           -- Actively collecting claims, records, documentation
-    'Referred to SIU',              -- Escalated to Special Investigations Unit
-    'Recovery In Progress',         -- Overpayment recovery initiated
-    'Closed — Confirmed Fraud',     -- Investigation confirmed fraudulent activity
-    'Closed — No Fraud',            -- Investigation cleared — no fraud found
-    'Closed — Insufficient Evidence' -- Unable to confirm or deny
-);
+DO $$ BEGIN
+    CREATE TYPE investigation_status AS ENUM (
+        'Open',                         -- Newly created, not yet reviewed
+        'Under Review',                 -- Analyst has begun initial review
+        'Evidence Gathering',           -- Actively collecting claims, records, documentation
+        'Referred to SIU',              -- Escalated to Special Investigations Unit
+        'Recovery In Progress',         -- Overpayment recovery initiated
+        'Closed — Confirmed Fraud',     -- Investigation confirmed fraudulent activity
+        'Closed — No Fraud',            -- Investigation cleared — no fraud found
+        'Closed — Insufficient Evidence' -- Unable to confirm or deny
+    );
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
 
-CREATE TYPE fraud_severity AS ENUM (
-    'Critical',
-    'High',
-    'Medium',
-    'Low'
-);
+DO $$ BEGIN
+    CREATE TYPE fraud_severity AS ENUM (
+        'Critical',
+        'High',
+        'Medium',
+        'Low'
+    );
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
 
-CREATE TYPE investigation_source AS ENUM (
-    'Rules Engine',           -- Automated rules-based detection
-    'Statistical Outlier',    -- Statistical anomaly detection
-    'Peer Comparison',        -- Provider peer benchmarking
-    'AI Model',               -- ML model flagged
-    'Tip Hotline',            -- Anonymous tip or whistleblower
-    'Audit Sample',           -- Random or targeted audit
-    'Referral',               -- Internal referral from claims team
-    'Manual'                  -- Manually created by investigator
-);
+DO $$ BEGIN
+    CREATE TYPE investigation_source AS ENUM (
+        'Rules Engine',           -- Automated rules-based detection
+        'Statistical Outlier',    -- Statistical anomaly detection
+        'Peer Comparison',        -- Provider peer benchmarking
+        'AI Model',               -- ML model flagged
+        'Tip Hotline',            -- Anonymous tip or whistleblower
+        'Audit Sample',           -- Random or targeted audit
+        'Referral',               -- Internal referral from claims team
+        'Manual'                  -- Manually created by investigator
+    );
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
 
-CREATE TYPE investigation_type AS ENUM (
-    'Provider',               -- Provider-focused investigation
-    'Member',                 -- Member-focused investigation
-    'Network'                 -- Provider ring / network investigation
-);
+DO $$ BEGIN
+    CREATE TYPE investigation_type AS ENUM (
+        'Provider',               -- Provider-focused investigation
+        'Member',                 -- Member-focused investigation
+        'Network'                 -- Provider ring / network investigation
+    );
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
 
 -- ---------------------------------------------------------------------------
 -- Fraud investigators (lookup table)
 -- ---------------------------------------------------------------------------
 
-CREATE TABLE fraud_investigators (
+CREATE TABLE IF NOT EXISTS fraud_investigators (
     investigator_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email               TEXT NOT NULL UNIQUE,
     display_name        TEXT NOT NULL,
@@ -63,13 +77,13 @@ CREATE TABLE fraud_investigators (
     updated_at          TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE INDEX idx_investigators_active ON fraud_investigators(is_active) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_investigators_active ON fraud_investigators(is_active) WHERE is_active = TRUE;
 
 -- ---------------------------------------------------------------------------
 -- FWA investigations (core table)
 -- ---------------------------------------------------------------------------
 
-CREATE TABLE fwa_investigations (
+CREATE TABLE IF NOT EXISTS fwa_investigations (
     investigation_id        TEXT PRIMARY KEY,           -- INV-XXXX format
     investigation_type      investigation_type NOT NULL,
     target_type             TEXT NOT NULL CHECK (target_type IN ('provider', 'member', 'network')),
@@ -115,21 +129,21 @@ CREATE TABLE fwa_investigations (
 );
 
 -- Primary query patterns
-CREATE INDEX idx_inv_status         ON fwa_investigations(status);
-CREATE INDEX idx_inv_investigator   ON fwa_investigations(assigned_investigator_id)
+CREATE INDEX IF NOT EXISTS idx_inv_status         ON fwa_investigations(status);
+CREATE INDEX IF NOT EXISTS idx_inv_investigator   ON fwa_investigations(assigned_investigator_id)
     WHERE assigned_investigator_id IS NOT NULL;
-CREATE INDEX idx_inv_severity       ON fwa_investigations(severity);
-CREATE INDEX idx_inv_target         ON fwa_investigations(target_id);
-CREATE INDEX idx_inv_type           ON fwa_investigations(investigation_type);
-CREATE INDEX idx_inv_open           ON fwa_investigations(severity, created_at)
+CREATE INDEX IF NOT EXISTS idx_inv_severity       ON fwa_investigations(severity);
+CREATE INDEX IF NOT EXISTS idx_inv_target         ON fwa_investigations(target_id);
+CREATE INDEX IF NOT EXISTS idx_inv_type           ON fwa_investigations(investigation_type);
+CREATE INDEX IF NOT EXISTS idx_inv_open           ON fwa_investigations(severity, created_at)
     WHERE status = 'Open';
-CREATE INDEX idx_inv_composite_risk ON fwa_investigations(composite_risk_score DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_inv_composite_risk ON fwa_investigations(composite_risk_score DESC NULLS LAST);
 
 -- ---------------------------------------------------------------------------
 -- Investigation audit log (immutable — critical for compliance)
 -- ---------------------------------------------------------------------------
 
-CREATE TABLE investigation_audit_log (
+CREATE TABLE IF NOT EXISTS investigation_audit_log (
     audit_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     investigation_id    TEXT NOT NULL REFERENCES fwa_investigations(investigation_id),
     investigator_id     UUID REFERENCES fraud_investigators(investigator_id),
@@ -145,13 +159,13 @@ CREATE TABLE investigation_audit_log (
     created_at          TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE INDEX idx_audit_investigation ON investigation_audit_log(investigation_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_investigation ON investigation_audit_log(investigation_id, created_at DESC);
 
 -- ---------------------------------------------------------------------------
 -- Investigation evidence (linked claims, documents, data points)
 -- ---------------------------------------------------------------------------
 
-CREATE TABLE investigation_evidence (
+CREATE TABLE IF NOT EXISTS investigation_evidence (
     evidence_id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     investigation_id    TEXT NOT NULL REFERENCES fwa_investigations(investigation_id),
     evidence_type       TEXT NOT NULL CHECK (evidence_type IN (
@@ -166,9 +180,9 @@ CREATE TABLE investigation_evidence (
     created_at          TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE INDEX idx_evidence_investigation ON investigation_evidence(investigation_id, created_at DESC);
-CREATE INDEX idx_evidence_type          ON investigation_evidence(evidence_type);
-CREATE INDEX idx_evidence_reference     ON investigation_evidence(reference_id);
+CREATE INDEX IF NOT EXISTS idx_evidence_investigation ON investigation_evidence(investigation_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_evidence_type          ON investigation_evidence(evidence_type);
+CREATE INDEX IF NOT EXISTS idx_evidence_reference     ON investigation_evidence(reference_id);
 
 -- ---------------------------------------------------------------------------
 -- Auto-update timestamps
@@ -198,6 +212,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_investigations_updated_at ON fwa_investigations;
 CREATE TRIGGER trg_investigations_updated_at
     BEFORE UPDATE ON fwa_investigations
     FOR EACH ROW EXECUTE FUNCTION update_investigation_timestamps();
@@ -210,6 +225,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_investigators_updated_at ON fraud_investigators;
 CREATE TRIGGER trg_investigators_updated_at
     BEFORE UPDATE ON fraud_investigators
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
@@ -219,7 +235,7 @@ CREATE TRIGGER trg_investigators_updated_at
 -- ---------------------------------------------------------------------------
 
 -- Investigation queue (what SIU analysts see when they open the app)
-CREATE VIEW v_investigation_queue AS
+CREATE OR REPLACE VIEW v_investigation_queue AS
 SELECT
     i.investigation_id,
     i.investigation_type::text,
@@ -253,7 +269,7 @@ ORDER BY
     i.created_at ASC;
 
 -- Investigator caseload dashboard
-CREATE VIEW v_investigator_caseload AS
+CREATE OR REPLACE VIEW v_investigator_caseload AS
 SELECT
     inv.investigator_id,
     inv.display_name,
@@ -280,7 +296,7 @@ WHERE inv.is_active = TRUE
 GROUP BY inv.investigator_id, inv.display_name, inv.role, inv.max_caseload;
 
 -- Investigation detail with latest audit entry
-CREATE VIEW v_investigation_detail AS
+CREATE OR REPLACE VIEW v_investigation_detail AS
 SELECT
     i.investigation_id,
     i.investigation_type::text,
