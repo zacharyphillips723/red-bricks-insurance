@@ -9,6 +9,8 @@
 
 # COMMAND ----------
 
+import os
+
 dbutils.widgets.text("catalog", "main", "Catalog")
 dbutils.widgets.text("warehouse_id", "", "SQL Warehouse ID (auto-detect if empty)")
 
@@ -28,7 +30,7 @@ if not warehouse_id.strip():
 
 PROVIDER_RISK_TABLE = f"{catalog}.fwa.gold_fwa_provider_risk"
 CLAIM_FLAGS_TABLE = f"{catalog}.fwa.gold_fwa_claim_flags"
-LLM_ENDPOINT = "databricks-llama-4-maverick"
+LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT", "databricks-llama-4-maverick")
 MODEL_NAME = f"{catalog}.analytics.fwa_investigation_agent"
 
 print(f"Provider Risk:   {PROVIDER_RISK_TABLE}")

@@ -10,6 +10,8 @@
 
 # COMMAND ----------
 
+import os
+
 dbutils.widgets.text("catalog", "main", "Catalog")
 dbutils.widgets.text("warehouse_id", "", "SQL Warehouse ID (auto-detect if empty)")
 
@@ -28,7 +30,7 @@ if not warehouse_id.strip():
         print("WARNING: No running SQL warehouse found. Data validation will be skipped.")
 
 REPORT_CARD_TABLE = f"{catalog}.analytics.gold_group_report_card"
-LLM_ENDPOINT = "databricks-llama-4-maverick"
+LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT", "databricks-llama-4-maverick")
 MODEL_NAME = f"{catalog}.analytics.group_sales_coach_agent"
 
 print(f"Report Card:     {REPORT_CARD_TABLE}")

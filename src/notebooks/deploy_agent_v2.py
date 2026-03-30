@@ -19,6 +19,8 @@
 
 # COMMAND ----------
 
+import os
+
 dbutils.widgets.text("catalog", "main", "Catalog")
 dbutils.widgets.text("warehouse_id", "", "SQL Warehouse ID (auto-detect if empty)")
 
@@ -39,7 +41,7 @@ if not warehouse_id.strip():
 VS_INDEX_NAME = f"{catalog}.documents.case_notes_vs_index"
 MEMBER_360_TABLE = f"{catalog}.analytics.gold_member_360"
 BENEFIT_UTIL_TABLE = f"{catalog}.benefits.gold_member_benefit_utilization"
-LLM_ENDPOINT = "databricks-llama-4-maverick"
+LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT", "databricks-llama-4-maverick")
 MODEL_NAME = f"{catalog}.analytics.care_intelligence_agent_v2"
 
 print(f"VS Index:        {VS_INDEX_NAME}")

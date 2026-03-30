@@ -10,6 +10,8 @@
 
 # COMMAND ----------
 
+dbutils.widgets.text("catalog", "red_bricks_insurance", "Unity Catalog Name")
+
 import random
 import uuid
 import psycopg
@@ -19,7 +21,7 @@ random.seed(42)
 
 INSTANCE_NAME = "fwa-investigations"
 DATABASE_NAME = "fwa_cases"
-CATALOG = "red_bricks_insurance"
+CATALOG = dbutils.widgets.get("catalog")
 
 # COMMAND ----------
 

@@ -10,13 +10,15 @@
 
 # COMMAND ----------
 
+dbutils.widgets.text("catalog", "red_bricks_insurance", "Unity Catalog Name")
+
 import uuid
 import psycopg
 from databricks.sdk import WorkspaceClient
 
 INSTANCE_NAME = "red-bricks-command-center"
 DATABASE_NAME = "red_bricks_alerts"
-CATALOG = "red_bricks_insurance"
+CATALOG = dbutils.widgets.get("catalog")
 
 # COMMAND ----------
 

@@ -93,16 +93,20 @@ LAKEBASE_CONFIGS = [
 ]
 
 # All apps that need UC + warehouse grants
-# Discover dynamically — try common name patterns across targets
-APP_NAME_PATTERNS = [
-    "red-bricks-command-center-app",
-    "red-bricks-fwa-portal-app",
-    "rb-grp-rpt-dev",
-    "rb-grp-rpt-hls-financial",
-    "rb-grp-rpt-e2-field-eng",
-    "rb-grp-rpt-prod",
-    "rb-group-reporting-dev",  # Legacy name
-]
+# Auto-discover by listing all apps whose names contain "red-bricks" or "rb-"
+APP_NAME_PATTERNS = []
+try:
+    for app in w.apps.list():
+        name = app.name or ""
+        if "red-bricks" in name or name.startswith("rb-"):
+            APP_NAME_PATTERNS.append(name)
+    print(f"Auto-discovered {len(APP_NAME_PATTERNS)} apps: {APP_NAME_PATTERNS}")
+except Exception as e:
+    print(f"Could not auto-discover apps: {e}. Falling back to known patterns.")
+    APP_NAME_PATTERNS = [
+        "red-bricks-command-center-app",
+        "red-bricks-fwa-portal-app",
+    ]
 
 # All UC schemas that apps may need to read
 UC_SCHEMAS = [
