@@ -10,10 +10,10 @@ dist/
 build/
 
 # Frontend
-app/frontend/node_modules/
+**/node_modules/
 app/frontend/dist/
-app-group-reporting/frontend/node_modules/
 app-group-reporting/frontend/dist/
+app-fwa/frontend/dist/
 
 # Build artifacts served by FastAPI (not gitignored — needed for DAB deployment)
 # app/static/
