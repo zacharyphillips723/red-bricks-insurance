@@ -7,9 +7,9 @@ import traceback
 from databricks.sdk import WorkspaceClient
 
 from .models import GenieQuestionIn, GenieResponseOut
+from .env_config import SQL_WAREHOUSE_ID
 
-GENIE_SPACE_ID = os.environ.get("GENIE_SPACE_ID", "")
-SQL_WAREHOUSE_ID = os.environ.get("SQL_WAREHOUSE_ID", "781064a3466c0984")
+GENIE_SPACE_ID = os.environ.get("GENIE_SPACE_ID") or ""
 
 
 def _poll_for_result(w, space_id, conversation_id, message_id, timeout=60):

@@ -16,7 +16,7 @@ from databricks.sdk import WorkspaceClient
 from .groups import get_report_card, get_experience, get_stop_loss, get_renewal, get_tcoc
 from .enrichment import get_slack_context, get_glean_context, get_salesforce_context
 
-LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT", "databricks-llama-4-maverick")
+from .env_config import LLM_ENDPOINT
 
 SYSTEM_PROMPT = """You are a Sales Strategy Coach for Red Bricks Insurance.
 You help account executives prepare for employer group renewal meetings by

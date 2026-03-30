@@ -13,9 +13,7 @@ import traceback
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import StatementParameterListItem
 
-UC_CATALOG = os.environ.get("UC_CATALOG", "red_bricks_insurance")
-SQL_WAREHOUSE_ID = os.environ.get("SQL_WAREHOUSE_ID", "781064a3466c0984")
-LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT", "databricks-meta-llama-3-3-70b-instruct")
+from .env_config import UC_CATALOG, SQL_WAREHOUSE_ID, LLM_ENDPOINT
 
 MEMBER_360_TABLE = f"{UC_CATALOG}.analytics.gold_member_360"
 CASE_NOTES_TABLE = f"{UC_CATALOG}.documents.silver_case_notes"

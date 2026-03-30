@@ -61,8 +61,8 @@ class CareIntelligenceAgentV2(ChatModel):
 
         self.w = WorkspaceClient()
 
-        self.catalog = os.environ.get("UC_CATALOG", "red_bricks_insurance")
-        self.warehouse_id = os.environ.get("SQL_WAREHOUSE_ID", "781064a3466c0984")
+        self.catalog = os.environ.get("UC_CATALOG") or "red_bricks_insurance"
+        self.warehouse_id = os.environ.get("SQL_WAREHOUSE_ID") or "781064a3466c0984"
         self.llm_endpoint = os.environ.get(
             "LLM_ENDPOINT", "databricks-llama-4-maverick"
         )

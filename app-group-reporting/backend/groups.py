@@ -1,13 +1,11 @@
 """SQL queries for group data via Statement Execution API."""
 
-import os
 import traceback
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import StatementParameterListItem
 
-UC_CATALOG = os.environ.get("UC_CATALOG", "red_bricks_insurance")
-SQL_WAREHOUSE_ID = os.environ.get("SQL_WAREHOUSE_ID", "781064a3466c0984")
+from .env_config import UC_CATALOG, SQL_WAREHOUSE_ID
 
 REPORT_CARD_TABLE = f"{UC_CATALOG}.analytics.gold_group_report_card"
 EXPERIENCE_TABLE = f"{UC_CATALOG}.analytics.gold_group_experience"

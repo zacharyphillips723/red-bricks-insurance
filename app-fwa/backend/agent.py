@@ -13,10 +13,7 @@ import traceback
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import StatementParameterListItem
 
-UC_CATALOG = os.environ.get("UC_CATALOG", "red_bricks_insurance")
-SQL_WAREHOUSE_ID = os.environ.get("SQL_WAREHOUSE_ID", "781064a3466c0984")
-LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT", "databricks-llama-4-maverick")
-FWA_MODEL_ENDPOINT = os.environ.get("FWA_MODEL_ENDPOINT", "fwa-fraud-scorer")
+from .env_config import UC_CATALOG, SQL_WAREHOUSE_ID, LLM_ENDPOINT, FWA_MODEL_ENDPOINT
 
 # Table references (used by direct API routes)
 PROVIDER_RISK_TABLE = f"{UC_CATALOG}.fwa.gold_fwa_provider_risk"
