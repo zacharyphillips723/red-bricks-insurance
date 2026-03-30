@@ -156,7 +156,7 @@ assert os.path.exists(agent_code_path), f"FWA agent code not found at {agent_cod
 
 model_config = {
     "UC_CATALOG": catalog,
-    "SQL_WAREHOUSE_ID": "781064a3466c0984",
+    "SQL_WAREHOUSE_ID": warehouse_id,
     "LLM_ENDPOINT": LLM_ENDPOINT,
     "provider_risk_table": PROVIDER_RISK_TABLE,
     "claim_flags_table": CLAIM_FLAGS_TABLE,

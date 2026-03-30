@@ -305,11 +305,32 @@ async def update_status(inv_id: str, status_in: UpdateStatusIn):
 
         await session.execute(
             text("""
-                UPDATE fwa_investigations SET status = CAST(:new_status AS investigation_status)
+                UPDATE fwa_investigations
+                SET status = CAST(:new_status AS investigation_status),
+                    assigned_investigator_id = CASE
+                        WHEN CAST(:new_status AS text) != 'Open'
+                             AND assigned_investigator_id IS NULL
+                        THEN (SELECT investigator_id FROM fraud_investigators
+                              WHERE is_active = TRUE ORDER BY random() LIMIT 1)
+                        ELSE assigned_investigator_id
+                    END,
+                    assigned_at = CASE
+                        WHEN CAST(:new_status AS text) != 'Open'
+                             AND assigned_investigator_id IS NULL
+                        THEN now()
+                        ELSE assigned_at
+                    END
                 WHERE investigation_id = :inv_id
             """),
             {"inv_id": inv_id, "new_status": status_in.status.value},
         )
+
+        # Re-fetch investigator ID in case one was auto-assigned above
+        updated = await session.execute(
+            text("SELECT assigned_investigator_id::text FROM fwa_investigations WHERE investigation_id = :inv_id"),
+            {"inv_id": inv_id},
+        )
+        current_investigator_id = updated.mappings().one()["assigned_investigator_id"]
 
         await session.execute(
             text("""
@@ -319,7 +340,7 @@ async def update_status(inv_id: str, status_in: UpdateStatusIn):
                     CAST(:old AS investigation_status), CAST(:new AS investigation_status), :note)
             """),
             {
-                "inv_id": inv_id, "cm_id": row["assigned_investigator_id"],
+                "inv_id": inv_id, "cm_id": current_investigator_id,
                 "old": row["status"], "new": status_in.status.value, "note": status_in.note,
             },
         )

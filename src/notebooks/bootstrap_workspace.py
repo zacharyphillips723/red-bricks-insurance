@@ -54,6 +54,15 @@ from databricks.sdk import WorkspaceClient
 random.seed(42)
 w = WorkspaceClient()
 
+# Auto-detect SQL warehouse if not provided
+if not warehouse_id.strip():
+    warehouses = [wh for wh in w.warehouses.list() if wh.state and wh.state.value == "RUNNING"]
+    if warehouses:
+        warehouse_id = warehouses[0].id
+        print(f"Auto-detected warehouse: {warehouse_id} ({warehouses[0].name})")
+    else:
+        print("WARNING: No running SQL warehouse found. Warehouse grants will be skipped.")
+
 # Resolve paths — works in both bundle-deployed and local contexts
 try:
     _here = Path(__file__).resolve().parent

@@ -22,3 +22,4 @@ app-fwa/frontend/dist/
 .idea/
 .vscode/
 *.swp
+resources/app.yml.bak
