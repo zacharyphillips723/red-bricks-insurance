@@ -231,9 +231,9 @@ print(f"scale_pos_weight: {scale_pos_weight:.1f}")
 
 # Define hyperparameter grid
 param_grid = {
-    "max_depth": [4, 6, 8],
-    "learning_rate": [0.05, 0.1],
-    "n_estimators": [100, 200],
+    "max_depth": [4, 6],
+    "learning_rate": [0.1],
+    "n_estimators": [100],
 }
 
 # Generate all combinations
@@ -241,7 +241,7 @@ grid_keys = list(param_grid.keys())
 grid_combos = list(itertools.product(*[param_grid[k] for k in grid_keys]))
 print(f"Grid search: {len(grid_combos)} combinations")
 
-cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
 
 best_auc = -1
 best_run_id = None
