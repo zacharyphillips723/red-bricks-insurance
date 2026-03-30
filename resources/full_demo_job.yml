@@ -222,6 +222,19 @@ resources:
 
           environment_key: agent_eval_env
 
+        # Step 8: Bootstrap workspace — Lakebase, grants, seed operational data
+        - task_key: bootstrap_workspace
+          depends_on:
+            - task_key: gold_analytics_pipeline
+            - task_key: fwa_pipeline
+            - task_key: train_fwa_model
+          notebook_task:
+            notebook_path: ../src/notebooks/bootstrap_workspace.py
+            base_parameters:
+              catalog: ${var.catalog}
+              warehouse_id: ${var.warehouse_id}
+          environment_key: bootstrap_env
+
       environments:
         - environment_key: agent_env
           spec:
@@ -243,6 +256,12 @@ resources:
               - xgboost>=2.0.0
               - scikit-learn>=1.4.0
               - mlflow>=2.14.0
+              - databricks-sdk>=0.30.0
+        - environment_key: bootstrap_env
+          spec:
+            client: "1"
+            dependencies:
+              - psycopg[binary]
               - databricks-sdk>=0.30.0
 
       tags:

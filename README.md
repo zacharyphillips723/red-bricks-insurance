@@ -73,16 +73,18 @@ synthea_generation (ROOT — generates FHIR bundles + extracts demographics + as
   → fwa_pipeline (depends on data_generation — bronze/silver/gold FWA signals + provider profiles)
   → gold_analytics_pipeline (depends on all domain pipelines + member months + fwa_pipeline)
       → create_metric_views (governed semantic layer + FWA risk metrics)
-  → train_fwa_model (depends on fwa_pipeline + gold_analytics — AutoML fraud scorer)
+  → train_fwa_model (depends on fwa_pipeline + gold_analytics — XGBoost fraud scorer)
   → setup_vector_search (depends on documents_pipeline)
       → deploy_member_agent (v1)
       → deploy_agent_v2 (v2 with benefits)
       → deploy_group_sales_agent (Sales Coach for group reporting)
       → deploy_fwa_agent (FWA Investigation agent with tool-calling)
           → evaluate_agents (v1 vs v2 vs sales coach comparison)
+  → bootstrap_workspace (depends on gold_analytics + fwa_pipeline + train_fwa_model)
+      — Creates Lakebase instances, applies UC/warehouse grants for app SPs, seeds operational data
 ```
 
-A **refresh job** (`red_bricks_refresh`) runs the same DAG minus Synthea/FHIR/clinical — useful when only insurance data generation or downstream logic has changed.
+A **refresh job** (`red_bricks_refresh`) runs the same DAG minus Synthea/FHIR/clinical — useful when only insurance data generation or downstream logic has changed. Both jobs include the `bootstrap_workspace` task, which automatically provisions Lakebase, discovers app service principals, grants UC + warehouse permissions, and seeds alerts/investigations from gold tables.
 
 **Synthea as golden demographic source:** Synthea generates clinically realistic patients with names, DOBs, and addresses. These demographics flow INTO the insurance generators (members, enrollment), ensuring that searching for "Aaron Anderson" in FHIR returns the same person as in the member table. A lightweight `synthea_crosswalk` Delta table maps Synthea UUIDs to MBR IDs via JOIN in `bronze.sql`.
 
@@ -324,7 +326,8 @@ red-bricks-insurance/
 │   │   ├── train_fwa_model.py        #   XGBoost fraud scorer training + UC registration
 │   │   ├── train_fwa_model_automl.py #   AutoML fraud scorer (alternative approach)
 │   │   ├── deploy_fwa_agent.py       #   FWA Investigation agent registration
-│   │   ├── seed_fwa_lakebase.py      #   Seed FWA investigations into Lakebase
+│   │   ├── bootstrap_workspace.py    #   Post-deploy setup: Lakebase, grants, seed data
+│   │   ├── seed_fwa_lakebase.py      #   Seed FWA investigations into Lakebase (legacy, use bootstrap)
 │   │   └── evaluate_agents.py        #   Agent evaluation
 │   ├── pipelines/
 │   │   ├── members/                  #   bronze.sql, silver.sql, gold.sql
@@ -425,41 +428,33 @@ The `.bundleignore` excludes `node_modules/`, `src/`, and other frontend build a
 
 After building, deploy the bundle normally with `databricks bundle deploy`.
 
-## FWA Investigation Portal — Setup
+## Workspace Bootstrap — Post-Deploy Setup
 
-The FWA app requires additional setup beyond the standard bundle deploy:
+The `bootstrap_workspace` task runs automatically at the end of both the full demo and refresh jobs. It handles all post-deploy provisioning:
 
-### 1. Lakebase Instance
+1. **Lakebase instances** — Creates `red-bricks-command-center` and `fwa-investigations` instances, databases, and DDL schemas
+2. **Staff seeding** — Inserts care managers and fraud investigators
+3. **App service principal discovery** — Finds SPs for all deployed apps (Command Center, FWA Portal, Group Reporting)
+4. **Unity Catalog grants** — `USE CATALOG`, `USE SCHEMA`, `SELECT` on all 11 domain schemas for each app SP
+5. **SQL Warehouse grants** — `CAN_USE` on the configured warehouse for each app SP
+6. **ML predictions table** — Pre-creates `analytics.fwa_ml_predictions` for gold MV compatibility
+7. **Operational data seeding** — Populates Lakebase with risk alerts (from gold tables) and FWA investigation cases (from silver/gold FWA tables)
 
-The app uses a Lakebase Provisioned PostgreSQL instance for investigation state management.
-
-```bash
-# Create the instance (one-time, takes ~2 minutes)
-databricks database create-database-instance fwa-investigations --capacity CU_1
-
-# Create the database (connect via psycopg to the 'postgres' default DB)
-# Then apply the schema DDL:
-#   src/fwa_lakebase_schema.sql
-```
-
-### 2. Seed Investigation Data
-
-After the FWA pipeline has run and gold tables are populated:
+To run manually (e.g., after a fresh deploy without running the full job):
 
 ```bash
-# Seed investigators + investigation cases + evidence + audit log
-# Run as a one-off job (requires Spark for UC table reads):
 databricks jobs submit --json '{
-  "run_name": "Seed FWA Lakebase",
+  "run_name": "Bootstrap Workspace",
   "tasks": [{
-    "task_key": "seed_fwa_lakebase",
+    "task_key": "bootstrap",
     "notebook_task": {
-      "notebook_path": "/Users/<your-email>/.bundle/red-bricks-insurance/dev/files/src/notebooks/seed_fwa_lakebase"
+      "notebook_path": "/Users/<your-email>/.bundle/red-bricks-insurance/dev/files/src/notebooks/bootstrap_workspace",
+      "base_parameters": {"catalog": "red_bricks_insurance", "warehouse_id": "781064a3466c0984"}
     },
-    "environment_key": "seed_env"
+    "environment_key": "bootstrap_env"
   }],
   "environments": [{
-    "environment_key": "seed_env",
+    "environment_key": "bootstrap_env",
     "spec": {"client": "1", "dependencies": ["psycopg[binary]", "databricks-sdk>=0.30.0"]}
   }]
 }'

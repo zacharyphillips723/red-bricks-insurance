@@ -99,6 +99,8 @@ APP_NAME_PATTERNS = [
     "red-bricks-fwa-portal-app",
     "rb-grp-rpt-dev",
     "rb-grp-rpt-hls-financial",
+    "rb-grp-rpt-e2-field-eng",
+    "rb-grp-rpt-prod",
     "rb-group-reporting-dev",  # Legacy name
 ]
 
