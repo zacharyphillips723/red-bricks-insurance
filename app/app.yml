@@ -4,15 +4,21 @@ command:
   - --host=0.0.0.0
   - --port=8000
 
-# NOTE: SQL_WAREHOUSE_ID, UC_CATALOG, and GENIE_SPACE_ID are injected by
-# DAB resource config (resources/app.yml) via ${var.*} substitution.
-# If not set, env_config.py auto-detects warehouse and catalog at runtime.
+# SQL_WAREHOUSE_ID and UC_CATALOG default to "auto" (runtime auto-detection).
+# When deployed via `databricks bundle deploy`, the DAB resource config
+# (resources/app.yml) overrides with ${var.warehouse_id} and ${var.catalog}.
 env:
   - name: LAKEBASE_INSTANCE_NAME
     value: red-bricks-command-center
   - name: LAKEBASE_DATABASE_NAME
     value: red_bricks_alerts
+  - name: GENIE_SPACE_ID
+    value: ""
+  - name: SQL_WAREHOUSE_ID
+    value: auto
   - name: LLM_ENDPOINT
     value: databricks-meta-llama-3-3-70b-instruct
+  - name: UC_CATALOG
+    value: auto
   - name: UC_SCHEMA
     value: analytics

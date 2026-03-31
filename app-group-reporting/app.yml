@@ -4,10 +4,15 @@ command:
   - --host=0.0.0.0
   - --port=8000
 
-# NOTE: SQL_WAREHOUSE_ID and UC_CATALOG are injected by DAB resource config
-# (resources/app_group_reporting.yml) via ${var.warehouse_id} and ${var.catalog}.
-# If not set, env_config.py auto-detects at runtime.
+# SQL_WAREHOUSE_ID and UC_CATALOG default to "auto" (runtime auto-detection).
+# When deployed via `databricks bundle deploy`, the DAB resource config
+# (resources/app_group_reporting.yml) overrides with ${var.warehouse_id}
+# and ${var.catalog} from databricks.yml target variables.
 env:
+  - name: SQL_WAREHOUSE_ID
+    value: auto
+  - name: UC_CATALOG
+    value: auto
   - name: LLM_ENDPOINT
     value: databricks-llama-4-maverick
   - name: UC_SCHEMA
