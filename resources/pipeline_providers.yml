@@ -2,7 +2,7 @@ resources:
   pipelines:
     providers_pipeline:
       name: "[${bundle.target}] Red Bricks — Providers Pipeline"
-      catalog: ${var.catalog}
+      catalog: red_bricks_insurance
       target: providers
       configuration:
         source_volume: ${var.source_volume}

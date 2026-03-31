@@ -11,7 +11,7 @@ from databricks.sdk import WorkspaceClient
 # Configuration
 # ---------------------------------------------------------------------------
 import os, sys
-CATALOG = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("UC_CATALOG", "red_bricks_insurance")
+CATALOG = "red_bricks_insurance"
 
 TABLES = [
     # Cross-domain gold analytics tables

@@ -2,11 +2,11 @@ resources:
   pipelines:
     benefits_pipeline:
       name: "[${bundle.target}] Red Bricks — Benefits Pipeline"
-      catalog: ${var.catalog}
+      catalog: red_bricks_insurance
       target: benefits
       configuration:
         source_volume: ${var.source_volume}
-        catalog: ${var.catalog}
+        catalog: red_bricks_insurance
       libraries:
         - file:
             path: ../src/pipelines/benefits/bronze.sql

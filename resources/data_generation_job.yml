@@ -9,7 +9,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/run_data_generation.py
             base_parameters:
-              catalog: ${var.catalog}
+              catalog: red_bricks_insurance
 
       tags:
         project: red-bricks-insurance

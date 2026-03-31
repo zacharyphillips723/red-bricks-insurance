@@ -9,7 +9,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/run_data_generation.py
             base_parameters:
-              catalog: ${var.catalog}
+              catalog: red_bricks_insurance
 
 
         # Step 2: Domain pipelines (run in parallel after data generation)
@@ -79,7 +79,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/build_member_months.py
             base_parameters:
-              catalog: ${var.catalog}
+              catalog: red_bricks_insurance
 
 
         # Step 3: Gold analytics (depends on domain pipelines + member months + FWA)
@@ -104,7 +104,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/create_metric_views.py
             base_parameters:
-              catalog: ${var.catalog}
+              catalog: red_bricks_insurance
 
 
         # Step 4: Vector search + agents
@@ -114,7 +114,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/setup_vector_search.py
             base_parameters:
-              catalog: ${var.catalog}
+              catalog: red_bricks_insurance
 
 
         - task_key: deploy_member_agent
@@ -124,7 +124,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/deploy_member_agent.py
             base_parameters:
-              catalog: ${var.catalog}
+              catalog: red_bricks_insurance
 
           environment_key: agent_env
 
@@ -136,7 +136,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/deploy_agent_v2.py
             base_parameters:
-              catalog: ${var.catalog}
+              catalog: red_bricks_insurance
 
           environment_key: agent_env
 
@@ -146,7 +146,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/deploy_group_sales_agent.py
             base_parameters:
-              catalog: ${var.catalog}
+              catalog: red_bricks_insurance
 
           environment_key: agent_env
 
@@ -157,7 +157,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/train_fwa_model.py
             base_parameters:
-              catalog: ${var.catalog}
+              catalog: red_bricks_insurance
           environment_key: ml_training_env
 
         - task_key: deploy_fwa_agent
@@ -168,7 +168,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/deploy_fwa_agent.py
             base_parameters:
-              catalog: ${var.catalog}
+              catalog: red_bricks_insurance
 
           environment_key: agent_env
 
@@ -179,7 +179,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/evaluate_agents.py
             base_parameters:
-              catalog: ${var.catalog}
+              catalog: red_bricks_insurance
 
           environment_key: agent_eval_env
 
@@ -192,7 +192,6 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/bootstrap_workspace.py
             base_parameters:
-              catalog: ${var.catalog}
               warehouse_id: ${var.warehouse_id}
           environment_key: bootstrap_env
 

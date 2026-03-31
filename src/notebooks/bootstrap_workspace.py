@@ -18,6 +18,7 @@
 # MAGIC 5. Creates Genie spaces (Analytics, FWA, Group Reporting, Financial) with dynamic table references
 # MAGIC 6. Seeds alerts and investigation cases from gold tables
 # MAGIC 7. Creates the empty `fwa_ml_predictions` table for gold MV compatibility
+# MAGIC 8. Restarts all apps so they re-initialize Lakebase connections and auto-detect Genie spaces
 # MAGIC
 # MAGIC ### Prerequisites:
 # MAGIC - `databricks bundle deploy` has been run (apps exist in workspace)
@@ -26,10 +27,9 @@
 
 # COMMAND ----------
 
-dbutils.widgets.text("catalog", "red_bricks_insurance", "Unity Catalog Name")
 dbutils.widgets.text("warehouse_id", "", "SQL Warehouse ID (leave empty to auto-detect)")
 
-catalog = dbutils.widgets.get("catalog")
+catalog = "red_bricks_insurance"
 warehouse_id = dbutils.widgets.get("warehouse_id")
 
 print(f"Catalog: {catalog}")
@@ -42,7 +42,7 @@ print(f"Warehouse ID: {warehouse_id or '(will auto-detect)'}")
 
 # COMMAND ----------
 
-catalog = dbutils.widgets.get("catalog")
+catalog = "red_bricks_insurance"
 warehouse_id = dbutils.widgets.get("warehouse_id")
 
 import json
@@ -56,14 +56,18 @@ from databricks.sdk import WorkspaceClient
 random.seed(42)
 w = WorkspaceClient()
 
-# Auto-detect SQL warehouse if not provided
+# Auto-detect SQL warehouse if not provided (prefer RUNNING, fall back to any)
 if not warehouse_id.strip():
-    warehouses = [wh for wh in w.warehouses.list() if wh.state and wh.state.value == "RUNNING"]
-    if warehouses:
-        warehouse_id = warehouses[0].id
-        print(f"Auto-detected warehouse: {warehouse_id} ({warehouses[0].name})")
+    all_wh = list(w.warehouses.list())
+    running = [wh for wh in all_wh if wh.state and wh.state.value == "RUNNING"]
+    if running:
+        warehouse_id = running[0].id
+        print(f"Auto-detected warehouse (running): {warehouse_id} ({running[0].name})")
+    elif all_wh:
+        warehouse_id = all_wh[0].id
+        print(f"Auto-detected warehouse (state={all_wh[0].state}): {warehouse_id} ({all_wh[0].name})")
     else:
-        print("WARNING: No running SQL warehouse found. Warehouse grants will be skipped.")
+        print("WARNING: No SQL warehouses found. Warehouse grants will be skipped.")
 
 # Resolve paths — works in both bundle-deployed and local contexts
 try:
@@ -614,7 +618,20 @@ print(f"  {catalog}.analytics.fwa_ml_predictions — ready")
 # COMMAND ----------
 
 def seed_command_center_alerts() -> int:
-    """Seed risk stratification alerts from gold tables into Lakebase."""
+    """Seed risk stratification alerts from gold tables into Lakebase.
+
+    Idempotent: truncates existing alerts before re-seeding so re-runs
+    don't create duplicates.
+    """
+    # Clear existing alerts for idempotent re-runs.
+    # CASCADE also truncates alert_activity_log (FK dependency), which is
+    # correct because activity entries for deleted alerts are meaningless.
+    with get_pg_connection("red-bricks-command-center", "red_bricks_alerts") as conn:
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE risk_stratification_alerts CASCADE")
+        conn.commit()
+    print("  Cleared existing alerts + activity log (idempotent re-seed).")
+
     total = 0
 
     # --- High-risk members (RAF > 2.0) ---
@@ -871,6 +888,9 @@ def seed_fwa_investigations() -> int:
     evidence_count = 0
     with get_pg_connection("fwa-investigations", "fwa_cases") as conn:
         with conn.cursor() as cur:
+            # Clear auto-seeded evidence for idempotent re-runs
+            cur.execute("DELETE FROM investigation_evidence WHERE evidence_type = 'claim'")
+            conn.commit()
             for inv in top_inv:
                 if inv.target_type == "provider":
                     where = f"provider_npi = '{inv.target_id}'"
@@ -913,6 +933,40 @@ alert_count = seed_command_center_alerts()
 
 print("\n--- FWA Investigations ---")
 inv_count = seed_fwa_investigations()
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Restart Apps
+# MAGIC Apps cache Genie space IDs and Lakebase connections at startup.
+# MAGIC After bootstrap creates these resources and grants permissions,
+# MAGIC apps must be restarted to pick up the new configuration.
+
+# COMMAND ----------
+
+print("=" * 60)
+print("STEP 6: Restart Apps (re-initialize connections + auto-detect)")
+print("=" * 60)
+
+restart_count = 0
+for app_name in APP_NAME_PATTERNS:
+    try:
+        app_info = w.apps.get(app_name)
+        status = getattr(app_info, "status", None)
+        active_deployment = getattr(app_info, "active_deployment", None)
+        # Only restart apps that are currently running
+        if status and getattr(status, "state", None) and str(status.state).upper() in ("RUNNING", "ACTIVE"):
+            print(f"  Restarting {app_name}...")
+            w.apps.stop(name=app_name).result()
+            w.apps.start(name=app_name).result()
+            print(f"    {app_name}: restarted ✓")
+            restart_count += 1
+        else:
+            print(f"  {app_name}: not running (state={status}), skipping")
+    except Exception as e:
+        print(f"  {app_name}: restart failed ({e})")
+
+print(f"\n  {restart_count} apps restarted.")
 
 # COMMAND ----------
 
@@ -966,8 +1020,10 @@ print(f"\n  Alerts seeded: {alert_count}")
 print(f"  Investigations seeded: {inv_count}")
 print(f"  ML predictions table: {catalog}.analytics.fwa_ml_predictions")
 
+print(f"\n  Apps restarted: {restart_count}")
+
 print("\n" + "=" * 60)
 print("Next steps:")
-print("  1. If gold tables weren't ready, re-run Step 5 after pipelines complete")
-print("  2. Verify apps at their URLs")
+print("  1. If gold tables weren't ready, re-run Steps 5-6 after pipelines complete")
+print("  2. Verify apps at their URLs — all connections and permissions are live")
 print("=" * 60)

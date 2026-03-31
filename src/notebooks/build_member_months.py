@@ -12,7 +12,7 @@
 
 # COMMAND ----------
 
-dbutils.widgets.text("catalog", "main", "Catalog")
+dbutils.widgets.text("catalog", "red_bricks_insurance", "Catalog")
 
 catalog = dbutils.widgets.get("catalog")
 

@@ -2,7 +2,7 @@ resources:
   pipelines:
     members_pipeline:
       name: "[${bundle.target}] Red Bricks — Members & Enrollment Pipeline"
-      catalog: ${var.catalog}
+      catalog: red_bricks_insurance
       target: members
       configuration:
         source_volume: ${var.source_volume}

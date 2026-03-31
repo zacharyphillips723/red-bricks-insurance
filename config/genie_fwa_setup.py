@@ -7,7 +7,7 @@ for natural language exploration of fraud, waste, and abuse data.
 from databricks.sdk import WorkspaceClient
 
 import os, sys
-CATALOG = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("UC_CATALOG", "red_bricks_insurance")
+CATALOG = "red_bricks_insurance"
 
 # Tables to register with the Genie space
 FWA_TABLES = [
@@ -60,7 +60,7 @@ by an AutoML-trained fraud scoring model registered in Unity Catalog."""
 
 
 def create_genie_space(
-    warehouse_id: str = "781064a3466c0984",
+    warehouse_id: str = "",
     space_name: str = "Red Bricks FWA Investigation",
 ):
     """Create or update the FWA Genie space."""

@@ -4,12 +4,9 @@ bundle:
   name: red-bricks-insurance
 
 variables:
-  catalog:
-    description: Unity Catalog catalog name
-    default: red_bricks_insurance
   source_volume:
     description: Volume path for raw generated source files
-    default: /Volumes/${var.catalog}/raw/raw_sources
+    default: /Volumes/red_bricks_insurance/raw/raw_sources
   warehouse_id:
     description: SQL warehouse for jobs (optional)
     default: ""
@@ -30,7 +27,6 @@ targets:
     workspace:
       profile: fe-vm-red-bricks-insurance
     variables:
-      catalog: red_bricks_insurance
       warehouse_id: 781064a3466c0984
 
   e2-field-eng:
@@ -38,7 +34,6 @@ targets:
     workspace:
       profile: fe-demo-field-eng
     variables:
-      catalog: zack_phillips_demos
       warehouse_id: 03560442e95cb440
       node_type_small: m5.xlarge
       node_type_large: m5.4xlarge
@@ -48,7 +43,6 @@ targets:
     workspace:
       profile: hls-financial-foundation
     variables:
-      catalog: hls_financial_foundation_catalog
       warehouse_id: 8bfdf551dc136232
       node_type_small: m5.xlarge
       node_type_large: m5.4xlarge
@@ -58,5 +52,4 @@ targets:
     workspace:
       profile: fe-vm-red-bricks-insurance
     variables:
-      catalog: red_bricks_insurance
       warehouse_id: 781064a3466c0984

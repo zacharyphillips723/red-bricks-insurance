@@ -11,7 +11,7 @@
 
 import os
 
-dbutils.widgets.text("catalog", "main", "Catalog")
+dbutils.widgets.text("catalog", "red_bricks_insurance", "Catalog")
 dbutils.widgets.text("warehouse_id", "", "SQL Warehouse ID (auto-detect if empty)")
 
 catalog = dbutils.widgets.get("catalog")

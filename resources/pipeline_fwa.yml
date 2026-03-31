@@ -2,11 +2,11 @@ resources:
   pipelines:
     fwa_pipeline:
       name: "[${bundle.target}] Red Bricks — FWA Pipeline"
-      catalog: ${var.catalog}
+      catalog: red_bricks_insurance
       target: fwa
       configuration:
         source_volume: ${var.source_volume}
-        catalog: ${var.catalog}
+        catalog: red_bricks_insurance
       libraries:
         - file:
             path: ../src/pipelines/fwa/bronze.sql

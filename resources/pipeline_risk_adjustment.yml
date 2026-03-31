@@ -2,7 +2,7 @@ resources:
   pipelines:
     risk_adjustment_pipeline:
       name: "[${bundle.target}] Red Bricks — Risk Adjustment Pipeline"
-      catalog: ${var.catalog}
+      catalog: red_bricks_insurance
       target: risk_adjustment
       configuration:
         source_volume: ${var.source_volume}

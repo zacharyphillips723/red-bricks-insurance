@@ -2,7 +2,7 @@ resources:
   pipelines:
     claims_pipeline:
       name: "[${bundle.target}] Red Bricks — Claims Pipeline"
-      catalog: ${var.catalog}
+      catalog: red_bricks_insurance
       target: claims
       configuration:
         source_volume: ${var.source_volume}

@@ -16,13 +16,13 @@ resources:
           - name: LAKEBASE_DATABASE_NAME
             value: red_bricks_alerts
           - name: GENIE_SPACE_ID
-            value: 01f122e25de814fe9767478c8718a462
+            value: auto
           - name: SQL_WAREHOUSE_ID
             value: ${var.warehouse_id}
           - name: LLM_ENDPOINT
-            value: databricks-meta-llama-3-3-70b-instruct
+            value: databricks-llama-4-maverick
           - name: UC_CATALOG
-            value: ${var.catalog}
+            value: red_bricks_insurance
           - name: UC_SCHEMA
             value: analytics
       resources:
@@ -31,3 +31,14 @@ resources:
             instance_name: red-bricks-command-center
             database_name: red_bricks_alerts
             permission: CAN_CONNECT_AND_CREATE
+        - name: llm-endpoint
+          serving_endpoint:
+            name: databricks-llama-4-maverick
+            permission: CAN_QUERY
+        - name: embedding-endpoint
+          serving_endpoint:
+            name: databricks-bge-large-en
+            permission: CAN_QUERY
+        - name: vs-index
+          vector_search_index:
+            index_name: red_bricks_insurance.documents.case_notes_vs_index

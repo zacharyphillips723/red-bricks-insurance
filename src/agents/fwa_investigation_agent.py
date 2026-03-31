@@ -146,8 +146,21 @@ class FWAInvestigationAgent(ChatModel):
         self.w = WorkspaceClient()
 
         self.catalog = os.environ.get("UC_CATALOG") or "red_bricks_insurance"
-        self.warehouse_id = os.environ.get("SQL_WAREHOUSE_ID") or "781064a3466c0984"
+        self.warehouse_id = os.environ.get("SQL_WAREHOUSE_ID") or self._auto_detect_warehouse()
+
         self.llm_endpoint = os.environ.get("LLM_ENDPOINT") or "databricks-llama-4-maverick"
+
+    def _auto_detect_warehouse(self) -> str:
+        """Auto-detect a SQL warehouse when none is configured."""
+        try:
+            for wh in self.w.warehouses.list():
+                if wh.state and wh.state.value == "RUNNING":
+                    return wh.id
+            for wh in self.w.warehouses.list():
+                return wh.id
+        except Exception:
+            pass
+        return ""
 
     def predict(
         self, context, messages: List[ChatMessage], params: Optional[ChatParams] = None

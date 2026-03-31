@@ -47,8 +47,10 @@ def ask_genie(question_in: GenieQuestionIn) -> GenieResponseOut:
                 conversation_id=conversation_id,
                 message_id=message_id,
             )
-            status = getattr(result, "status", "UNKNOWN")
-            if status in ("COMPLETED", "FAILED"):
+            status_raw = getattr(result, "status", None)
+            status_val = getattr(status_raw, "value", str(status_raw)) if status_raw else "UNKNOWN"
+            if status_val in ("COMPLETED", "FAILED", "EXECUTING_QUERY",
+                              "CANCELLED", "QUERY_RESULT_EXPIRED"):
                 break
             time.sleep(1)
 

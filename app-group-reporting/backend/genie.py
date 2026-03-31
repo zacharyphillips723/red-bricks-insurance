@@ -23,7 +23,8 @@ def _poll_for_result(w, space_id, conversation_id, message_id, timeout=60):
             message_id=message_id,
         )
         status_val = getattr(msg.status, "value", str(msg.status)) if msg.status else None
-        if status_val in ("COMPLETED", "FAILED", "EXECUTING_QUERY"):
+        if status_val in ("COMPLETED", "FAILED", "EXECUTING_QUERY",
+                          "CANCELLED", "QUERY_RESULT_EXPIRED"):
             return msg
         time.sleep(2)
     return msg

@@ -6,7 +6,7 @@ command:
 
 # SQL_WAREHOUSE_ID and UC_CATALOG default to "auto" (runtime auto-detection).
 # When deployed via `databricks bundle deploy`, the DAB resource config
-# (resources/app.yml) overrides with ${var.warehouse_id} and ${var.catalog}.
+# (resources/app.yml) overrides with resolved values. Catalog is always red_bricks_insurance.
 env:
   - name: LAKEBASE_INSTANCE_NAME
     value: red-bricks-command-center
@@ -17,7 +17,7 @@ env:
   - name: SQL_WAREHOUSE_ID
     value: auto
   - name: LLM_ENDPOINT
-    value: databricks-meta-llama-3-3-70b-instruct
+    value: databricks-llama-4-maverick
   - name: UC_CATALOG
     value: auto
   - name: UC_SCHEMA

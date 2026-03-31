@@ -6,8 +6,8 @@ command:
 
 # SQL_WAREHOUSE_ID and UC_CATALOG default to "auto" (runtime auto-detection).
 # When deployed via `databricks bundle deploy`, the DAB resource config
-# (resources/app_group_reporting.yml) overrides with ${var.warehouse_id}
-# and ${var.catalog} from databricks.yml target variables.
+# (resources/app_group_reporting.yml) overrides with resolved values.
+# Catalog is always red_bricks_insurance.
 env:
   - name: SQL_WAREHOUSE_ID
     value: auto

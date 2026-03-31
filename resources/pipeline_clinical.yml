@@ -2,11 +2,11 @@ resources:
   pipelines:
     clinical_pipeline:
       name: "[${bundle.target}] Red Bricks — Clinical Pipeline"
-      catalog: ${var.catalog}
+      catalog: red_bricks_insurance
       target: clinical
       configuration:
         source_volume: ${var.source_volume}
-        catalog: ${var.catalog}
+        catalog: red_bricks_insurance
         schema: clinical
       libraries:
         - file:

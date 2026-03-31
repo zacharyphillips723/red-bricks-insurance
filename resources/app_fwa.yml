@@ -20,7 +20,7 @@ resources:
           - name: LLM_ENDPOINT
             value: databricks-llama-4-maverick
           - name: UC_CATALOG
-            value: ${var.catalog}
+            value: red_bricks_insurance
           - name: UC_SCHEMA
             value: fwa
           - name: FWA_MODEL_ENDPOINT
@@ -31,3 +31,11 @@ resources:
             instance_name: fwa-investigations
             database_name: fwa_cases
             permission: CAN_CONNECT_AND_CREATE
+        - name: llm-endpoint
+          serving_endpoint:
+            name: databricks-llama-4-maverick
+            permission: CAN_QUERY
+        - name: fwa-model
+          serving_endpoint:
+            name: fwa-fraud-scorer
+            permission: CAN_QUERY

@@ -354,7 +354,7 @@ red-bricks-insurance/
 ### Prerequisites
 
 - Databricks CLI configured with workspace profile
-- Unity Catalog workspace with catalog/schema permissions
+- Unity Catalog workspace with a catalog named **`red_bricks_insurance`** (the bundle hardcodes this catalog name everywhere — pipelines, notebooks, apps, and agents all reference it directly)
 - Foundation model endpoint (`databricks-meta-llama-3-3-70b-instruct`) for AI gold tables
 
 ### Compute
@@ -363,20 +363,21 @@ All tasks run on **serverless** compute except `synthea_generation` which requir
 
 ### Targets
 
-| Target | Profile | Catalog | Use Case |
-|--------|---------|---------|----------|
-| `dev` (default) | `fe-vm-red-bricks-insurance` | `red_bricks_insurance` | Development |
-| `e2-field-eng` | `fe-demo-field-eng` | `zack_phillips_demos` | Field engineering demos (AWS) |
-| `hls-financial` | `hls-financial-foundation` | `hls_financial_foundation_catalog` | HLS Financial Foundation workspace (AWS) |
-| `prod` | `fe-vm-red-bricks-insurance` | `red_bricks_insurance` | Production |
+| Target | Profile | Use Case |
+|--------|---------|----------|
+| `dev` (default) | `fe-vm-red-bricks-insurance` | Development |
+| `e2-field-eng` | `fe-demo-field-eng` | Field engineering demos (AWS) |
+| `hls-financial` | `hls-financial-foundation` | HLS Financial Foundation workspace (AWS) |
+| `prod` | `fe-vm-red-bricks-insurance` | Production |
+
+> **Catalog:** All targets use the hardcoded catalog `red_bricks_insurance`. You must create this catalog on your workspace before deploying. The pipelines will create the 11 domain schemas automatically.
 
 ### Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `catalog` | `main` | Unity Catalog catalog |
-| `source_volume` | `/Volumes/{catalog}/raw/raw_sources` | Raw data volume path |
-| `warehouse_id` | `""` | SQL warehouse (optional) |
+| `source_volume` | `/Volumes/red_bricks_insurance/raw/raw_sources` | Raw data volume path |
+| `warehouse_id` | `""` | SQL warehouse (optional — auto-detected if omitted) |
 | `node_type_small` | `Standard_DS3_v2` | Small compute (4 vCPU, 14GB) |
 | `node_type_large` | `Standard_DS5_v2` | Large compute (16 vCPU, 56GB) |
 
@@ -384,7 +385,9 @@ All tasks run on **serverless** compute except `synthea_generation` which requir
 
 This bundle is designed to be fully portable — deploy to any workspace and everything auto-configures. No manual warehouse IDs, catalog names, or Genie space IDs to set.
 
-**1. Add a new target** in `databricks.yml`:
+**1. Create the catalog** — run `CREATE CATALOG IF NOT EXISTS red_bricks_insurance` on your workspace (or via Unity Catalog UI). The bundle hardcodes this name everywhere.
+
+**2. Add a new target** in `databricks.yml`:
 
 ```yaml
   my-workspace:
@@ -392,14 +395,13 @@ This bundle is designed to be fully portable — deploy to any workspace and eve
     workspace:
       profile: my-workspace-profile    # Databricks CLI profile name
     variables:
-      catalog: my_catalog_name         # Unity Catalog catalog to use
       node_type_small: m5.xlarge       # AWS — or Standard_DS3_v2 for Azure
       node_type_large: m5.4xlarge      # AWS — or Standard_DS5_v2 for Azure
 ```
 
 That's it. `warehouse_id` is optional — if omitted, the bootstrap task auto-detects a running warehouse and the apps auto-detect at startup.
 
-**2. Deploy and run the full pipeline:**
+**3. Deploy and run the full pipeline:**
 
 ```bash
 databricks bundle deploy --target my-workspace
@@ -411,12 +413,12 @@ databricks bundle run red_bricks_full_demo --target my-workspace
 - Discovers all deployed app service principals
 - Grants UC permissions (USE CATALOG, USE SCHEMA, SELECT) on all domain schemas
 - Grants SQL warehouse CAN_USE to all app SPs
-- Creates 4 Genie spaces with dynamic table references based on the catalog
+- Creates 4 Genie spaces with `red_bricks_insurance` table references
 - Grants Genie space CAN_RUN to all app SPs
 
 Once bootstrap completes, all three apps will be fully functional with no manual configuration.
 
-**3. Runtime auto-detection** — apps self-configure at startup:
+**4. Runtime auto-detection** — apps self-configure at startup:
 
 DAB resource config `${var.*}` values only resolve in resource definitions, not in source files uploaded to the workspace. Instead, each app uses an `env_config.py` module that auto-detects resources at startup:
 
@@ -434,24 +436,24 @@ The `app.yml` files use `auto` as a sentinel value for `SQL_WAREHOUSE_ID`, `UC_C
 - The catalog contains the expected schema (e.g., `analytics`, `fwa`) — created by the SDP pipelines
 - At least one Genie space exists with `CAN_RUN` for the SP (created by bootstrap)
 
-**4. Configuration flow:**
+**5. Configuration flow:**
 
 | Layer | How Values Are Set | Example |
 |-------|-------------------|---------|
-| **DAB variables** (`databricks.yml`) | Set per target in `variables:` | `catalog: my_catalog` |
-| **Job parameters** (`base_parameters`) | Auto-injected from `${var.catalog}`, `${var.warehouse_id}` | Notebook receives `catalog=my_catalog` |
-| **Notebook widgets** (`dbutils.widgets`) | Populated by job params; defaults used for manual runs | `dbutils.widgets.get("catalog")` |
-| **App env vars** (`app.yml`) | Set to `auto` → runtime auto-detection via `env_config.py` | `SQL_WAREHOUSE_ID=auto` → detected |
-| **Bootstrap task** | Auto-detects warehouse, discovers app SPs, creates Genie spaces | Fully dynamic |
+| **Catalog** | Hardcoded to `red_bricks_insurance` everywhere | Not configurable — this is a fictional company |
+| **DAB variables** (`databricks.yml`) | Set per target in `variables:` | `warehouse_id: abc123` |
+| **Job parameters** (`base_parameters`) | Notebooks default to `red_bricks_insurance`; warehouse injected from DAB | Notebook uses `catalog = "red_bricks_insurance"` |
+| **App env vars** (`app.yml`) | Catalog hardcoded; warehouse auto-detected if empty | `SQL_WAREHOUSE_ID=auto` → detected |
+| **Bootstrap task** | Auto-detects warehouse, discovers app SPs, creates Genie spaces, restarts apps | Fully dynamic |
 
-**5. Key environment variables** used by apps:
+**6. Key environment variables** used by apps:
 
 | Variable | Used By | Auto-Detected? |
 |----------|---------|----------------|
 | `SQL_WAREHOUSE_ID` | All apps | Yes — first running warehouse |
-| `UC_CATALOG` | All apps | Yes — catalog containing target `UC_SCHEMA` |
+| `UC_CATALOG` | All apps | Hardcoded to `red_bricks_insurance` |
 | `GENIE_SPACE_ID` | Command Center | Yes — first visible Genie space |
-| `LLM_ENDPOINT` | All apps | No — defaults per app (`databricks-llama-4-maverick` or `databricks-meta-llama-3-3-70b-instruct`) |
+| `LLM_ENDPOINT` | All apps | No — defaults to `databricks-llama-4-maverick` |
 | `LAKEBASE_INSTANCE_NAME` | Command Center, FWA app | No — set in `app.yml` (instance names are fixed) |
 | `LAKEBASE_DATABASE_NAME` | Command Center, FWA app | No — set in `app.yml` (database names are fixed) |
 | `FWA_MODEL_ENDPOINT` | FWA app | No — defaults to `fwa-fraud-scorer` |
@@ -513,7 +515,7 @@ The `bootstrap_workspace` task runs automatically at the end of both the full de
 3. **App service principal discovery** — Auto-discovers SPs for all deployed apps matching `red-bricks-*` or `rb-*` name patterns
 4. **Unity Catalog grants** — `USE CATALOG`, `BROWSE`, `USE SCHEMA`, `SELECT` on all 11 domain schemas for each app SP
 5. **SQL Warehouse grants** — `CAN_USE` on the auto-detected (or configured) warehouse for each app SP
-6. **Genie spaces** — Creates 4 Genie spaces (Analytics Assistant, FWA Analytics, Group Reporting, Financial Analytics) with dynamic table references based on the catalog. Validates tables exist before adding. Grants `CAN_RUN` to all app SPs. Skips spaces that already exist (matched by title).
+6. **Genie spaces** — Creates 4 Genie spaces (Analytics Assistant, FWA Analytics, Group Reporting, Financial Analytics) with `red_bricks_insurance` table references. Validates tables exist before adding. Grants `CAN_RUN` to all app SPs. Skips spaces that already exist (matched by title).
 7. **ML predictions table** — Pre-creates `analytics.fwa_ml_predictions` for gold MV compatibility
 8. **Operational data seeding** — Populates Lakebase with risk alerts (from gold tables) and FWA investigation cases (from silver/gold FWA tables)
 
@@ -526,7 +528,7 @@ databricks jobs submit --json '{
     "task_key": "bootstrap",
     "notebook_task": {
       "notebook_path": "/Users/<your-email>/.bundle/red-bricks-insurance/dev/files/src/notebooks/bootstrap_workspace",
-      "base_parameters": {"catalog": "red_bricks_insurance", "warehouse_id": "781064a3466c0984"}
+      "base_parameters": {"warehouse_id": "<your-warehouse-id>"}
     },
     "environment_key": "bootstrap_env"
   }],
@@ -560,7 +562,7 @@ Set in `resources/app_fwa.yml`:
 | `LAKEBASE_DATABASE_NAME` | `fwa_cases` |
 | `SQL_WAREHOUSE_ID` | Serverless SQL warehouse ID for Statement Execution API |
 | `LLM_ENDPOINT` | Foundation Model API endpoint (e.g., `databricks-llama-4-maverick`) |
-| `UC_CATALOG` | Unity Catalog name (e.g., `red_bricks_insurance`) |
+| `UC_CATALOG` | Hardcoded to `red_bricks_insurance` |
 | `FWA_MODEL_ENDPOINT` | Model serving endpoint for real-time scoring (optional) |
 | `GENIE_SPACE_ID` | Genie space ID for natural language SQL queries |
 
