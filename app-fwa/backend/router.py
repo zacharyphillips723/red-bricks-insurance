@@ -398,7 +398,7 @@ async def record_recovery(inv_id: str, recovery_in: RecordRecoveryIn):
                 INSERT INTO investigation_audit_log
                     (investigation_id, investigator_id, action_type, note, metadata_json)
                 VALUES (:inv_id, CAST(:cm_id AS uuid), 'recovery_recorded', :note,
-                    :meta::jsonb)
+                    CAST(:meta AS jsonb))
             """),
             {
                 "inv_id": inv_id,

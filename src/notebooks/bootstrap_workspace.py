@@ -395,6 +395,60 @@ elif app_sps and not warehouse_id:
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ### Grant Genie Space Permissions
+
+# COMMAND ----------
+
+if app_sps:
+    print("Granting Genie space permissions...\n")
+    import requests as _requests
+
+    _host = spark.conf.get("spark.databricks.workspaceUrl")
+    _token = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
+
+    # Discover all Genie spaces on the workspace
+    try:
+        genie_resp = _requests.get(
+            f"https://{_host}/api/2.0/genie/spaces",
+            headers={"Authorization": f"Bearer {_token}"},
+        )
+        genie_spaces = genie_resp.json().get("spaces", []) if genie_resp.status_code == 200 else []
+    except Exception as e:
+        print(f"  Could not list Genie spaces: {e}")
+        genie_spaces = []
+
+    if genie_spaces:
+        for space in genie_spaces:
+            space_id = space["space_id"]
+            space_title = space.get("title", "untitled")
+            print(f"  --- Genie Space: {space_title} ({space_id}) ---")
+
+            for sp_info in app_sps:
+                sp_name = sp_info["sp_name"]
+                app_name = sp_info["app_name"]
+
+                resp = _requests.put(
+                    f"https://{_host}/api/2.0/permissions/genie/{space_id}",
+                    headers={"Authorization": f"Bearer {_token}"},
+                    json={
+                        "access_control_list": [
+                            # Preserve owner
+                            {"user_name": w.current_user.me().user_name, "permission_level": "CAN_MANAGE"},
+                            # Grant app SP access
+                            {"service_principal_name": sp_name, "permission_level": "CAN_RUN"},
+                        ]
+                    },
+                )
+                if resp.status_code == 200:
+                    print(f"    {app_name}: CAN_RUN granted")
+                else:
+                    print(f"    {app_name}: {resp.status_code} — {resp.text[:200]}")
+    else:
+        print("  No Genie spaces found. Create one first (config/genie_space_setup.py).")
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## Step 4: Create Empty ML Predictions Table
 
 # COMMAND ----------

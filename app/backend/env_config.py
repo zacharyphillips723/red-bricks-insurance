@@ -58,6 +58,21 @@ def _auto_detect_catalog(w: WorkspaceClient) -> str:
         return "red_bricks_insurance"
 
 
+def _auto_detect_genie_space(w: WorkspaceClient) -> str:
+    """Find the first available Genie space."""
+    try:
+        resp = w.api_client.do("GET", "/api/2.0/genie/spaces")
+        spaces = resp.get("spaces", [])
+        if spaces:
+            space = spaces[0]
+            print(f"[env_config] Auto-detected Genie space: {space['space_id']} ({space.get('title', '')})")
+            return space["space_id"]
+        print("[env_config] WARNING: No Genie spaces found")
+    except Exception as e:
+        print(f"[env_config] Genie space auto-detection failed: {e}")
+    return ""
+
+
 _w = WorkspaceClient()
 
 _wh = os.environ.get("SQL_WAREHOUSE_ID", "")
@@ -66,8 +81,12 @@ SQL_WAREHOUSE_ID = _wh if _wh not in _SENTINEL else _auto_detect_warehouse(_w)
 _cat = os.environ.get("UC_CATALOG", "")
 UC_CATALOG = _cat if _cat not in _SENTINEL else _auto_detect_catalog(_w)
 
+_genie = os.environ.get("GENIE_SPACE_ID", "")
+GENIE_SPACE_ID = _genie if _genie not in _SENTINEL else _auto_detect_genie_space(_w)
+
 LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT") or "databricks-meta-llama-3-3-70b-instruct"
 
 print(f"[env_config] SQL_WAREHOUSE_ID={SQL_WAREHOUSE_ID}")
 print(f"[env_config] UC_CATALOG={UC_CATALOG}")
+print(f"[env_config] GENIE_SPACE_ID={GENIE_SPACE_ID}")
 print(f"[env_config] LLM_ENDPOINT={LLM_ENDPOINT}")

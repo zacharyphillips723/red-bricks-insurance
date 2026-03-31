@@ -13,7 +13,7 @@ env:
   - name: LAKEBASE_DATABASE_NAME
     value: red_bricks_alerts
   - name: GENIE_SPACE_ID
-    value: ""
+    value: auto
   - name: SQL_WAREHOUSE_ID
     value: auto
   - name: LLM_ENDPOINT

@@ -1,6 +1,5 @@
 """Databricks Genie Conversation API integration."""
 
-import os
 import time
 import traceback
 
@@ -8,9 +7,7 @@ from databricks.sdk import WorkspaceClient
 
 from .models import GenieQuestionIn, GenieResponseOut
 
-from .env_config import SQL_WAREHOUSE_ID
-
-GENIE_SPACE_ID = os.environ.get("GENIE_SPACE_ID") or ""
+from .env_config import SQL_WAREHOUSE_ID, GENIE_SPACE_ID
 
 
 def _poll_for_result(w, space_id, conversation_id, message_id, timeout=60):
