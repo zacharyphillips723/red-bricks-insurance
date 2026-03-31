@@ -382,7 +382,7 @@ All tasks run on **serverless** compute except `synthea_generation` which requir
 
 ### Deploying to a New Workspace
 
-This bundle is designed to be portable. To deploy to any Databricks workspace:
+This bundle is designed to be fully portable — deploy to any workspace and everything auto-configures. No manual warehouse IDs, catalog names, or Genie space IDs to set.
 
 **1. Add a new target** in `databricks.yml`:
 
@@ -393,43 +393,68 @@ This bundle is designed to be portable. To deploy to any Databricks workspace:
       profile: my-workspace-profile    # Databricks CLI profile name
     variables:
       catalog: my_catalog_name         # Unity Catalog catalog to use
-      warehouse_id: abc123def456       # SQL warehouse ID (find in SQL Warehouses UI)
       node_type_small: m5.xlarge       # AWS — or Standard_DS3_v2 for Azure
       node_type_large: m5.4xlarge      # AWS — or Standard_DS5_v2 for Azure
 ```
 
-**2. Configuration flow** — the DAB variables propagate automatically:
+That's it. `warehouse_id` is optional — if omitted, the bootstrap task auto-detects a running warehouse and the apps auto-detect at startup.
 
-| Layer | How Values Are Set | Example |
-|-------|-------------------|---------|
-| **DAB variables** (`databricks.yml`) | Set per target in `variables:` | `catalog: my_catalog` |
-| **Job parameters** (`base_parameters`) | Auto-injected from `${var.catalog}`, `${var.warehouse_id}` | Notebook receives `catalog=my_catalog` |
-| **Notebook widgets** (`dbutils.widgets`) | Populated by job params; defaults used for manual runs | `dbutils.widgets.get("catalog")` |
-| **App env vars** (`app.yml` / DAB resource) | Set in `resources/app_*.yml` via `${var.catalog}` | `UC_CATALOG=my_catalog` |
-| **Config scripts** (`config/*.py`) | Accept CLI arg or `UC_CATALOG` env var | `python genie_setup.py my_catalog` |
-
-**3. Key environment variables** used by apps and agents:
-
-| Variable | Used By | Description |
-|----------|---------|-------------|
-| `UC_CATALOG` | All apps, all agents | Unity Catalog catalog name |
-| `SQL_WAREHOUSE_ID` | All apps, agent deploys | SQL warehouse for Statement Execution API |
-| `LLM_ENDPOINT` | All apps, agent deploys | Foundation Model API endpoint (e.g., `databricks-llama-4-maverick`) |
-| `LAKEBASE_INSTANCE_NAME` | Command Center, FWA app | Lakebase PostgreSQL instance name |
-| `LAKEBASE_DATABASE_NAME` | Command Center, FWA app | Lakebase database name |
-| `GENIE_SPACE_ID` | All apps | Genie space ID for natural language queries |
-| `FWA_MODEL_ENDPOINT` | FWA app | Model serving endpoint for real-time fraud scoring |
-
-All values have sensible defaults (`red_bricks_insurance`, `databricks-llama-4-maverick`, etc.) so the bundle works out of the box for the default catalog. Override only what differs in your workspace.
-
-**4. Deploy and run:**
+**2. Deploy and run the full pipeline:**
 
 ```bash
 databricks bundle deploy --target my-workspace
 databricks bundle run red_bricks_full_demo --target my-workspace
 ```
 
-The `bootstrap_workspace` task runs automatically at the end and handles Lakebase provisioning, UC/warehouse grants for app service principals, and operational data seeding.
+**Let the full pipeline run to completion.** The `bootstrap_workspace` task runs at the end and automatically:
+- Creates Lakebase instances and seeds operational data
+- Discovers all deployed app service principals
+- Grants UC permissions (USE CATALOG, USE SCHEMA, SELECT) on all domain schemas
+- Grants SQL warehouse CAN_USE to all app SPs
+- Creates 4 Genie spaces with dynamic table references based on the catalog
+- Grants Genie space CAN_RUN to all app SPs
+
+Once bootstrap completes, all three apps will be fully functional with no manual configuration.
+
+**3. Runtime auto-detection** — apps self-configure at startup:
+
+DAB resource config `${var.*}` values only resolve in resource definitions, not in source files uploaded to the workspace. Instead, each app uses an `env_config.py` module that auto-detects resources at startup:
+
+| Resource | How It's Detected | Sentinel Value |
+|----------|-------------------|----------------|
+| **SQL Warehouse** | `w.warehouses.list()` → first RUNNING warehouse | `auto` |
+| **UC Catalog** | `w.catalogs.list()` → finds catalog containing the app's `UC_SCHEMA` | `auto` |
+| **Genie Space** | `GET /api/2.0/genie/spaces` → first available space the SP can see | `auto` |
+| **LLM Endpoint** | Hardcoded default per app | — |
+
+The `app.yml` files use `auto` as a sentinel value for `SQL_WAREHOUSE_ID`, `UC_CATALOG`, and `GENIE_SPACE_ID`. When `env_config.py` sees `auto`, it triggers runtime auto-detection using the Databricks SDK. This means the same source code works across any workspace without modification.
+
+**Prerequisites for auto-detection to work:**
+- At least one SQL warehouse exists and the app SP has `CAN_USE` (granted by bootstrap)
+- The catalog contains the expected schema (e.g., `analytics`, `fwa`) — created by the SDP pipelines
+- At least one Genie space exists with `CAN_RUN` for the SP (created by bootstrap)
+
+**4. Configuration flow:**
+
+| Layer | How Values Are Set | Example |
+|-------|-------------------|---------|
+| **DAB variables** (`databricks.yml`) | Set per target in `variables:` | `catalog: my_catalog` |
+| **Job parameters** (`base_parameters`) | Auto-injected from `${var.catalog}`, `${var.warehouse_id}` | Notebook receives `catalog=my_catalog` |
+| **Notebook widgets** (`dbutils.widgets`) | Populated by job params; defaults used for manual runs | `dbutils.widgets.get("catalog")` |
+| **App env vars** (`app.yml`) | Set to `auto` → runtime auto-detection via `env_config.py` | `SQL_WAREHOUSE_ID=auto` → detected |
+| **Bootstrap task** | Auto-detects warehouse, discovers app SPs, creates Genie spaces | Fully dynamic |
+
+**5. Key environment variables** used by apps:
+
+| Variable | Used By | Auto-Detected? |
+|----------|---------|----------------|
+| `SQL_WAREHOUSE_ID` | All apps | Yes — first running warehouse |
+| `UC_CATALOG` | All apps | Yes — catalog containing target `UC_SCHEMA` |
+| `GENIE_SPACE_ID` | Command Center | Yes — first visible Genie space |
+| `LLM_ENDPOINT` | All apps | No — defaults per app (`databricks-llama-4-maverick` or `databricks-meta-llama-3-3-70b-instruct`) |
+| `LAKEBASE_INSTANCE_NAME` | Command Center, FWA app | No — set in `app.yml` (instance names are fixed) |
+| `LAKEBASE_DATABASE_NAME` | Command Center, FWA app | No — set in `app.yml` (database names are fixed) |
+| `FWA_MODEL_ENDPOINT` | FWA app | No — defaults to `fwa-fraud-scorer` |
 
 ### Commands
 
@@ -481,15 +506,16 @@ After building, deploy the bundle normally with `databricks bundle deploy`.
 
 ## Workspace Bootstrap — Post-Deploy Setup
 
-The `bootstrap_workspace` task runs automatically at the end of both the full demo and refresh jobs. It handles all post-deploy provisioning:
+The `bootstrap_workspace` task runs automatically at the end of both the full demo and refresh jobs. It handles all post-deploy provisioning and is fully **idempotent** — safe to re-run at any time.
 
-1. **Lakebase instances** — Creates `red-bricks-command-center` and `fwa-investigations` instances, databases, and DDL schemas
-2. **Staff seeding** — Inserts care managers and fraud investigators
-3. **App service principal discovery** — Finds SPs for all deployed apps (Command Center, FWA Portal, Group Reporting)
-4. **Unity Catalog grants** — `USE CATALOG`, `USE SCHEMA`, `SELECT` on all 11 domain schemas for each app SP
-5. **SQL Warehouse grants** — `CAN_USE` on the configured warehouse for each app SP
-6. **ML predictions table** — Pre-creates `analytics.fwa_ml_predictions` for gold MV compatibility
-7. **Operational data seeding** — Populates Lakebase with risk alerts (from gold tables) and FWA investigation cases (from silver/gold FWA tables)
+1. **Lakebase instances** — Creates `red-bricks-command-center` and `fwa-investigations` instances, databases, and DDL schemas (skips if already exist)
+2. **Staff seeding** — Inserts care managers and fraud investigators (`ON CONFLICT DO NOTHING`)
+3. **App service principal discovery** — Auto-discovers SPs for all deployed apps matching `red-bricks-*` or `rb-*` name patterns
+4. **Unity Catalog grants** — `USE CATALOG`, `BROWSE`, `USE SCHEMA`, `SELECT` on all 11 domain schemas for each app SP
+5. **SQL Warehouse grants** — `CAN_USE` on the auto-detected (or configured) warehouse for each app SP
+6. **Genie spaces** — Creates 4 Genie spaces (Analytics Assistant, FWA Analytics, Group Reporting, Financial Analytics) with dynamic table references based on the catalog. Validates tables exist before adding. Grants `CAN_RUN` to all app SPs. Skips spaces that already exist (matched by title).
+7. **ML predictions table** — Pre-creates `analytics.fwa_ml_predictions` for gold MV compatibility
+8. **Operational data seeding** — Populates Lakebase with risk alerts (from gold tables) and FWA investigation cases (from silver/gold FWA tables)
 
 To run manually (e.g., after a fresh deploy without running the full job):
 
