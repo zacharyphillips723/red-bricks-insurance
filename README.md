@@ -2,6 +2,37 @@
 
 Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB). One deployable bundle that runs end-to-end: Synthea clinical generation → synthetic insurance data → bronze/silver/gold SDP pipelines → cross-domain analytics with AI classification → ML model training → intelligent agents → three purpose-built applications.
 
+## Table of Contents
+
+- [Architecture](#architecture)
+- [Pipeline DAG](#pipeline-dag)
+- [Data Domains](#data-domains)
+- [Schema Architecture](#schema-architecture)
+- [SDP Pipelines (Medallion Architecture)](#sdp-pipelines-medallion-architecture)
+  - [Gold Analytics Tables](#gold-analytics-tables)
+  - [Metric Views (Governed Semantic Layer)](#metric-views-governed-semantic-layer)
+  - [Clinical Pipeline (Synthea → dbignite → SDP)](#clinical-pipeline-synthea--dbignite--sdp)
+- [AI Agents](#ai-agents)
+- [Databricks Apps](#databricks-apps)
+  - [Command Center](#command-center-app)
+  - [Group Reporting Portal](#group-reporting-portal-app-group-reporting)
+  - [FWA Investigation Portal](#fwa-investigation-portal-app-fwa)
+- [Dashboards](#dashboards)
+- [Project Structure](#project-structure)
+- [Deployment](#deployment)
+  - [Prerequisites](#prerequisites)
+  - [Compute](#compute)
+  - [Targets](#targets)
+  - [Variables](#variables)
+  - [Deploying to a New Workspace](#deploying-to-a-new-workspace)
+  - [Commands](#commands)
+- [Apps — Frontend Build](#apps--frontend-build)
+- [Workspace Bootstrap — Post-Deploy Setup](#workspace-bootstrap--post-deploy-setup)
+- [Lakebase & App Authentication](#lakebase--app-authentication)
+- [Deployment Notes & Known Issues](#deployment-notes--known-issues)
+- [Customization](#customization)
+- [Required Packages](#required-packages)
+
 ## Architecture
 
 ```
@@ -512,12 +543,15 @@ The `bootstrap_workspace` task runs automatically at the end of both the full de
 
 1. **Lakebase instances** — Creates `red-bricks-command-center` and `fwa-investigations` instances, databases, and DDL schemas (skips if already exist)
 2. **Staff seeding** — Inserts care managers and fraud investigators (`ON CONFLICT DO NOTHING`)
-3. **App service principal discovery** — Auto-discovers SPs for all deployed apps matching `red-bricks-*` or `rb-*` name patterns
-4. **Unity Catalog grants** — `USE CATALOG`, `BROWSE`, `USE SCHEMA`, `SELECT` on all 11 domain schemas for each app SP
+3. **App service principal discovery** — Auto-discovers SPs for all deployed apps matching `red-bricks-*` or `rb-*` name patterns, resolving each SP's `service_principal_client_id` (UUID) for use in all subsequent grants
+4. **Unity Catalog grants** — `USE CATALOG`, `BROWSE`, `USE SCHEMA`, `SELECT` on all 11 domain schemas for each app SP (using UUID)
 5. **SQL Warehouse grants** — `CAN_USE` on the auto-detected (or configured) warehouse for each app SP
-6. **Genie spaces** — Creates 4 Genie spaces (Analytics Assistant, FWA Analytics, Group Reporting, Financial Analytics) with `red_bricks_insurance` table references. Validates tables exist before adding. Grants `CAN_RUN` to all app SPs. Skips spaces that already exist (matched by title).
-7. **ML predictions table** — Pre-creates `analytics.fwa_ml_predictions` for gold MV compatibility
-8. **Operational data seeding** — Populates Lakebase with risk alerts (from gold tables) and FWA investigation cases (from silver/gold FWA tables)
+6. **Serving endpoint grants** — `CAN_QUERY` on all model serving endpoints (LLM, embedding, FWA scorer) for each app SP
+7. **Vector search endpoint grants** — `CAN_USE` on the vector search endpoint (resolves endpoint UUID dynamically for Azure compatibility)
+8. **Genie spaces** — Creates 4 Genie spaces (Analytics Assistant, FWA Analytics, Group Reporting, Financial Analytics) with `red_bricks_insurance` table references. Validates tables exist before adding. Grants `CAN_RUN` to all app SPs. Skips spaces that already exist (matched by title).
+9. **ML predictions table** — Pre-creates `analytics.fwa_ml_predictions` for gold MV compatibility
+10. **Operational data seeding** — Populates Lakebase with risk alerts (from gold tables) and FWA investigation cases (from silver/gold FWA tables)
+11. **App source code deployment** — Deploys source code to each app and restarts them so they pick up all grants and Lakebase connectivity
 
 To run manually (e.g., after a fresh deploy without running the full job):
 
@@ -565,6 +599,69 @@ Set in `resources/app_fwa.yml`:
 | `UC_CATALOG` | Hardcoded to `red_bricks_insurance` |
 | `FWA_MODEL_ENDPOINT` | Model serving endpoint for real-time scoring (optional) |
 | `GENIE_SPACE_ID` | Genie space ID for natural language SQL queries |
+
+## Lakebase & App Authentication
+
+The Command Center and FWA Portal apps connect to Lakebase Provisioned (managed PostgreSQL) for transactional state. Authentication uses Databricks OAuth — the app's service principal generates a token via `generate_database_credential()` and connects as a PostgreSQL role mapped to its identity.
+
+### How Security Labels Work
+
+Lakebase uses **security labels** to map a Databricks identity (user email or SP UUID) to a PostgreSQL role. Without a security label, OAuth authentication fails with: `"no role security label was configured in postgres for role"`.
+
+Security labels are provisioned in two ways:
+
+1. **App `database` resource** (preferred) — Declaring a `database` resource in the DAB app YAML with `CAN_CONNECT_AND_CREATE` automatically creates the PostgreSQL role and security label for the app's SP. This is the mechanism used in `resources/app.yml` and `resources/app_fwa.yml`.
+
+2. **`databricks_create_role()` SQL function** (fallback) — Connect to the Lakebase instance as an admin and run:
+   ```sql
+   CREATE EXTENSION IF NOT EXISTS databricks_auth;
+   SELECT databricks_create_role('<sp_client_id_uuid>', 'SERVICE_PRINCIPAL');
+   GRANT CONNECT, CREATE ON DATABASE <db_name> TO "<sp_client_id_uuid>";
+   ```
+
+### Lifecycle & Deploy Order
+
+The app `database` resource can only provision the security label if the Lakebase instance **already exists** at deploy time. On a fresh workspace:
+
+1. `bundle deploy` — creates apps with `database` resources declared (Lakebase instances don't exist yet, so security label provisioning is deferred)
+2. Run the full pipeline — `bootstrap_workspace` creates Lakebase instances, databases, DDL, and seeds data
+3. The apps receive new SPs whose security labels were provisioned because the instances pre-existed from a prior run, **or** you run `bundle deploy` a second time to trigger the security label provisioning now that the instances exist
+
+**If security labels are missing after the pipeline completes**, run one of:
+- `databricks bundle deploy` again (triggers app resource processing with existing instances)
+- The `databricks_create_role()` SQL fallback from bootstrap (Option B)
+
+### Token Refresh
+
+OAuth tokens expire after 1 hour. Both apps implement a background refresh loop (every 50 minutes) using SQLAlchemy's `do_connect` event to inject fresh tokens. See `app/backend/database.py` and `app-fwa/backend/database.py`.
+
+## Deployment Notes & Known Issues
+
+### First Run Must Use the Full Pipeline
+
+The **Refresh (no Synthea)** job skips Synthea generation, which means `clinical.silver_lab_results` and other clinical tables won't exist. The `gold_analytics_pipeline` depends on these tables and will fail, cascading to `bootstrap_workspace` and all downstream tasks.
+
+**Always use the Full Demo Pipeline for the first deployment to a new workspace.** The Refresh job is for subsequent runs where Synthea data already exists.
+
+### `bundle destroy` Creates New Service Principals
+
+Destroying and redeploying the bundle assigns **new** SP UUIDs to each app. The `bootstrap_workspace` task handles this dynamically by discovering current SPs at runtime. However, any manually applied Lakebase security labels from a prior deployment will reference stale UUIDs.
+
+### SP Grants Use UUIDs (Not Display Names)
+
+All grants in `bootstrap_workspace` use the SP's `service_principal_client_id` (UUID / `application_id`), not the display name. This is required for:
+- SQL `GRANT` statements (`GRANT USE CATALOG ... TO '<uuid>'`)
+- REST API permissions (warehouse, serving endpoints, vector search)
+
+On Azure, the vector search endpoint permissions API requires the **endpoint UUID** (not name) in the URL path. Bootstrap dynamically resolves this via the VS endpoint API.
+
+### `AutoCaptureConfigInput` Is Deprecated
+
+The `AutoCaptureConfigInput` parameter for serving endpoint creation (legacy inference tables) now **blocks** the API call entirely. `train_fwa_model.py` creates the `fwa-fraud-scorer` endpoint without it and includes retry logic for transient failures.
+
+### Model Version Registration Delay
+
+After `mlflow.register_model()`, the model version may be in `PENDING_REGISTRATION` state. `train_fwa_model.py` polls for up to 5 minutes for the version to reach `READY` before creating the serving endpoint.
 
 ## Customization
 

@@ -26,16 +26,15 @@ resources:
           - name: FWA_MODEL_ENDPOINT
             value: fwa-fraud-scorer
       resources:
-        - name: fwa-lakebase
-          database:
-            instance_name: fwa-investigations
-            database_name: fwa_cases
-            permission: CAN_CONNECT_AND_CREATE
+        # fwa-fraud-scorer serving endpoint is created at runtime by train_fwa_model task.
+        # The app's service principal gets CAN_QUERY via bootstrap_workspace grants.
         - name: llm-endpoint
           serving_endpoint:
             name: databricks-llama-4-maverick
             permission: CAN_QUERY
-        - name: fwa-model
-          serving_endpoint:
-            name: fwa-fraud-scorer
-            permission: CAN_QUERY
+        # Lakebase — provisions the security label so the app SP can authenticate via OAuth
+        - name: lakebase-fwa
+          database:
+            instance_name: fwa-investigations
+            database_name: fwa_cases
+            permission: CAN_CONNECT_AND_CREATE

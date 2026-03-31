@@ -518,52 +518,78 @@ from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.serving import (
     EndpointCoreConfigInput,
     ServedEntityInput,
-    AutoCaptureConfigInput,
 )
+import time
 
 w = WorkspaceClient()
 
 endpoint_name = "fwa-fraud-scorer"
-inference_log_table = f"{catalog}.{ANALYTICS_SCHEMA}.fwa_model_serving_logs"
 
-try:
-    # Create or update the serving endpoint
-    w.serving_endpoints.create(
-        name=endpoint_name,
-        config=EndpointCoreConfigInput(
-            served_entities=[
-                ServedEntityInput(
-                    entity_name=MODEL_NAME,
-                    entity_version=latest_version.version,
-                    workload_size="Small",
-                    scale_to_zero_enabled=True,
-                ),
-            ],
-            auto_capture_config=AutoCaptureConfigInput(
-                catalog_name=catalog,
-                schema_name=ANALYTICS_SCHEMA,
-                table_name_prefix="fwa_model_serving",
-                enabled=True,
-            ),
-        ),
-    )
-    print(f"Serving endpoint '{endpoint_name}' created with inference table logging.")
-    print(f"  Inference logs will be written to: {inference_log_table}")
-except Exception as e:
-    if "already exists" in str(e).lower():
-        print(f"Serving endpoint '{endpoint_name}' already exists — updating...")
-        w.serving_endpoints.update_config(
+# Wait for the model version to be READY in Unity Catalog before creating the endpoint.
+# After log_model + set_alias, the version may still be in PENDING_REGISTRATION state.
+print(f"Waiting for model version {latest_version.version} to be READY in UC...")
+_max_wait = 300  # 5 minutes
+_start = time.time()
+while time.time() - _start < _max_wait:
+    _mv = client.get_model_version(MODEL_NAME, latest_version.version)
+    _status = getattr(_mv, "status", None) or "UNKNOWN"
+    if _status == "READY":
+        print(f"  Model version {latest_version.version} is READY.")
+        break
+    print(f"  Status: {_status} — waiting 10s...")
+    time.sleep(10)
+else:
+    print(f"  WARNING: Model version still not READY after {_max_wait}s. Attempting endpoint creation anyway.")
+
+# Create or update the serving endpoint
+# NOTE: Legacy auto_capture_config (inference tables) is deprecated.
+# Use AI Gateway inference tables instead if payload logging is needed.
+_endpoint_created = False
+for _attempt in range(3):
+    try:
+        w.serving_endpoints.create(
             name=endpoint_name,
-            served_entities=[
-                ServedEntityInput(
-                    entity_name=MODEL_NAME,
-                    entity_version=latest_version.version,
-                    workload_size="Small",
-                    scale_to_zero_enabled=True,
-                ),
-            ],
+            config=EndpointCoreConfigInput(
+                served_entities=[
+                    ServedEntityInput(
+                        entity_name=MODEL_NAME,
+                        entity_version=latest_version.version,
+                        workload_size="Small",
+                        scale_to_zero_enabled=True,
+                    ),
+                ],
+            ),
         )
-        print(f"  Endpoint updated to model version {latest_version.version}")
-    else:
-        print(f"  Serving endpoint creation skipped: {e}")
-        print("  Batch inference table is available as fallback.")
+        print(f"Serving endpoint '{endpoint_name}' created.")
+        _endpoint_created = True
+        break
+    except Exception as e:
+        _err = str(e)
+        if "already exists" in _err.lower():
+            print(f"Serving endpoint '{endpoint_name}' already exists — updating config...")
+            try:
+                w.serving_endpoints.update_config(
+                    name=endpoint_name,
+                    served_entities=[
+                        ServedEntityInput(
+                            entity_name=MODEL_NAME,
+                            entity_version=latest_version.version,
+                            workload_size="Small",
+                            scale_to_zero_enabled=True,
+                        ),
+                    ],
+                )
+                print(f"  Endpoint updated to model version {latest_version.version}")
+                _endpoint_created = True
+            except Exception as e2:
+                print(f"  Endpoint update also failed: {e2}")
+            break
+        else:
+            print(f"  Attempt {_attempt + 1}/3 — endpoint creation failed: {_err}")
+            if _attempt < 2:
+                time.sleep(15)
+
+if not _endpoint_created:
+    print(f"\nWARNING: Serving endpoint '{endpoint_name}' could not be created.")
+    print(f"  Batch inference table ({predictions_table_name}) is available as fallback.")
+    print(f"  To create manually: Workspace > Serving > New Endpoint > model={MODEL_NAME}")

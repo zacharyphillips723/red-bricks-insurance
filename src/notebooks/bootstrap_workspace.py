@@ -209,6 +209,32 @@ def grant_public_access(instance_name: str, database_name: str) -> None:
         conn.commit()
     print(f"  PUBLIC access granted.")
 
+
+def create_lakebase_roles_for_sps(instance_name: str, database_name: str, sp_client_ids: list[str]) -> None:
+    """Create PostgreSQL roles for app service principals.
+
+    Apps connect to Lakebase as their SP client_id (UUID). The role must exist
+    in PostgreSQL before the connection succeeds, even with PUBLIC grants.
+    """
+    if not sp_client_ids:
+        return
+    print(f"  Creating Lakebase roles for {len(sp_client_ids)} app SPs...")
+    with get_pg_connection(instance_name, database_name) as conn:
+        with conn.cursor() as cur:
+            for sp_id in sp_client_ids:
+                try:
+                    # Use quoted identifier — UUIDs contain hyphens
+                    cur.execute(f'CREATE ROLE "{sp_id}" WITH LOGIN')
+                    print(f"    Role created: {sp_id}")
+                except Exception as e:
+                    if "already exists" in str(e).lower():
+                        print(f"    Role exists: {sp_id}")
+                        conn.rollback()
+                    else:
+                        print(f"    Role creation failed for {sp_id}: {e}")
+                        conn.rollback()
+        conn.commit()
+
 # COMMAND ----------
 
 print("=" * 60)
@@ -291,28 +317,39 @@ print(f"  {len(FRAUD_INVESTIGATORS)} fraud investigators seeded.")
 # COMMAND ----------
 
 def discover_app_service_principals() -> list[dict]:
-    """Discover service principals for all deployed apps."""
+    """Discover service principals for all deployed apps.
+
+    Returns the service_principal_client_id (UUID / application_id) as sp_name,
+    which is the identifier accepted by both SQL GRANT and REST API permissions.
+    """
     sps = []
     for app_name in APP_NAME_PATTERNS:
         try:
             app = w.apps.get(app_name)
-            sp_name = getattr(app, "service_principal_name", None) or getattr(app, "effective_service_principal_name", None)
             sp_id = getattr(app, "service_principal_id", None) or getattr(app, "effective_service_principal_id", None)
 
-            # Try the app's service_principal_client_id if available
-            if not sp_name and hasattr(app, "service_principal_client_id"):
-                sp_name = app.service_principal_client_id
+            # Prefer service_principal_client_id (UUID) — this is the application_id
+            # that SQL GRANT and REST API permissions both accept.
+            sp_client_id = getattr(app, "service_principal_client_id", None)
 
-            # Fallback: list SPs matching the app name pattern
-            if not sp_name:
+            # Fallback: look up the SP by numeric ID to get its application_id
+            if not sp_client_id and sp_id:
+                try:
+                    sp_obj = w.service_principals.get(sp_id)
+                    sp_client_id = sp_obj.application_id
+                except Exception:
+                    pass
+
+            # Last resort: search by display name
+            if not sp_client_id:
                 all_sps = list(w.service_principals.list(filter=f"displayName co \"{app_name}\""))
                 if all_sps:
-                    sp_name = all_sps[0].application_id
-                    sp_id = all_sps[0].id
+                    sp_client_id = all_sps[0].application_id
+                    sp_id = sp_id or all_sps[0].id
 
-            if sp_name:
-                sps.append({"app_name": app_name, "sp_name": sp_name, "sp_id": sp_id})
-                print(f"  {app_name}: SP={sp_name} (ID={sp_id})")
+            if sp_client_id:
+                sps.append({"app_name": app_name, "sp_name": sp_client_id, "sp_id": sp_id})
+                print(f"  {app_name}: SP client_id={sp_client_id} (ID={sp_id})")
             else:
                 print(f"  {app_name}: WARNING — could not discover service principal")
         except Exception as e:
@@ -330,6 +367,21 @@ app_sps = discover_app_service_principals()
 if not app_sps:
     print("\nNo app service principals found. Run 'databricks bundle deploy' first.")
     print("Skipping grant steps.")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Create Lakebase Roles for App Service Principals
+
+# COMMAND ----------
+
+# Apps connect to Lakebase using their SP client_id (UUID) as the PostgreSQL username.
+# The role must exist before the connection succeeds, even with PUBLIC grants.
+if app_sps:
+    sp_client_ids = [sp["sp_name"] for sp in app_sps]
+    for cfg in LAKEBASE_CONFIGS:
+        print(f"\n--- {cfg['instance_name']} / {cfg['database_name']} ---")
+        create_lakebase_roles_for_sps(cfg["instance_name"], cfg["database_name"], sp_client_ids)
 
 # COMMAND ----------
 
@@ -397,6 +449,74 @@ if app_sps and warehouse_id:
 elif app_sps and not warehouse_id:
     print("No warehouse_id provided — skipping warehouse grants.")
     print("Set the warehouse_id widget and re-run this cell if needed.")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Grant Serving Endpoint & Vector Search Permissions
+
+# COMMAND ----------
+
+if app_sps:
+    import requests as _req_ep
+    _host_ep = spark.conf.get("spark.databricks.workspaceUrl")
+    _token_ep = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
+    _ep_headers = {"Authorization": f"Bearer {_token_ep}", "Content-Type": "application/json"}
+
+    # Serving endpoints that app SPs need CAN_QUERY on (beyond Foundation Model API)
+    CUSTOM_ENDPOINTS = ["fwa-fraud-scorer"]
+
+    for ep_name in CUSTOM_ENDPOINTS:
+        print(f"\nGranting CAN_QUERY on serving endpoint '{ep_name}'...")
+        for sp_info in app_sps:
+            resp = _req_ep.patch(
+                f"https://{_host_ep}/api/2.0/permissions/serving-endpoints/{ep_name}",
+                headers=_ep_headers,
+                json={
+                    "access_control_list": [
+                        {"service_principal_name": sp_info["sp_name"], "permission_level": "CAN_QUERY"}
+                    ]
+                },
+            )
+            if resp.status_code == 200:
+                print(f"  {sp_info['app_name']}: CAN_QUERY granted")
+            else:
+                print(f"  {sp_info['app_name']}: {resp.status_code} — {resp.text[:200]}")
+
+    # Vector Search — grant CAN_USE on the endpoint
+    VS_ENDPOINT_NAME = "red-bricks-vs-endpoint"
+
+    # Look up the endpoint UUID — Azure requires UUID in the permissions URL path
+    _vs_endpoint_id = None
+    try:
+        _vs_resp = _req_ep.get(
+            f"https://{_host_ep}/api/2.0/vector-search/endpoints/{VS_ENDPOINT_NAME}",
+            headers=_ep_headers,
+        )
+        if _vs_resp.status_code == 200:
+            _vs_endpoint_id = _vs_resp.json().get("id", VS_ENDPOINT_NAME)
+        else:
+            _vs_endpoint_id = VS_ENDPOINT_NAME  # fall back to name (works on AWS)
+    except Exception:
+        _vs_endpoint_id = VS_ENDPOINT_NAME
+
+    print(f"\nGranting vector search permissions (endpoint id={_vs_endpoint_id})...")
+    for sp_info in app_sps:
+        sp_name = sp_info["sp_name"]
+        # Grant CAN_USE on the vector search endpoint
+        resp = _req_ep.patch(
+            f"https://{_host_ep}/api/2.0/permissions/vector-search-endpoints/{_vs_endpoint_id}",
+            headers=_ep_headers,
+            json={
+                "access_control_list": [
+                    {"service_principal_name": sp_name, "permission_level": "CAN_USE"}
+                ]
+            },
+        )
+        if resp.status_code == 200:
+            print(f"  {sp_info['app_name']}: CAN_USE on VS endpoint granted")
+        else:
+            print(f"  {sp_info['app_name']}: VS endpoint — {resp.status_code} — {resp.text[:200]}")
 
 # COMMAND ----------
 
@@ -945,28 +1065,54 @@ inv_count = seed_fwa_investigations()
 # COMMAND ----------
 
 print("=" * 60)
-print("STEP 6: Restart Apps (re-initialize connections + auto-detect)")
+print("STEP 6: Deploy & Restart Apps")
 print("=" * 60)
 
-restart_count = 0
+# Map app names to their source code directories (relative to bundle root).
+# The DAB creates the app resource but does NOT deploy source code automatically.
+# This step ensures source code is deployed and apps are restarted with fresh config.
+APP_SOURCE_CODE_MAP = {
+    "red-bricks-command-center-app": "app",
+    "red-bricks-fwa-portal-app": "app-fwa",
+}
+# Group reporting app name varies by target (rb-grp-rpt-dev, rb-grp-rpt-prod, etc.)
+for _app_name in APP_NAME_PATTERNS:
+    if _app_name.startswith("rb-grp-rpt"):
+        APP_SOURCE_CODE_MAP[_app_name] = "app-group-reporting"
+
+deploy_count = 0
 for app_name in APP_NAME_PATTERNS:
     try:
         app_info = w.apps.get(app_name)
-        status = getattr(app_info, "status", None)
-        active_deployment = getattr(app_info, "active_deployment", None)
-        # Only restart apps that are currently running
-        if status and getattr(status, "state", None) and str(status.state).upper() in ("RUNNING", "ACTIVE"):
-            print(f"  Restarting {app_name}...")
+        source_dir = APP_SOURCE_CODE_MAP.get(app_name)
+
+        if source_dir:
+            source_path = str(_repo_root / source_dir)
+            print(f"  Deploying {app_name} from {source_path}...")
+            try:
+                w.apps.deploy(app_name, source_code_path=source_path).result()
+                print(f"    {app_name}: deployed ✓")
+                deploy_count += 1
+            except Exception as deploy_err:
+                print(f"    {app_name}: deploy failed ({deploy_err}), trying stop+start instead...")
+                try:
+                    w.apps.stop(name=app_name).result()
+                    w.apps.start(name=app_name).result()
+                    print(f"    {app_name}: restarted ✓")
+                    deploy_count += 1
+                except Exception as restart_err:
+                    print(f"    {app_name}: restart also failed ({restart_err})")
+        else:
+            # No source code mapping — just restart
+            print(f"  Restarting {app_name} (no source code mapping)...")
             w.apps.stop(name=app_name).result()
             w.apps.start(name=app_name).result()
             print(f"    {app_name}: restarted ✓")
-            restart_count += 1
-        else:
-            print(f"  {app_name}: not running (state={status}), skipping")
+            deploy_count += 1
     except Exception as e:
-        print(f"  {app_name}: restart failed ({e})")
+        print(f"  {app_name}: failed ({e})")
 
-print(f"\n  {restart_count} apps restarted.")
+print(f"\n  {deploy_count} apps deployed/restarted.")
 
 # COMMAND ----------
 
@@ -1020,7 +1166,7 @@ print(f"\n  Alerts seeded: {alert_count}")
 print(f"  Investigations seeded: {inv_count}")
 print(f"  ML predictions table: {catalog}.analytics.fwa_ml_predictions")
 
-print(f"\n  Apps restarted: {restart_count}")
+print(f"\n  Apps deployed/restarted: {deploy_count}")
 
 print("\n" + "=" * 60)
 print("Next steps:")

@@ -26,11 +26,6 @@ resources:
           - name: UC_SCHEMA
             value: analytics
       resources:
-        - name: lakebase
-          database:
-            instance_name: red-bricks-command-center
-            database_name: red_bricks_alerts
-            permission: CAN_CONNECT_AND_CREATE
         - name: llm-endpoint
           serving_endpoint:
             name: databricks-llama-4-maverick
@@ -39,6 +34,11 @@ resources:
           serving_endpoint:
             name: databricks-bge-large-en
             permission: CAN_QUERY
-        - name: vs-index
-          vector_search_index:
-            index_name: red_bricks_insurance.documents.case_notes_vs_index
+        # Lakebase — provisions the security label so the app SP can authenticate via OAuth
+        - name: lakebase-cc
+          database:
+            instance_name: red-bricks-command-center
+            database_name: red_bricks_alerts
+            permission: CAN_CONNECT_AND_CREATE
+        # vector_search_index not yet supported as a DAB app resource
+        # The app accesses vs index via SDK using its service principal

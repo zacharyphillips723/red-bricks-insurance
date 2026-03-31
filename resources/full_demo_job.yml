@@ -2,6 +2,19 @@ resources:
   jobs:
     red_bricks_full_demo:
       name: "[${bundle.target}] Red Bricks Insurance — Full Demo Pipeline"
+      job_clusters:
+        - job_cluster_key: synthea_cluster
+          new_cluster:
+            spark_version: "16.2.x-scala2.12"
+            node_type_id: ${var.node_type_small}
+            num_workers: 0
+            data_security_mode: SINGLE_USER
+            spark_conf:
+              spark.master: "local[*, 4]"
+              spark.databricks.cluster.profile: singleNode
+            custom_tags:
+              ResourceClass: SingleNode
+
       tasks:
         # Step 1: Generate synthetic insurance data (reads Synthea demographics)
         - task_key: data_generation
@@ -80,6 +93,7 @@ resources:
         # Synthea generation (ROOT) → data_generation reads demographics
         # parse_fhir_with_dbignite depends on BOTH synthea_generation AND data_generation
         - task_key: synthea_generation
+          job_cluster_key: synthea_cluster
           notebook_task:
             notebook_path: ../src/notebooks/run_synthea_generation.py
             base_parameters:
@@ -228,6 +242,7 @@ resources:
             - task_key: gold_analytics_pipeline
             - task_key: fwa_pipeline
             - task_key: train_fwa_model
+            - task_key: setup_vector_search
           notebook_task:
             notebook_path: ../src/notebooks/bootstrap_workspace.py
             base_parameters:

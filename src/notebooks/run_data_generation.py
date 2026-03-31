@@ -83,11 +83,54 @@ from src.data_generation.domains import fwa as dom_fwa
 
 # COMMAND ----------
 
-# Catalog may already exist (e.g. FEVM Default Storage); skip creation errors gracefully
+# --- Catalog creation with graceful fallback ---
+# Try SQL first; if permissions block us, attempt REST API with managed location;
+# finally verify the catalog is usable or fail with a clear message.
+_catalog_ready = False
+
+# Attempt 1: SQL CREATE CATALOG
 try:
     spark.sql(f"CREATE CATALOG IF NOT EXISTS {catalog}")
+    print(f"Catalog '{catalog}' created (or already exists) via SQL.")
+    _catalog_ready = True
 except Exception as e:
-    print(f"Catalog creation skipped (may already exist): {e}")
+    print(f"SQL CREATE CATALOG failed: {e}")
+
+# Attempt 2: REST API with workspace default storage (some metastores require this)
+if not _catalog_ready:
+    try:
+        import requests as _cat_req
+        _cat_host = spark.conf.get("spark.databricks.workspaceUrl")
+        _cat_token = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
+        _cat_resp = _cat_req.post(
+            f"https://{_cat_host}/api/2.1/unity-catalog/catalogs",
+            headers={"Authorization": f"Bearer {_cat_token}", "Content-Type": "application/json"},
+            json={"name": catalog, "comment": "Red Bricks Insurance demo catalog"},
+        )
+        if _cat_resp.status_code == 200:
+            print(f"Catalog '{catalog}' created via REST API.")
+            _catalog_ready = True
+        elif "already exists" in _cat_resp.text.lower():
+            print(f"Catalog '{catalog}' already exists.")
+            _catalog_ready = True
+        else:
+            print(f"REST API catalog creation failed: {_cat_resp.status_code} — {_cat_resp.text[:300]}")
+    except Exception as e2:
+        print(f"REST API catalog creation failed: {e2}")
+
+# Attempt 3: Check if the catalog already exists and is usable
+if not _catalog_ready:
+    try:
+        spark.sql(f"USE CATALOG {catalog}")
+        print(f"Catalog '{catalog}' exists and is usable (created externally).")
+        _catalog_ready = True
+    except Exception as e3:
+        print(f"Catalog '{catalog}' does not exist and cannot be created.")
+        print(f"Please create the catalog manually or pass an existing catalog name via the 'catalog' widget.")
+        raise RuntimeError(
+            f"Cannot proceed without catalog '{catalog}'. "
+            f"Create it in the workspace UI or pass a different catalog name."
+        ) from e3
 
 # Create all domain schemas
 DOMAIN_SCHEMAS = [
