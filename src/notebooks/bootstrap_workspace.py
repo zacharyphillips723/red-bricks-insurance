@@ -13,9 +13,11 @@
 # MAGIC 4. Discovers app service principals and grants:
 # MAGIC    - Unity Catalog: USE CATALOG, USE SCHEMA, SELECT on all domain schemas
 # MAGIC    - SQL Warehouse: CAN_USE permission
+# MAGIC    - Genie Spaces: CAN_RUN permission
 # MAGIC    - Lakebase: PUBLIC access for app connections
-# MAGIC 5. Seeds alerts and investigation cases from gold tables
-# MAGIC 6. Creates the empty `fwa_ml_predictions` table for gold MV compatibility
+# MAGIC 5. Creates Genie spaces (Analytics, FWA, Group Reporting, Financial) with dynamic table references
+# MAGIC 6. Seeds alerts and investigation cases from gold tables
+# MAGIC 7. Creates the empty `fwa_ml_predictions` table for gold MV compatibility
 # MAGIC
 # MAGIC ### Prerequisites:
 # MAGIC - `databricks bundle deploy` has been run (apps exist in workspace)
@@ -395,56 +397,183 @@ elif app_sps and not warehouse_id:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Grant Genie Space Permissions
+# MAGIC ### Create Genie Spaces & Grant Permissions
 
 # COMMAND ----------
 
-if app_sps:
-    print("Granting Genie space permissions...\n")
-    import requests as _requests
+import requests as _requests
 
-    _host = spark.conf.get("spark.databricks.workspaceUrl")
-    _token = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
+_host = spark.conf.get("spark.databricks.workspaceUrl")
+_token = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
+_genie_headers = {"Authorization": f"Bearer {_token}", "Content-Type": "application/json"}
+_current_user = w.current_user.me().user_name
 
-    # Discover all Genie spaces on the workspace
+# Define all Genie spaces — tables are dynamic based on catalog
+GENIE_SPACE_CONFIGS = [
+    {
+        "title": "Red Bricks Insurance — Analytics Assistant",
+        "description": "Natural language analytics: claims, HEDIS quality, risk adjustment, enrollment, pharmacy, and AI-generated member risk narratives.",
+        "tables": sorted([
+            f"{catalog}.analytics.gold_pmpm",
+            f"{catalog}.analytics.gold_mlr",
+            f"{catalog}.analytics.gold_denial_analysis",
+            f"{catalog}.analytics.gold_denial_classification",
+            f"{catalog}.analytics.gold_member_risk_narrative",
+            f"{catalog}.analytics.gold_risk_adjustment_analysis",
+            f"{catalog}.analytics.gold_hedis_member",
+            f"{catalog}.analytics.gold_hedis_provider",
+            f"{catalog}.analytics.gold_stars_provider",
+            f"{catalog}.claims.gold_claims_summary",
+            f"{catalog}.claims.gold_pharmacy_summary",
+            f"{catalog}.members.gold_enrollment_summary",
+            f"{catalog}.members.gold_member_demographics",
+            f"{catalog}.providers.gold_provider_directory",
+            f"{catalog}.underwriting.gold_underwriting_summary",
+            f"{catalog}.claims.silver_claims_medical",
+            f"{catalog}.members.silver_enrollment",
+            f"{catalog}.members.silver_members",
+        ]),
+    },
+    {
+        "title": "Red Bricks Insurance — FWA Analytics",
+        "description": "Fraud, waste, and abuse analytics: provider risk scores, flagged claims, investigation cases, and network analysis.",
+        "tables": sorted([
+            f"{catalog}.fwa.gold_fwa_provider_risk",
+            f"{catalog}.fwa.gold_fwa_claim_flags",
+            f"{catalog}.fwa.gold_fwa_summary",
+            f"{catalog}.fwa.silver_fwa_signals",
+            f"{catalog}.fwa.silver_fwa_investigation_cases",
+            f"{catalog}.analytics.gold_fwa_member_risk",
+            f"{catalog}.analytics.gold_fwa_network_analysis",
+            f"{catalog}.claims.silver_claims_medical",
+            f"{catalog}.members.silver_enrollment",
+            f"{catalog}.providers.silver_providers",
+        ]),
+    },
+    {
+        "title": "Red Bricks Insurance — Group Reporting",
+        "description": "Employer group analytics: report cards, experience ratings, renewal projections, stop-loss analysis, and total cost of care.",
+        "tables": sorted([
+            f"{catalog}.analytics.gold_group_report_card",
+            f"{catalog}.analytics.gold_group_experience",
+            f"{catalog}.analytics.gold_group_renewal",
+            f"{catalog}.analytics.gold_group_stop_loss",
+            f"{catalog}.analytics.gold_tcoc_summary",
+        ]),
+    },
+    {
+        "title": "Red Bricks Insurance — Financial Analytics",
+        "description": "Financial KPIs, actuarial metrics, utilization benchmarking, and IBNR reserve analysis.",
+        "tables": sorted([
+            f"{catalog}.analytics.gold_pmpm",
+            f"{catalog}.analytics.gold_mlr",
+            f"{catalog}.analytics.gold_utilization_per_1000",
+            f"{catalog}.analytics.gold_ibnr_estimate",
+            f"{catalog}.analytics.gold_ibnr_triangle",
+            f"{catalog}.analytics.gold_ibnr_completion_factors",
+            f"{catalog}.analytics.gold_denial_analysis",
+            f"{catalog}.analytics.gold_coding_completeness",
+            f"{catalog}.analytics.gold_risk_adjustment_analysis",
+            f"{catalog}.analytics.gold_group_experience",
+            f"{catalog}.analytics.gold_group_renewal",
+            f"{catalog}.analytics.gold_group_stop_loss",
+            f"{catalog}.underwriting.gold_underwriting_summary",
+        ]),
+    },
+]
+
+
+def create_or_get_genie_space(title: str, description: str, tables: list[str]) -> str | None:
+    """Create a Genie space if one with the same title doesn't already exist. Returns space_id."""
+    # Check if a space with this title already exists
     try:
-        genie_resp = _requests.get(
+        existing = _requests.get(
             f"https://{_host}/api/2.0/genie/spaces",
-            headers={"Authorization": f"Bearer {_token}"},
+            headers=_genie_headers,
+        ).json().get("spaces", [])
+        for s in existing:
+            if s.get("title") == title:
+                print(f"  Already exists: {s['space_id']}")
+                return s["space_id"]
+    except Exception:
+        pass
+
+    # Filter tables to only those that actually exist in the catalog
+    valid_tables = []
+    for t in tables:
+        try:
+            spark.sql(f"DESCRIBE TABLE {t}")
+            valid_tables.append(t)
+        except Exception:
+            print(f"  Skipping missing table: {t}")
+
+    if not valid_tables:
+        print("  No valid tables found — skipping space creation.")
+        return None
+
+    serialized = json.dumps({
+        "version": 2,
+        "data_sources": {
+            "tables": [{"identifier": t} for t in sorted(valid_tables)]
+        }
+    })
+
+    try:
+        resp = _requests.post(
+            f"https://{_host}/api/2.0/genie/spaces",
+            headers=_genie_headers,
+            json={
+                "warehouse_id": warehouse_id,
+                "serialized_space": serialized,
+                "title": title,
+                "description": description,
+            },
         )
-        genie_spaces = genie_resp.json().get("spaces", []) if genie_resp.status_code == 200 else []
+        if resp.status_code == 200:
+            space_id = resp.json().get("space_id")
+            print(f"  Created: {space_id}")
+            return space_id
+        else:
+            print(f"  Creation failed ({resp.status_code}): {resp.text[:300]}")
     except Exception as e:
-        print(f"  Could not list Genie spaces: {e}")
-        genie_spaces = []
+        print(f"  Creation failed: {e}")
+    return None
 
-    if genie_spaces:
-        for space in genie_spaces:
-            space_id = space["space_id"]
-            space_title = space.get("title", "untitled")
-            print(f"  --- Genie Space: {space_title} ({space_id}) ---")
 
-            for sp_info in app_sps:
-                sp_name = sp_info["sp_name"]
-                app_name = sp_info["app_name"]
+def grant_genie_permissions(space_id: str, sp_names: list[str]) -> None:
+    """Grant CAN_RUN on a Genie space to all app service principals."""
+    acl = [{"user_name": _current_user, "permission_level": "CAN_MANAGE"}]
+    for sp_name in sp_names:
+        acl.append({"service_principal_name": sp_name, "permission_level": "CAN_RUN"})
 
-                resp = _requests.put(
-                    f"https://{_host}/api/2.0/permissions/genie/{space_id}",
-                    headers={"Authorization": f"Bearer {_token}"},
-                    json={
-                        "access_control_list": [
-                            # Preserve owner
-                            {"user_name": w.current_user.me().user_name, "permission_level": "CAN_MANAGE"},
-                            # Grant app SP access
-                            {"service_principal_name": sp_name, "permission_level": "CAN_RUN"},
-                        ]
-                    },
-                )
-                if resp.status_code == 200:
-                    print(f"    {app_name}: CAN_RUN granted")
-                else:
-                    print(f"    {app_name}: {resp.status_code} — {resp.text[:200]}")
+    resp = _requests.put(
+        f"https://{_host}/api/2.0/permissions/genie/{space_id}",
+        headers=_genie_headers,
+        json={"access_control_list": acl},
+    )
+    if resp.status_code == 200:
+        print(f"  Permissions granted to {len(sp_names)} SPs")
     else:
-        print("  No Genie spaces found. Create one first (config/genie_space_setup.py).")
+        print(f"  Permission grant failed ({resp.status_code}): {resp.text[:200]}")
+
+
+# COMMAND ----------
+
+print("Creating Genie spaces and granting permissions...\n")
+
+sp_names_for_genie = [sp["sp_name"] for sp in app_sps] if app_sps else []
+
+for cfg in GENIE_SPACE_CONFIGS:
+    print(f"--- {cfg['title']} ---")
+    if not warehouse_id:
+        print("  Skipped — no warehouse_id available")
+        continue
+
+    space_id = create_or_get_genie_space(cfg["title"], cfg["description"], cfg["tables"])
+
+    if space_id and sp_names_for_genie:
+        grant_genie_permissions(space_id, sp_names_for_genie)
+    print()
 
 # COMMAND ----------
 
@@ -820,6 +949,18 @@ print(f"\n  UC catalog: {catalog}")
 print(f"  Schemas with grants: {', '.join(UC_SCHEMAS)}")
 print(f"  Warehouse: {warehouse_id or '(not set)'}")
 
+# Genie spaces
+try:
+    _genie_list = _requests.get(
+        f"https://{_host}/api/2.0/genie/spaces",
+        headers=_genie_headers,
+    ).json().get("spaces", [])
+    print(f"\n  Genie spaces: {len(_genie_list)}")
+    for s in _genie_list:
+        print(f"    {s.get('title', 'untitled')} ({s['space_id']})")
+except Exception:
+    print("\n  Genie spaces: could not list")
+
 # Seeded data
 print(f"\n  Alerts seeded: {alert_count}")
 print(f"  Investigations seeded: {inv_count}")
@@ -829,5 +970,4 @@ print("\n" + "=" * 60)
 print("Next steps:")
 print("  1. If gold tables weren't ready, re-run Step 5 after pipelines complete")
 print("  2. Verify apps at their URLs")
-print("  3. Create Genie spaces (config/genie_*_setup.py)")
 print("=" * 60)
