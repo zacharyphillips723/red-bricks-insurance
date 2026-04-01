@@ -1,0 +1,19 @@
+command:
+  - uvicorn
+  - main:app
+  - --host=0.0.0.0
+  - --port=8000
+
+env:
+  - name: LAKEBASE_INSTANCE_NAME
+    value: uw-simulations
+  - name: LAKEBASE_DATABASE_NAME
+    value: uw_sim
+  - name: SQL_WAREHOUSE_ID
+    value: auto
+  - name: LLM_ENDPOINT
+    value: databricks-llama-4-maverick
+  - name: UC_CATALOG
+    value: auto
+  - name: UC_SCHEMA
+    value: analytics

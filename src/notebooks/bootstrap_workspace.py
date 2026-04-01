@@ -7,7 +7,7 @@
 # MAGIC and seed operational data.
 # MAGIC
 # MAGIC ### What this notebook does:
-# MAGIC 1. Creates Lakebase instances (Command Center + FWA Investigation)
+# MAGIC 1. Creates Lakebase instances (Command Center + FWA Investigation + UW Simulation)
 # MAGIC 2. Creates databases and runs DDL schemas
 # MAGIC 3. Seeds care managers and fraud investigators
 # MAGIC 4. Discovers app service principals and grants:
@@ -15,7 +15,7 @@
 # MAGIC    - SQL Warehouse: CAN_USE permission
 # MAGIC    - Genie Spaces: CAN_RUN permission
 # MAGIC    - Lakebase: PUBLIC access for app connections
-# MAGIC 5. Creates Genie spaces (Analytics, FWA, Group Reporting, Financial) with dynamic table references
+# MAGIC 5. Creates Genie spaces (Analytics, FWA, Group Reporting, Financial, Underwriting) with dynamic table references
 # MAGIC 6. Seeds alerts and investigation cases from gold tables
 # MAGIC 7. Creates the empty `fwa_ml_predictions` table for gold MV compatibility
 # MAGIC 8. Restarts all apps so they re-initialize Lakebase connections and auto-detect Genie spaces
@@ -105,6 +105,12 @@ LAKEBASE_CONFIGS = [
         "schema_file": "src/fwa_lakebase_schema.sql",
         "app_name": "red-bricks-fwa-portal-app",
     },
+    {
+        "instance_name": "uw-simulations",
+        "database_name": "uw_sim",
+        "schema_file": "src/underwriting_sim_lakebase_schema.sql",
+        "app_name": "rb-uw-sim",
+    },
 ]
 
 # All apps that need UC + warehouse grants
@@ -121,6 +127,7 @@ except Exception as e:
     APP_NAME_PATTERNS = [
         "red-bricks-command-center-app",
         "red-bricks-fwa-portal-app",
+        "rb-uw-sim",
     ]
 
 # All UC schemas that apps may need to read
@@ -604,6 +611,27 @@ GENIE_SPACE_CONFIGS = [
             f"{catalog}.underwriting.gold_underwriting_summary",
         ]),
     },
+    {
+        "title": "Red Bricks Insurance — Underwriting Simulation",
+        "description": "Underwriting and actuarial analytics: PMPM trends, MLR by LOB, enrollment, utilization, IBNR reserves, group experience, risk adjustment, and benefit design.",
+        "tables": sorted([
+            f"{catalog}.analytics.gold_pmpm",
+            f"{catalog}.analytics.gold_mlr",
+            f"{catalog}.members.gold_enrollment_summary",
+            f"{catalog}.analytics.gold_utilization_per_1000",
+            f"{catalog}.analytics.gold_ibnr_completion_factors",
+            f"{catalog}.analytics.gold_ibnr_triangle",
+            f"{catalog}.analytics.gold_risk_adjustment_analysis",
+            f"{catalog}.analytics.gold_coding_completeness",
+            f"{catalog}.analytics.gold_tcoc_summary",
+            f"{catalog}.analytics.gold_member_tcoc",
+            f"{catalog}.analytics.gold_group_experience",
+            f"{catalog}.analytics.gold_group_renewal",
+            f"{catalog}.analytics.gold_group_stop_loss",
+            f"{catalog}.benefits.silver_benefits",
+            f"{catalog}.underwriting.gold_underwriting_summary",
+        ]),
+    },
 ]
 
 
@@ -1079,6 +1107,8 @@ APP_SOURCE_CODE_MAP = {
 for _app_name in APP_NAME_PATTERNS:
     if _app_name.startswith("rb-grp-rpt"):
         APP_SOURCE_CODE_MAP[_app_name] = "app-group-reporting"
+    elif _app_name.startswith("rb-uw-sim"):
+        APP_SOURCE_CODE_MAP[_app_name] = "app-underwriting-sim"
 
 deploy_count = 0
 for app_name in APP_NAME_PATTERNS:

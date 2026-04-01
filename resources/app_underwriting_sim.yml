@@ -1,0 +1,40 @@
+resources:
+  apps:
+    red_bricks_uw_sim:
+      name: "rb-uw-sim-${bundle.target}"
+      description: "Red Bricks Insurance — Underwriting Simulation Portal"
+      source_code_path: ../app-underwriting-sim
+      config:
+        command:
+          - uvicorn
+          - main:app
+          - --host=0.0.0.0
+          - --port=8000
+        env:
+          - name: LAKEBASE_INSTANCE_NAME
+            value: uw-simulations
+          - name: LAKEBASE_DATABASE_NAME
+            value: uw_sim
+          - name: SQL_WAREHOUSE_ID
+            value: ${var.warehouse_id}
+          - name: LLM_ENDPOINT
+            value: databricks-llama-4-maverick
+          - name: UC_CATALOG
+            value: red_bricks_insurance
+          - name: UC_SCHEMA
+            value: analytics
+      resources:
+        - name: llm-endpoint
+          serving_endpoint:
+            name: databricks-llama-4-maverick
+            permission: CAN_QUERY
+        # Lakebase — provisions the security label so the app SP can authenticate via OAuth
+        - name: lakebase-uw-sim
+          database:
+            instance_name: uw-simulations
+            database_name: uw_sim
+            permission: CAN_CONNECT_AND_CREATE
+        - name: sql-warehouse
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE

@@ -23,3 +23,12 @@ app-fwa/frontend/*.json
 app-fwa/frontend/*.ts
 app-fwa/frontend/*.js
 app-fwa/frontend/*.html
+
+# Exclude UW Simulation frontend source/node_modules — pre-built assets in app-underwriting-sim/static/
+app-underwriting-sim/frontend/node_modules/
+app-underwriting-sim/frontend/dist/
+app-underwriting-sim/frontend/src/
+app-underwriting-sim/frontend/*.json
+app-underwriting-sim/frontend/*.ts
+app-underwriting-sim/frontend/*.js
+app-underwriting-sim/frontend/*.html

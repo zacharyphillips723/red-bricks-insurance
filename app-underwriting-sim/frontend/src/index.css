@@ -1,0 +1,46 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --databricks-red: #FF3621;
+  --databricks-dark: #1B3139;
+  --databricks-gray: #454C52;
+  --databricks-light: #F5F7F9;
+}
+
+@layer components {
+  .btn-primary {
+    @apply px-4 py-2 bg-databricks-red text-white rounded-lg font-medium
+           hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-secondary {
+    @apply px-4 py-2 bg-white text-databricks-gray border border-gray-300 rounded-lg font-medium
+           hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .card {
+    @apply bg-white rounded-xl shadow-sm border border-gray-100 p-6;
+  }
+  .kpi-card {
+    @apply bg-white rounded-xl shadow-sm border border-gray-100 p-5;
+  }
+  .badge-positive {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800;
+  }
+  .badge-negative {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800;
+  }
+  .badge-neutral {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800;
+  }
+  .badge-warning {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800;
+  }
+  .sim-type-card {
+    @apply bg-white rounded-xl border border-gray-200 p-4 cursor-pointer
+           hover:border-databricks-red hover:shadow-md transition-all;
+  }
+  .sim-type-card.selected {
+    @apply border-databricks-red bg-red-50 shadow-md;
+  }
+}

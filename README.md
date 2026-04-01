@@ -418,6 +418,20 @@ This bundle is designed to be fully portable — deploy to any workspace and eve
 
 **1. Create the catalog** — run `CREATE CATALOG IF NOT EXISTS red_bricks_insurance` on your workspace (or via Unity Catalog UI). The bundle hardcodes this name everywhere.
 
+> **Using a different catalog name?** The catalog `red_bricks_insurance` is hardcoded across ~54 files. To use a different name, you need to:
+> 1. Add a `catalog` variable to `databricks.yml` (e.g. `default: red_bricks_insurance`)
+> 2. Replace all `red_bricks_insurance` references in `resources/*.yml` with `${var.catalog}` — this covers pipeline configs (~10 files), app resource YAMLs (4 files), and job task parameters (~25 occurrences across `full_demo_job.yml` and `refresh_demo_job.yml`)
+> 3. Update `bootstrap_workspace.py` to read from a widget: `catalog = dbutils.widgets.get("catalog")` instead of the hardcoded value (lines 32 and 45)
+> 4. Update the `source_volume` default in `databricks.yml` to use `${var.catalog}`
+>
+> Notebooks already accept `catalog` as a widget parameter from the job, so no notebook changes are needed. App backends use `env_config.py` auto-detection at runtime, so no app code changes are needed either. Set the variable per-target:
+> ```yaml
+> targets:
+>   my-workspace:
+>     variables:
+>       catalog: my_custom_catalog_name
+> ```
+
 **2. Add a new target** in `databricks.yml`:
 
 ```yaml
@@ -673,6 +687,7 @@ This demo is designed to be modular for customer-specific showings:
 - **Change AI model**: Update the model name in `ai_classification.sql`
 - **Scale data**: Adjust `NUM_PATIENTS` in `run_synthea_generation.py` and record counts in `run_data_generation.py`
 - **Different geography**: Change `STATE` in `run_synthea_generation.py` (Synthea supports all US states)
+- **Different catalog name**: See the note in [Deploying to a New Workspace](#deploying-to-a-new-workspace) for a step-by-step guide to parameterizing the catalog name
 
 ## Required Packages
 
