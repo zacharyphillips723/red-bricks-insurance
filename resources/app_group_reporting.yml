@@ -16,7 +16,7 @@ resources:
           - name: LLM_ENDPOINT
             value: databricks-llama-4-maverick
           - name: UC_CATALOG
-            value: red_bricks_insurance
+            value: ${var.catalog}
           - name: UC_SCHEMA
             value: analytics
           - name: GENIE_SPACE_ID

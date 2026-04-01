@@ -2,28 +2,48 @@ resources:
   jobs:
     red_bricks_full_demo:
       name: "[${bundle.target}] Red Bricks Insurance — Full Demo Pipeline"
-      job_clusters:
-        - job_cluster_key: synthea_cluster
-          new_cluster:
-            spark_version: "16.2.x-scala2.12"
-            node_type_id: ${var.node_type_small}
-            num_workers: 0
-            data_security_mode: SINGLE_USER
-            spark_conf:
-              spark.master: "local[*, 4]"
-              spark.databricks.cluster.profile: singleNode
-            custom_tags:
-              ResourceClass: SingleNode
+      # job_clusters requires classic compute — commented out for serverless-only workspaces
+      # Uncomment for workspaces with classic compute support:
+      # job_clusters:
+      #   - job_cluster_key: synthea_cluster
+      #     new_cluster:
+      #       spark_version: "16.2.x-scala2.12"
+      #       node_type_id: ${var.node_type_small}
+      #       num_workers: 0
+      #       data_security_mode: SINGLE_USER
+      #       spark_conf:
+      #         spark.master: "local[*, 4]"
+      #         spark.databricks.cluster.profile: singleNode
+      #       custom_tags:
+      #         ResourceClass: SingleNode
 
       tasks:
-        # Step 1: Generate synthetic insurance data (reads Synthea demographics)
+        # Step 0: Set up Lakebase databases + DDL (runs immediately, no dependencies)
+        # Instances are created by DAB Terraform; this creates the PG databases inside them
+        - task_key: setup_lakebase
+          notebook_task:
+            notebook_path: ../src/notebooks/setup_lakebase.py
+            base_parameters:
+              catalog: ${var.catalog}
+          environment_key: lakebase_env
+
+        # Step 1a: Run Synthea patient generation (requires classic cluster for Java JAR)
+        # On serverless-only workspaces, use the refresh job instead (skips Synthea)
+        - task_key: synthea_generation
+          # job_cluster_key: synthea_cluster  # uncomment for classic compute workspaces
+          notebook_task:
+            notebook_path: ../src/notebooks/run_synthea_generation.py
+            base_parameters:
+              catalog: ${var.catalog}
+
+        # Step 1b: Generate synthetic insurance data (reads Synthea demographics)
         - task_key: data_generation
           depends_on:
             - task_key: synthea_generation
           notebook_task:
             notebook_path: ../src/notebooks/run_data_generation.py
             base_parameters:
-              catalog: red_bricks_insurance
+              catalog: ${var.catalog}
 
 
         # Step 2: Domain pipelines (run in parallel after data generation)
@@ -86,20 +106,12 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/build_member_months.py
             base_parameters:
-              catalog: red_bricks_insurance
+              catalog: ${var.catalog}
 
 
         # Step 2d: Synthea clinical data pipeline
-        # Synthea generation (ROOT) → data_generation reads demographics
+        # Synthea generation (Step 1a) → data_generation reads demographics
         # parse_fhir_with_dbignite depends on BOTH synthea_generation AND data_generation
-        - task_key: synthea_generation
-          job_cluster_key: synthea_cluster
-          notebook_task:
-            notebook_path: ../src/notebooks/run_synthea_generation.py
-            base_parameters:
-              catalog: red_bricks_insurance
-
-
         - task_key: parse_fhir_with_dbignite
           depends_on:
             - task_key: synthea_generation
@@ -107,7 +119,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/parse_fhir_with_dbignite.py
             base_parameters:
-              catalog: red_bricks_insurance
+              catalog: ${var.catalog}
 
 
         - task_key: clinical_pipeline
@@ -151,7 +163,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/create_metric_views.py
             base_parameters:
-              catalog: red_bricks_insurance
+              catalog: ${var.catalog}
 
 
         # Step 4: Vector Search index (depends on documents pipeline)
@@ -161,7 +173,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/setup_vector_search.py
             base_parameters:
-              catalog: red_bricks_insurance
+              catalog: ${var.catalog}
 
 
         # Step 5: Register Care Intelligence Agent in Unity Catalog (depends on vector search + gold analytics)
@@ -172,7 +184,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/deploy_member_agent.py
             base_parameters:
-              catalog: red_bricks_insurance
+              catalog: ${var.catalog}
 
           environment_key: agent_env
 
@@ -185,7 +197,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/deploy_agent_v2.py
             base_parameters:
-              catalog: red_bricks_insurance
+              catalog: ${var.catalog}
 
           environment_key: agent_env
 
@@ -196,7 +208,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/deploy_group_sales_agent.py
             base_parameters:
-              catalog: red_bricks_insurance
+              catalog: ${var.catalog}
 
           environment_key: agent_env
 
@@ -208,7 +220,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/train_fwa_model.py
             base_parameters:
-              catalog: red_bricks_insurance
+              catalog: ${var.catalog}
           environment_key: ml_training_env
 
         # Step 6d: Deploy FWA Investigation Agent
@@ -220,7 +232,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/deploy_fwa_agent.py
             base_parameters:
-              catalog: red_bricks_insurance
+              catalog: ${var.catalog}
 
           environment_key: agent_env
 
@@ -232,13 +244,14 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/evaluate_agents.py
             base_parameters:
-              catalog: red_bricks_insurance
+              catalog: ${var.catalog}
 
           environment_key: agent_eval_env
 
-        # Step 8: Bootstrap workspace — Lakebase, grants, seed operational data
+        # Step 8: Bootstrap workspace — grants, Genie spaces, seed operational data
         - task_key: bootstrap_workspace
           depends_on:
+            - task_key: setup_lakebase
             - task_key: gold_analytics_pipeline
             - task_key: fwa_pipeline
             - task_key: train_fwa_model
@@ -246,8 +259,19 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/bootstrap_workspace.py
             base_parameters:
+              catalog: ${var.catalog}
               warehouse_id: ${var.warehouse_id}
           environment_key: bootstrap_env
+
+        # Step 9: Deploy app source code and start compute
+        - task_key: deploy_app_source
+          depends_on:
+            - task_key: bootstrap_workspace
+          notebook_task:
+            notebook_path: ../src/notebooks/deploy_app_source.py
+            base_parameters:
+              catalog: ${var.catalog}
+          environment_key: app_deploy_env
 
       environments:
         - environment_key: agent_env
@@ -271,11 +295,22 @@ resources:
               - scikit-learn>=1.4.0
               - mlflow>=2.14.0
               - databricks-sdk>=0.30.0
+        - environment_key: lakebase_env
+          spec:
+            client: "1"
+            dependencies:
+              - psycopg[binary]
+              - databricks-sdk>=0.30.0
         - environment_key: bootstrap_env
           spec:
             client: "1"
             dependencies:
               - psycopg[binary]
+              - databricks-sdk>=0.30.0
+        - environment_key: app_deploy_env
+          spec:
+            client: "1"
+            dependencies:
               - databricks-sdk>=0.30.0
 
       tags:

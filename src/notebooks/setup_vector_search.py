@@ -104,10 +104,13 @@ try:
     print(f"  Indexed rows: {idx_status.get('indexed_row_count', 'N/A')}")
     print(f"  Ready: {idx_status.get('ready', False)}")
 
-    # Trigger sync if index is online
+    # Trigger sync if index is online (may fail if already syncing — that's OK)
     if idx_status.get("ready"):
-        print("Index is ready. Triggering sync...")
-        vs_api_post(f"indexes/{VS_INDEX_NAME}/sync", {})
+        try:
+            print("Index is ready. Triggering sync...")
+            vs_api_post(f"indexes/{VS_INDEX_NAME}/sync", {})
+        except requests.exceptions.HTTPError as sync_err:
+            print(f"Sync request returned {sync_err.response.status_code} — index may already be syncing. Continuing.")
     else:
         print("Index exists but not ready yet. Will wait...")
 except requests.exceptions.HTTPError as e:

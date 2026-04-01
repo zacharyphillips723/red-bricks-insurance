@@ -1,0 +1,11 @@
+resources:
+  database_instances:
+    lakebase_command_center:
+      name: red-bricks-command-center
+      capacity: CU_1
+    lakebase_fwa:
+      name: fwa-investigations
+      capacity: CU_1
+    lakebase_uw_sim:
+      name: uw-simulations
+      capacity: CU_1

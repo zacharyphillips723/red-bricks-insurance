@@ -3,13 +3,21 @@ resources:
     red_bricks_refresh:
       name: "${bundle.target} Red Bricks Insurance — Refresh (no Synthea)"
       tasks:
+        # Step 0: Set up Lakebase databases + DDL (runs immediately, no dependencies)
+        - task_key: setup_lakebase
+          notebook_task:
+            notebook_path: ../src/notebooks/setup_lakebase.py
+            base_parameters:
+              catalog: ${var.catalog}
+          environment_key: lakebase_env
+
         # Step 1: Re-generate insurance data (groups, enrollment, claims, etc.)
         # Reads existing Synthea demographics — does NOT re-run Synthea
         - task_key: data_generation
           notebook_task:
             notebook_path: ../src/notebooks/run_data_generation.py
             base_parameters:
-              catalog: red_bricks_insurance
+              catalog: ${var.catalog}
 
 
         # Step 2: Domain pipelines (run in parallel after data generation)
@@ -79,7 +87,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/build_member_months.py
             base_parameters:
-              catalog: red_bricks_insurance
+              catalog: ${var.catalog}
 
 
         # Step 3: Gold analytics (depends on domain pipelines + member months + FWA)
@@ -104,7 +112,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/create_metric_views.py
             base_parameters:
-              catalog: red_bricks_insurance
+              catalog: ${var.catalog}
 
 
         # Step 4: Vector search + agents
@@ -114,7 +122,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/setup_vector_search.py
             base_parameters:
-              catalog: red_bricks_insurance
+              catalog: ${var.catalog}
 
 
         - task_key: deploy_member_agent
@@ -124,7 +132,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/deploy_member_agent.py
             base_parameters:
-              catalog: red_bricks_insurance
+              catalog: ${var.catalog}
 
           environment_key: agent_env
 
@@ -136,7 +144,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/deploy_agent_v2.py
             base_parameters:
-              catalog: red_bricks_insurance
+              catalog: ${var.catalog}
 
           environment_key: agent_env
 
@@ -146,7 +154,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/deploy_group_sales_agent.py
             base_parameters:
-              catalog: red_bricks_insurance
+              catalog: ${var.catalog}
 
           environment_key: agent_env
 
@@ -157,7 +165,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/train_fwa_model.py
             base_parameters:
-              catalog: red_bricks_insurance
+              catalog: ${var.catalog}
           environment_key: ml_training_env
 
         - task_key: deploy_fwa_agent
@@ -168,7 +176,7 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/deploy_fwa_agent.py
             base_parameters:
-              catalog: red_bricks_insurance
+              catalog: ${var.catalog}
 
           environment_key: agent_env
 
@@ -179,13 +187,14 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/evaluate_agents.py
             base_parameters:
-              catalog: red_bricks_insurance
+              catalog: ${var.catalog}
 
           environment_key: agent_eval_env
 
-        # Step 5: Bootstrap workspace — Lakebase, grants, seed operational data
+        # Step 5: Bootstrap workspace — grants, Genie spaces, seed operational data
         - task_key: bootstrap_workspace
           depends_on:
+            - task_key: setup_lakebase
             - task_key: gold_analytics_pipeline
             - task_key: fwa_pipeline
             - task_key: train_fwa_model
@@ -193,8 +202,19 @@ resources:
           notebook_task:
             notebook_path: ../src/notebooks/bootstrap_workspace.py
             base_parameters:
+              catalog: ${var.catalog}
               warehouse_id: ${var.warehouse_id}
           environment_key: bootstrap_env
+
+        # Step 6: Deploy app source code and start compute
+        - task_key: deploy_app_source
+          depends_on:
+            - task_key: bootstrap_workspace
+          notebook_task:
+            notebook_path: ../src/notebooks/deploy_app_source.py
+            base_parameters:
+              catalog: ${var.catalog}
+          environment_key: app_deploy_env
 
       environments:
         - environment_key: agent_env
@@ -218,11 +238,22 @@ resources:
               - scikit-learn>=1.4.0
               - mlflow>=2.14.0
               - databricks-sdk>=0.30.0
+        - environment_key: lakebase_env
+          spec:
+            client: "1"
+            dependencies:
+              - psycopg[binary]
+              - databricks-sdk>=0.30.0
         - environment_key: bootstrap_env
           spec:
             client: "1"
             dependencies:
               - psycopg[binary]
+              - databricks-sdk>=0.30.0
+        - environment_key: app_deploy_env
+          spec:
+            client: "1"
+            dependencies:
               - databricks-sdk>=0.30.0
 
       tags:

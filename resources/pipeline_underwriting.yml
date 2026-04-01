@@ -2,7 +2,7 @@ resources:
   pipelines:
     underwriting_pipeline:
       name: "[${bundle.target}] Red Bricks — Underwriting Pipeline"
-      catalog: red_bricks_insurance
+      catalog: ${var.catalog}
       target: underwriting
       configuration:
         source_volume: ${var.source_volume}

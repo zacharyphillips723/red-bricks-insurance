@@ -4,9 +4,12 @@ bundle:
   name: red-bricks-insurance
 
 variables:
+  catalog:
+    description: Unity Catalog name for all pipelines, jobs, and apps
+    default: red_bricks_insurance
   source_volume:
     description: Volume path for raw generated source files
-    default: /Volumes/red_bricks_insurance/raw/raw_sources
+    default: /Volumes/${var.catalog}/raw/raw_sources
   warehouse_id:
     description: SQL warehouse for jobs (optional)
     default: ""

@@ -385,7 +385,7 @@ red-bricks-insurance/
 ### Prerequisites
 
 - Databricks CLI configured with workspace profile
-- Unity Catalog workspace with a catalog named **`red_bricks_insurance`** (the bundle hardcodes this catalog name everywhere — pipelines, notebooks, apps, and agents all reference it directly)
+- Unity Catalog workspace with an existing catalog (defaults to `red_bricks_insurance`, configurable via `--var="catalog=your_catalog"`)
 - Foundation model endpoint (`databricks-meta-llama-3-3-70b-instruct`) for AI gold tables
 
 ### Compute
@@ -399,38 +399,26 @@ All tasks run on **serverless** compute except `synthea_generation` which requir
 | `dev` (default) | `fe-vm-red-bricks-insurance` | Development |
 | `e2-field-eng` | `fe-demo-field-eng` | Field engineering demos (AWS) |
 | `hls-financial` | `hls-financial-foundation` | HLS Financial Foundation workspace (AWS) |
+| `clinical-data-demo` | `clinical-data-demo` | Clinical data demo workspace (AWS) |
 | `prod` | `fe-vm-red-bricks-insurance` | Production |
 
-> **Catalog:** All targets use the hardcoded catalog `red_bricks_insurance`. You must create this catalog on your workspace before deploying. The pipelines will create the 11 domain schemas automatically.
+> **Catalog:** Defaults to `red_bricks_insurance`. Override with `--var="catalog=your_catalog_name"` at deploy/run time, or set it per-target in `databricks.yml`. The catalog must already exist on the workspace — the pipelines create the 11 domain schemas automatically.
 
 ### Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `source_volume` | `/Volumes/red_bricks_insurance/raw/raw_sources` | Raw data volume path |
+| `catalog` | `red_bricks_insurance` | Unity Catalog name — all pipelines, jobs, and apps use this |
+| `source_volume` | `/Volumes/${var.catalog}/raw/raw_sources` | Raw data volume path (auto-derived from catalog) |
 | `warehouse_id` | `""` | SQL warehouse (optional — auto-detected if omitted) |
 | `node_type_small` | `Standard_DS3_v2` | Small compute (4 vCPU, 14GB) |
 | `node_type_large` | `Standard_DS5_v2` | Large compute (16 vCPU, 56GB) |
 
 ### Deploying to a New Workspace
 
-This bundle is designed to be fully portable — deploy to any workspace and everything auto-configures. No manual warehouse IDs, catalog names, or Genie space IDs to set.
+This bundle is fully portable — deploy to any workspace with any catalog name and everything auto-configures.
 
-**1. Create the catalog** — run `CREATE CATALOG IF NOT EXISTS red_bricks_insurance` on your workspace (or via Unity Catalog UI). The bundle hardcodes this name everywhere.
-
-> **Using a different catalog name?** The catalog `red_bricks_insurance` is hardcoded across ~54 files. To use a different name, you need to:
-> 1. Add a `catalog` variable to `databricks.yml` (e.g. `default: red_bricks_insurance`)
-> 2. Replace all `red_bricks_insurance` references in `resources/*.yml` with `${var.catalog}` — this covers pipeline configs (~10 files), app resource YAMLs (4 files), and job task parameters (~25 occurrences across `full_demo_job.yml` and `refresh_demo_job.yml`)
-> 3. Update `bootstrap_workspace.py` to read from a widget: `catalog = dbutils.widgets.get("catalog")` instead of the hardcoded value (lines 32 and 45)
-> 4. Update the `source_volume` default in `databricks.yml` to use `${var.catalog}`
->
-> Notebooks already accept `catalog` as a widget parameter from the job, so no notebook changes are needed. App backends use `env_config.py` auto-detection at runtime, so no app code changes are needed either. Set the variable per-target:
-> ```yaml
-> targets:
->   my-workspace:
->     variables:
->       catalog: my_custom_catalog_name
-> ```
+**1. Ensure a catalog exists** on the target workspace. The default is `red_bricks_insurance`, but you can use any existing catalog by passing `--var="catalog=your_catalog"`.
 
 **2. Add a new target** in `databricks.yml`:
 
@@ -440,28 +428,52 @@ This bundle is designed to be fully portable — deploy to any workspace and eve
     workspace:
       profile: my-workspace-profile    # Databricks CLI profile name
     variables:
+      warehouse_id: abc123def456       # SQL warehouse ID
       node_type_small: m5.xlarge       # AWS — or Standard_DS3_v2 for Azure
       node_type_large: m5.4xlarge      # AWS — or Standard_DS5_v2 for Azure
 ```
 
-That's it. `warehouse_id` is optional — if omitted, the bootstrap task auto-detects a running warehouse and the apps auto-detect at startup.
+**3. Two-phase deploy** (required for fresh workspaces):
 
-**3. Deploy and run the full pipeline:**
+On a fresh workspace, Lakebase instances and app database resources create a chicken-and-egg problem: apps reference databases that don't exist yet (databases are created by the `setup_lakebase` job task, but Terraform tries to create apps in the same apply as the instances). The solution is a two-phase deploy:
 
 ```bash
-databricks bundle deploy --target my-workspace
-databricks bundle run red_bricks_full_demo --target my-workspace
+# Phase 1: Comment out `database` resources in app YAMLs, then deploy
+# (Terraform creates Lakebase instances + apps without DB references)
+databricks bundle deploy --target my-workspace --var="catalog=my_catalog"
+
+# Run the job — setup_lakebase creates databases inside the new instances
+databricks bundle run red_bricks_refresh --target my-workspace --var="catalog=my_catalog"
+# Wait for setup_lakebase task to succeed, then cancel the run
+
+# Phase 2: Uncomment `database` resources in app YAMLs, redeploy
+# (Terraform adds DB resources + security labels to apps)
+databricks bundle deploy --target my-workspace --var="catalog=my_catalog"
+
+# Now run the full pipeline
+databricks bundle run red_bricks_refresh --target my-workspace --var="catalog=my_catalog"
 ```
 
-**Let the full pipeline run to completion.** The `bootstrap_workspace` task runs at the end and automatically:
-- Creates Lakebase instances and seeds operational data
-- Discovers all deployed app service principals
-- Grants UC permissions (USE CATALOG, USE SCHEMA, SELECT) on all domain schemas
-- Grants SQL warehouse CAN_USE to all app SPs
-- Creates 4 Genie spaces with `red_bricks_insurance` table references
-- Grants Genie space CAN_RUN to all app SPs
+> **Subsequent deploys** don't need two phases — the databases already exist from the first run.
 
-Once bootstrap completes, all three apps will be fully functional with no manual configuration.
+**4. Dashboard catalog replacement** — Lakeview dashboard JSON files hardcode SQL catalog references and don't support `${var.catalog}` interpolation. Use `prepare.sh` before deploying to a non-default catalog:
+
+```bash
+./prepare.sh my_catalog_name    # replaces red_bricks_insurance in dashboard JSONs
+databricks bundle deploy --target my-workspace --var="catalog=my_catalog_name"
+```
+
+> Running `./prepare.sh` with no arguments (or `./prepare.sh red_bricks_insurance`) is a no-op.
+
+**5. Pipeline automation** — the job runs end-to-end and automatically:
+- Creates Lakebase databases + DDL schemas (`setup_lakebase` task)
+- Generates synthetic data and runs all domain pipelines
+- Trains the FWA fraud scoring model
+- Deploys AI agents (Care Intelligence v1/v2, Sales Coach, FWA Investigation)
+- Creates Genie spaces, grants UC permissions, seeds operational data (`bootstrap_workspace`)
+- Deploys app source code and starts compute (`deploy_app_source`)
+
+Once the pipeline completes, all four apps are fully functional with no manual configuration.
 
 **4. Runtime auto-detection** — apps self-configure at startup:
 
@@ -485,10 +497,10 @@ The `app.yml` files use `auto` as a sentinel value for `SQL_WAREHOUSE_ID`, `UC_C
 
 | Layer | How Values Are Set | Example |
 |-------|-------------------|---------|
-| **Catalog** | Hardcoded to `red_bricks_insurance` everywhere | Not configurable — this is a fictional company |
-| **DAB variables** (`databricks.yml`) | Set per target in `variables:` | `warehouse_id: abc123` |
-| **Job parameters** (`base_parameters`) | Notebooks default to `red_bricks_insurance`; warehouse injected from DAB | Notebook uses `catalog = "red_bricks_insurance"` |
-| **App env vars** (`app.yml`) | Catalog hardcoded; warehouse auto-detected if empty | `SQL_WAREHOUSE_ID=auto` → detected |
+| **Catalog** | DAB variable `${var.catalog}`, defaults to `red_bricks_insurance` | `--var="catalog=my_catalog"` |
+| **DAB variables** (`databricks.yml`) | Set per target in `variables:` or via CLI `--var` | `warehouse_id: abc123` |
+| **Job parameters** (`base_parameters`) | Injected from DAB variables | `catalog: ${var.catalog}` |
+| **App env vars** (`app.yml`) | Catalog from DAB variable; warehouse auto-detected if empty | `UC_CATALOG: ${var.catalog}` |
 | **Bootstrap task** | Auto-detects warehouse, discovers app SPs, creates Genie spaces, restarts apps | Fully dynamic |
 
 **6. Key environment variables** used by apps:
@@ -496,7 +508,7 @@ The `app.yml` files use `auto` as a sentinel value for `SQL_WAREHOUSE_ID`, `UC_C
 | Variable | Used By | Auto-Detected? |
 |----------|---------|----------------|
 | `SQL_WAREHOUSE_ID` | All apps | Yes — first running warehouse |
-| `UC_CATALOG` | All apps | Hardcoded to `red_bricks_insurance` |
+| `UC_CATALOG` | All apps | Set from `${var.catalog}`; auto-detected at runtime as fallback |
 | `GENIE_SPACE_ID` | Command Center | Yes — first visible Genie space |
 | `LLM_ENDPOINT` | All apps | No — defaults to `databricks-llama-4-maverick` |
 | `LAKEBASE_INSTANCE_NAME` | Command Center, FWA app | No — set in `app.yml` (instance names are fixed) |
@@ -509,14 +521,18 @@ The `app.yml` files use `auto` as a sentinel value for `SQL_WAREHOUSE_ID`, `UC_C
 # Validate bundle
 databricks bundle validate --target e2-field-eng
 
-# Deploy all resources (pipelines, jobs, dashboards, apps)
-databricks bundle deploy --target e2-field-eng --force
+# Deploy all resources (pipelines, jobs, dashboards, apps, Lakebase instances)
+databricks bundle deploy --target e2-field-eng
 
-# --- End-to-end demo (synthea → data gen → all pipelines → agents → eval) ---
+# Deploy with a custom catalog name
+databricks bundle deploy --target hls-financial --var="catalog=hls_financial_foundation_catalog"
+
+# --- End-to-end demo (synthea → data gen → all pipelines → agents → eval → app deploy) ---
+# NOTE: Requires classic compute for Synthea. Use refresh job on serverless-only workspaces.
 databricks bundle run red_bricks_full_demo --target e2-field-eng
 
-# --- Refresh without Synthea (data gen → pipelines → analytics → agents) ---
-databricks bundle run red_bricks_refresh --target e2-field-eng
+# --- Refresh without Synthea (data gen → pipelines → analytics → agents → app deploy) ---
+databricks bundle run red_bricks_refresh --target hls-financial --var="catalog=hls_financial_foundation_catalog"
 
 # --- Individual components ---
 databricks bundle run red_bricks_data_generation   # Just generate insurance data
@@ -616,34 +632,30 @@ Set in `resources/app_fwa.yml`:
 
 ## Lakebase & App Authentication
 
-The Command Center and FWA Portal apps connect to Lakebase Provisioned (managed PostgreSQL) for transactional state. Authentication uses Databricks OAuth — the app's service principal generates a token via `generate_database_credential()` and connects as a PostgreSQL role mapped to its identity.
+Three Lakebase Provisioned instances are managed as **DAB resources** (`resources/lakebase_instances.yml`):
+
+| Instance | Database | Used By |
+|----------|----------|---------|
+| `red-bricks-command-center` | `red_bricks_alerts` | Command Center app |
+| `fwa-investigations` | `fwa_cases` | FWA Portal app |
+| `uw-simulations` | `uw_sim` | Underwriting Sim app |
+
+Terraform creates/destroys these instances with `bundle deploy`/`bundle destroy`. The **databases inside** the instances (tables, DDL, grants) are created by the `setup_lakebase` job task, which runs as Step 0 in both pipelines.
 
 ### How Security Labels Work
 
 Lakebase uses **security labels** to map a Databricks identity (user email or SP UUID) to a PostgreSQL role. Without a security label, OAuth authentication fails with: `"no role security label was configured in postgres for role"`.
 
-Security labels are provisioned in two ways:
-
-1. **App `database` resource** (preferred) — Declaring a `database` resource in the DAB app YAML with `CAN_CONNECT_AND_CREATE` automatically creates the PostgreSQL role and security label for the app's SP. This is the mechanism used in `resources/app.yml` and `resources/app_fwa.yml`.
-
-2. **`databricks_create_role()` SQL function** (fallback) — Connect to the Lakebase instance as an admin and run:
-   ```sql
-   CREATE EXTENSION IF NOT EXISTS databricks_auth;
-   SELECT databricks_create_role('<sp_client_id_uuid>', 'SERVICE_PRINCIPAL');
-   GRANT CONNECT, CREATE ON DATABASE <db_name> TO "<sp_client_id_uuid>";
-   ```
+Security labels are provisioned by declaring a `database` resource in the DAB app YAML with `CAN_CONNECT_AND_CREATE`. This automatically creates the PostgreSQL role and security label for the app's SP. See `resources/app.yml`, `resources/app_fwa.yml`, and `resources/app_underwriting_sim.yml`.
 
 ### Lifecycle & Deploy Order
 
-The app `database` resource can only provision the security label if the Lakebase instance **already exists** at deploy time. On a fresh workspace:
+On a **fresh workspace**, there's a chicken-and-egg problem:
+- Terraform creates Lakebase instances + apps in the same apply
+- Apps reference databases inside those instances
+- But databases are created by `setup_lakebase` (a job task that runs after deploy)
 
-1. `bundle deploy` — creates apps with `database` resources declared (Lakebase instances don't exist yet, so security label provisioning is deferred)
-2. Run the full pipeline — `bootstrap_workspace` creates Lakebase instances, databases, DDL, and seeds data
-3. The apps receive new SPs whose security labels were provisioned because the instances pre-existed from a prior run, **or** you run `bundle deploy` a second time to trigger the security label provisioning now that the instances exist
-
-**If security labels are missing after the pipeline completes**, run one of:
-- `databricks bundle deploy` again (triggers app resource processing with existing instances)
-- The `databricks_create_role()` SQL fallback from bootstrap (Option B)
+This requires a **two-phase deploy** — see [Deploying to a New Workspace](#deploying-to-a-new-workspace) for the full procedure. On subsequent deploys, the databases already exist so a single `bundle deploy` works.
 
 ### Token Refresh
 
@@ -651,11 +663,18 @@ OAuth tokens expire after 1 hour. Both apps implement a background refresh loop 
 
 ## Deployment Notes & Known Issues
 
-### First Run Must Use the Full Pipeline
+### Clinical Tables Required for Gold Analytics
 
-The **Refresh (no Synthea)** job skips Synthea generation, which means `clinical.silver_lab_results` and other clinical tables won't exist. The `gold_analytics_pipeline` depends on these tables and will fail, cascading to `bootstrap_workspace` and all downstream tasks.
+The `gold_analytics_pipeline` depends on `clinical.silver_lab_results` and other clinical tables. These are created by `parse_fhir_with_dbignite` → `clinical_pipeline`, which are part of the **Full Demo Pipeline** but not the Refresh job.
 
-**Always use the Full Demo Pipeline for the first deployment to a new workspace.** The Refresh job is for subsequent runs where Synthea data already exists.
+On a fresh workspace (or after `bundle destroy`), you must run these clinical tasks before the Refresh job will succeed:
+1. Copy Synthea FHIR data to the volume (or run `synthea_generation` on a classic-compute workspace)
+2. Run `parse_fhir_with_dbignite` and `clinical_pipeline` as a one-time job
+3. Then the Refresh job will work for all subsequent runs
+
+### Serverless-Only Workspaces
+
+The Full Demo Pipeline includes a `synthea_generation` task that requires classic compute (Java JAR execution). On serverless-only workspaces, this job definition is created but the synthea task will fail at runtime. Use the **Refresh (no Synthea)** job instead, after ensuring clinical data exists (see above).
 
 ### `bundle destroy` Creates New Service Principals
 
@@ -687,7 +706,7 @@ This demo is designed to be modular for customer-specific showings:
 - **Change AI model**: Update the model name in `ai_classification.sql`
 - **Scale data**: Adjust `NUM_PATIENTS` in `run_synthea_generation.py` and record counts in `run_data_generation.py`
 - **Different geography**: Change `STATE` in `run_synthea_generation.py` (Synthea supports all US states)
-- **Different catalog name**: See the note in [Deploying to a New Workspace](#deploying-to-a-new-workspace) for a step-by-step guide to parameterizing the catalog name
+- **Different catalog name**: Pass `--var="catalog=your_catalog"` at deploy and run time. Run `./prepare.sh your_catalog` first to update dashboard JSONs
 
 ## Required Packages
 

@@ -27,9 +27,10 @@
 
 # COMMAND ----------
 
+dbutils.widgets.text("catalog", "red_bricks_insurance", "Unity Catalog Name")
 dbutils.widgets.text("warehouse_id", "", "SQL Warehouse ID (leave empty to auto-detect)")
 
-catalog = "red_bricks_insurance"
+catalog = dbutils.widgets.get("catalog")
 warehouse_id = dbutils.widgets.get("warehouse_id")
 
 print(f"Catalog: {catalog}")
@@ -42,7 +43,7 @@ print(f"Warehouse ID: {warehouse_id or '(will auto-detect)'}")
 
 # COMMAND ----------
 
-catalog = "red_bricks_insurance"
+catalog = dbutils.widgets.get("catalog")
 warehouse_id = dbutils.widgets.get("warehouse_id")
 
 import json
