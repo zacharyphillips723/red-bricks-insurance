@@ -37,13 +37,13 @@ WITH member_costs AS (
     COALESCE(rx.pharmacy_paid, 0)   AS pharmacy_paid,
     COALESCE(med.medical_claims, 0) AS medical_claims,
     COALESCE(rx.pharmacy_claims, 0) AS pharmacy_claims
-  FROM (SELECT DISTINCT member_id FROM ${catalog}.members.silver_member_months) m
+  FROM (SELECT DISTINCT member_id FROM members.silver_member_months) m
   LEFT JOIN (
     SELECT
       member_id,
       SUM(paid_amount) AS medical_paid,
       COUNT(*)         AS medical_claims
-    FROM ${catalog}.claims.silver_claims_medical
+    FROM claims.silver_claims_medical
     WHERE claim_status != 'Denied'
     GROUP BY member_id
   ) med ON m.member_id = med.member_id
@@ -52,7 +52,7 @@ WITH member_costs AS (
       member_id,
       SUM(plan_paid)   AS pharmacy_paid,
       COUNT(*)         AS pharmacy_claims
-    FROM ${catalog}.claims.silver_claims_pharmacy
+    FROM claims.silver_claims_pharmacy
     GROUP BY member_id
   ) rx ON m.member_id = rx.member_id
 ),
@@ -63,7 +63,7 @@ member_exposure AS (
     member_id,
     line_of_business,
     COUNT(*) AS member_months
-  FROM ${catalog}.members.silver_member_months
+  FROM members.silver_member_months
   GROUP BY member_id, line_of_business
 ),
 
@@ -74,7 +74,7 @@ member_risk AS (
     raf_score,
     hcc_count,
     is_high_risk
-  FROM ${catalog}.risk_adjustment.silver_risk_adjustment_member
+  FROM risk_adjustment.silver_risk_adjustment_member
   QUALIFY ROW_NUMBER() OVER (PARTITION BY member_id ORDER BY model_year DESC) = 1
 ),
 

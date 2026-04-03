@@ -45,7 +45,7 @@ TOOLS = [
                 "ML model predictions, and any other data needed for the investigation. "
                 "Only SELECT statements are allowed. Available schemas: "
                 + ", ".join(ALLOWED_SCHEMAS)
-                + ". All tables are in the catalog specified at runtime (e.g. red_bricks_insurance.fwa.gold_fwa_provider_risk). "
+                + ". All tables are in the catalog configured for this workspace (e.g. fwa.gold_fwa_provider_risk). "
                 "Key FWA tables:\n"
                 "- fwa.gold_fwa_provider_risk: Provider risk scorecards\n"
                 "- fwa.gold_fwa_claim_flags: Flagged claims with evidence\n"

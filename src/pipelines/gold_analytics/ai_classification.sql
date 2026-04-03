@@ -20,7 +20,7 @@ COMMENT 'AI-classified denial reason categories using Databricks foundation mode
 AS
 WITH distinct_denials AS (
   SELECT DISTINCT denial_reason_code
-  FROM ${catalog}.claims.silver_claims_medical
+  FROM claims.silver_claims_medical
   WHERE denial_reason_code IS NOT NULL
 )
 SELECT
@@ -60,10 +60,10 @@ WITH denial_claims AS (
     c.denial_reason_code,
     dc.denial_category,
     e.line_of_business
-  FROM ${catalog}.claims.silver_claims_medical c
+  FROM claims.silver_claims_medical c
   INNER JOIN gold_denial_classification dc
     ON c.denial_reason_code = dc.denial_reason_code
-  LEFT JOIN ${catalog}.members.silver_enrollment e
+  LEFT JOIN members.silver_enrollment e
     ON c.member_id = e.member_id
   WHERE c.denial_reason_code IS NOT NULL
 ),
@@ -107,8 +107,8 @@ WITH high_risk_members AS (
     ram.hcc_count,
     e.line_of_business,
     ROW_NUMBER() OVER (ORDER BY ram.raf_score DESC) AS risk_rank
-  FROM ${catalog}.risk_adjustment.silver_risk_adjustment_member ram
-  INNER JOIN ${catalog}.members.silver_enrollment e
+  FROM risk_adjustment.silver_risk_adjustment_member ram
+  INNER JOIN members.silver_enrollment e
     ON ram.member_id = e.member_id
 )
 SELECT

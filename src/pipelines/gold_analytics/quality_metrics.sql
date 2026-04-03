@@ -30,7 +30,7 @@ WITH diabetes_care AS (
     CASE
       WHEN EXISTS (
         SELECT 1
-        FROM ${catalog}.clinical.silver_lab_results lr
+        FROM clinical.silver_lab_results lr
         WHERE lr.member_id = base.member_id
           AND lr.lab_name = 'HbA1c'
           AND YEAR(lr.collection_date) = base.measurement_year
@@ -43,8 +43,8 @@ WITH diabetes_care AS (
       c.member_id,
       e.line_of_business,
       YEAR(c.service_from_date) AS measurement_year
-    FROM ${catalog}.claims.silver_claims_medical c
-    INNER JOIN ${catalog}.members.silver_enrollment e
+    FROM claims.silver_claims_medical c
+    INNER JOIN members.silver_enrollment e
       ON c.member_id = e.member_id
     WHERE c.primary_diagnosis_code LIKE 'E11%'
   ) base
@@ -60,15 +60,15 @@ breast_cancer_screening AS (
     CASE
       WHEN EXISTS (
         SELECT 1
-        FROM ${catalog}.claims.silver_claims_medical c2
+        FROM claims.silver_claims_medical c2
         WHERE c2.member_id = m.member_id
           AND c2.procedure_code IN ('77067', '77066', '77065')
       ) THEN 1
       ELSE 0
     END AS is_compliant,
     YEAR(CURRENT_DATE()) AS measurement_year
-  FROM ${catalog}.members.silver_members m
-  INNER JOIN ${catalog}.members.silver_enrollment e
+  FROM members.silver_members m
+  INNER JOIN members.silver_enrollment e
     ON m.member_id = e.member_id
   WHERE m.gender = 'Female'
     AND FLOOR(DATEDIFF(CURRENT_DATE(), m.date_of_birth) / 365.25) BETWEEN 50 AND 74
@@ -78,7 +78,7 @@ breast_cancer_screening AS (
     CASE
       WHEN EXISTS (
         SELECT 1
-        FROM ${catalog}.claims.silver_claims_medical c2
+        FROM claims.silver_claims_medical c2
         WHERE c2.member_id = m.member_id
           AND c2.procedure_code IN ('77067', '77066', '77065')
       ) THEN 1
@@ -96,15 +96,15 @@ colorectal_screening AS (
     CASE
       WHEN EXISTS (
         SELECT 1
-        FROM ${catalog}.claims.silver_claims_medical c3
+        FROM claims.silver_claims_medical c3
         WHERE c3.member_id = m.member_id
           AND c3.procedure_code = '45380'
       ) THEN 1
       ELSE 0
     END AS is_compliant,
     YEAR(CURRENT_DATE()) AS measurement_year
-  FROM ${catalog}.members.silver_members m
-  INNER JOIN ${catalog}.members.silver_enrollment e
+  FROM members.silver_members m
+  INNER JOIN members.silver_enrollment e
     ON m.member_id = e.member_id
   WHERE FLOOR(DATEDIFF(CURRENT_DATE(), m.date_of_birth) / 365.25) BETWEEN 45 AND 75
   GROUP BY
@@ -113,7 +113,7 @@ colorectal_screening AS (
     CASE
       WHEN EXISTS (
         SELECT 1
-        FROM ${catalog}.claims.silver_claims_medical c3
+        FROM claims.silver_claims_medical c3
         WHERE c3.member_id = m.member_id
           AND c3.procedure_code = '45380'
       ) THEN 1
@@ -131,21 +131,21 @@ preventive_visit AS (
     CASE
       WHEN EXISTS (
         SELECT 1
-        FROM ${catalog}.claims.silver_claims_medical c4
+        FROM claims.silver_claims_medical c4
         WHERE c4.member_id = e.member_id
           AND c4.procedure_code IN ('99395', '99396')
       ) THEN 1
       ELSE 0
     END AS is_compliant,
     YEAR(CURRENT_DATE()) AS measurement_year
-  FROM ${catalog}.members.silver_enrollment e
+  FROM members.silver_enrollment e
   GROUP BY
     e.member_id,
     e.line_of_business,
     CASE
       WHEN EXISTS (
         SELECT 1
-        FROM ${catalog}.claims.silver_claims_medical c4
+        FROM claims.silver_claims_medical c4
         WHERE c4.member_id = e.member_id
           AND c4.procedure_code IN ('99395', '99396')
       ) THEN 1
@@ -171,7 +171,7 @@ WITH member_provider AS (
   SELECT DISTINCT
     c.member_id,
     c.rendering_provider_npi AS provider_npi
-  FROM ${catalog}.claims.silver_claims_medical c
+  FROM claims.silver_claims_medical c
   WHERE c.rendering_provider_npi IS NOT NULL
 )
 SELECT
@@ -184,7 +184,7 @@ SELECT
 FROM gold_hedis_member h
 INNER JOIN member_provider mp
   ON h.member_id = mp.member_id
-LEFT JOIN ${catalog}.providers.silver_providers p
+LEFT JOIN providers.silver_providers p
   ON mp.provider_npi = p.npi
 GROUP BY
   mp.provider_npi,
@@ -205,7 +205,7 @@ WITH provider_compliance AS (
     COUNT(DISTINCT hp.measure_name)  AS measure_count,
     AVG(hp.compliance_rate)          AS overall_compliance_rate
   FROM gold_hedis_provider hp
-  LEFT JOIN ${catalog}.providers.silver_providers p
+  LEFT JOIN providers.silver_providers p
     ON hp.provider_npi = p.npi
   GROUP BY
     hp.provider_npi,

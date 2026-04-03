@@ -76,10 +76,10 @@ AS SELECT
   risk_score,
   metal_level,
   COALESCE(
-    CAST(MONTHS_BETWEEN(
+    CAST(CEIL(MONTHS_BETWEEN(
       CAST(eligibility_end_date AS DATE),
       CAST(eligibility_start_date AS DATE)
-    ) AS INT),
+    )) AS INT),
     12
   ) AS coverage_months,
   CASE

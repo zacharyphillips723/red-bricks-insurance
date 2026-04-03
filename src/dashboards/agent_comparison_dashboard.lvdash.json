@@ -4,56 +4,56 @@
       "name": "ds_eval_summary",
       "displayName": "Agent Evaluation Summary",
       "queryLines": [
-        "SELECT agent_version, model_name, prompt_strategy, llm_endpoint, retrieval_chunks, num_eval_rows, eval_timestamp, avg_clinical_completeness, avg_citation_quality, avg_actionability, avg_response_structure FROM red_bricks_insurance.analytics.agent_evaluation_summary ORDER BY agent_version "
+        "SELECT agent_version, model_name, prompt_strategy, llm_endpoint, retrieval_chunks, num_eval_rows, eval_timestamp, avg_clinical_completeness, avg_citation_quality, avg_actionability, avg_response_structure FROM analytics.agent_evaluation_summary ORDER BY agent_version "
       ]
     },
     {
       "name": "ds_eval_by_metric",
       "displayName": "Scores by Metric and Agent Version",
       "queryLines": [
-        "SELECT agent_version, 'Clinical Completeness' AS metric, avg_clinical_completeness AS avg_score FROM red_bricks_insurance.analytics.agent_evaluation_summary UNION ALL SELECT agent_version, 'Citation Quality', avg_citation_quality FROM red_bricks_insurance.analytics.agent_evaluation_summary UNION ALL SELECT agent_version, 'Actionability', avg_actionability FROM red_bricks_insurance.analytics.agent_evaluation_summary UNION ALL SELECT agent_version, 'Response Structure', avg_response_structure FROM red_bricks_insurance.analytics.agent_evaluation_summary ORDER BY metric, agent_version "
+        "SELECT agent_version, 'Clinical Completeness' AS metric, avg_clinical_completeness AS avg_score FROM analytics.agent_evaluation_summary UNION ALL SELECT agent_version, 'Citation Quality', avg_citation_quality FROM analytics.agent_evaluation_summary UNION ALL SELECT agent_version, 'Actionability', avg_actionability FROM analytics.agent_evaluation_summary UNION ALL SELECT agent_version, 'Response Structure', avg_response_structure FROM analytics.agent_evaluation_summary ORDER BY metric, agent_version "
       ]
     },
     {
       "name": "ds_eval_per_question",
       "displayName": "Per-Question Evaluation Detail",
       "queryLines": [
-        "SELECT agent_version, inputs, clinical_completeness, citation_quality, actionability, response_structure, ROUND((COALESCE(clinical_completeness, 0) + COALESCE(citation_quality, 0) + COALESCE(actionability, 0)) / 3.0, 2) AS avg_custom_score FROM red_bricks_insurance.analytics.agent_evaluation_results ORDER BY inputs, agent_version "
+        "SELECT agent_version, inputs, clinical_completeness, citation_quality, actionability, response_structure, ROUND((COALESCE(clinical_completeness, 0) + COALESCE(citation_quality, 0) + COALESCE(actionability, 0)) / 3.0, 2) AS avg_custom_score FROM analytics.agent_evaluation_results ORDER BY inputs, agent_version "
       ]
     },
     {
       "name": "ds_eval_metadata",
       "displayName": "Agent Configuration Metadata",
       "queryLines": [
-        "SELECT agent_version, model_name, prompt_strategy, llm_endpoint, retrieval_chunks, num_eval_rows, eval_timestamp FROM red_bricks_insurance.analytics.agent_evaluation_summary ORDER BY agent_version "
+        "SELECT agent_version, model_name, prompt_strategy, llm_endpoint, retrieval_chunks, num_eval_rows, eval_timestamp FROM analytics.agent_evaluation_summary ORDER BY agent_version "
       ]
     },
     {
       "name": "ds_overall_avg_v1",
       "displayName": "v1 Overall Average Score",
       "queryLines": [
-        "SELECT ROUND((COALESCE(avg_clinical_completeness, 0) + COALESCE(avg_citation_quality, 0) + COALESCE(avg_actionability, 0)) / 3.0, 2) AS overall_avg_score FROM red_bricks_insurance.analytics.agent_evaluation_summary WHERE agent_version = 'v1' "
+        "SELECT ROUND((COALESCE(avg_clinical_completeness, 0) + COALESCE(avg_citation_quality, 0) + COALESCE(avg_actionability, 0)) / 3.0, 2) AS overall_avg_score FROM analytics.agent_evaluation_summary WHERE agent_version = 'v1' "
       ]
     },
     {
       "name": "ds_overall_avg_v2",
       "displayName": "v2 Overall Average Score",
       "queryLines": [
-        "SELECT ROUND((COALESCE(avg_clinical_completeness, 0) + COALESCE(avg_citation_quality, 0) + COALESCE(avg_actionability, 0)) / 3.0, 2) AS overall_avg_score FROM red_bricks_insurance.analytics.agent_evaluation_summary WHERE agent_version = 'v2' "
+        "SELECT ROUND((COALESCE(avg_clinical_completeness, 0) + COALESCE(avg_citation_quality, 0) + COALESCE(avg_actionability, 0)) / 3.0, 2) AS overall_avg_score FROM analytics.agent_evaluation_summary WHERE agent_version = 'v2' "
       ]
     },
     {
       "name": "ds_eval_count",
       "displayName": "Evaluation Question Count",
       "queryLines": [
-        "SELECT num_eval_rows FROM red_bricks_insurance.analytics.agent_evaluation_summary WHERE agent_version = 'v1' "
+        "SELECT num_eval_rows FROM analytics.agent_evaluation_summary WHERE agent_version = 'v1' "
       ]
     },
     {
       "name": "ds_eval_by_question_type",
       "displayName": "Average Scores by Question Type",
       "queryLines": [
-        "SELECT r.agent_version, CASE WHEN r.inputs LIKE '%outreach%' THEN 'Outreach Prep' WHEN r.inputs LIKE '%HEDIS%' OR r.inputs LIKE '%care gap%' THEN 'Care Gaps' WHEN r.inputs LIKE '%clinical activity%' OR r.inputs LIKE '%trends%' THEN 'Clinical Trends' WHEN r.inputs LIKE '%cost driver%' THEN 'Cost Context' ELSE 'Other' END AS question_type, ROUND(AVG(COALESCE(r.clinical_completeness, 0)), 2) AS avg_clinical, ROUND(AVG(COALESCE(r.actionability, 0)), 2) AS avg_actionability, COUNT(*) AS num_questions FROM red_bricks_insurance.analytics.agent_evaluation_results r GROUP BY r.agent_version, CASE WHEN r.inputs LIKE '%outreach%' THEN 'Outreach Prep' WHEN r.inputs LIKE '%HEDIS%' OR r.inputs LIKE '%care gap%' THEN 'Care Gaps' WHEN r.inputs LIKE '%clinical activity%' OR r.inputs LIKE '%trends%' THEN 'Clinical Trends' WHEN r.inputs LIKE '%cost driver%' THEN 'Cost Context' ELSE 'Other' END ORDER BY question_type, r.agent_version "
+        "SELECT r.agent_version, CASE WHEN r.inputs LIKE '%outreach%' THEN 'Outreach Prep' WHEN r.inputs LIKE '%HEDIS%' OR r.inputs LIKE '%care gap%' THEN 'Care Gaps' WHEN r.inputs LIKE '%clinical activity%' OR r.inputs LIKE '%trends%' THEN 'Clinical Trends' WHEN r.inputs LIKE '%cost driver%' THEN 'Cost Context' ELSE 'Other' END AS question_type, ROUND(AVG(COALESCE(r.clinical_completeness, 0)), 2) AS avg_clinical, ROUND(AVG(COALESCE(r.actionability, 0)), 2) AS avg_actionability, COUNT(*) AS num_questions FROM analytics.agent_evaluation_results r GROUP BY r.agent_version, CASE WHEN r.inputs LIKE '%outreach%' THEN 'Outreach Prep' WHEN r.inputs LIKE '%HEDIS%' OR r.inputs LIKE '%care gap%' THEN 'Care Gaps' WHEN r.inputs LIKE '%clinical activity%' OR r.inputs LIKE '%trends%' THEN 'Clinical Trends' WHEN r.inputs LIKE '%cost driver%' THEN 'Cost Context' ELSE 'Other' END ORDER BY question_type, r.agent_version "
       ]
     }
   ],

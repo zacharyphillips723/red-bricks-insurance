@@ -4,98 +4,98 @@
       "name": "ds_dq_domain_counts",
       "displayName": "DQ Domain Pass/Drop Rates",
       "queryLines": [
-        "SELECT domain, bronze_count, silver_count,   bronze_count - silver_count AS dropped_count,   ROUND(silver_count * 100.0 / NULLIF(bronze_count, 0), 2) AS pass_rate_pct,   ROUND((bronze_count - silver_count) * 100.0 / NULLIF(bronze_count, 0), 2) AS drop_rate_pct FROM (   SELECT 'Members' AS domain, (SELECT COUNT(*) FROM red_bricks_insurance.members.bronze_members) AS bronze_count, (SELECT COUNT(*) FROM red_bricks_insurance.members.silver_members) AS silver_count   UNION ALL SELECT 'Enrollment', (SELECT COUNT(*) FROM red_bricks_insurance.members.bronze_enrollment), (SELECT COUNT(*) FROM red_bricks_insurance.members.silver_enrollment)   UNION ALL SELECT 'Claims Medical', (SELECT COUNT(*) FROM red_bricks_insurance.claims.bronze_claims_medical), (SELECT COUNT(*) FROM red_bricks_insurance.claims.silver_claims_medical)   UNION ALL SELECT 'Claims Pharmacy', (SELECT COUNT(*) FROM red_bricks_insurance.claims.bronze_claims_pharmacy), (SELECT COUNT(*) FROM red_bricks_insurance.claims.silver_claims_pharmacy)   UNION ALL SELECT 'Encounters', (SELECT COUNT(*) FROM red_bricks_insurance.clinical.bronze_encounters), (SELECT COUNT(*) FROM red_bricks_insurance.clinical.silver_encounters)   UNION ALL SELECT 'Lab Results', (SELECT COUNT(*) FROM red_bricks_insurance.clinical.bronze_lab_results), (SELECT COUNT(*) FROM red_bricks_insurance.clinical.silver_lab_results)   UNION ALL SELECT 'Vitals', (SELECT COUNT(*) FROM red_bricks_insurance.clinical.bronze_vitals), (SELECT COUNT(*) FROM red_bricks_insurance.clinical.silver_vitals)   UNION ALL SELECT 'Providers', (SELECT COUNT(*) FROM red_bricks_insurance.providers.bronze_providers), (SELECT COUNT(*) FROM red_bricks_insurance.providers.silver_providers)   UNION ALL SELECT 'Underwriting', (SELECT COUNT(*) FROM red_bricks_insurance.underwriting.bronze_underwriting), (SELECT COUNT(*) FROM red_bricks_insurance.underwriting.silver_underwriting)   UNION ALL SELECT 'Risk Adj Member', (SELECT COUNT(*) FROM red_bricks_insurance.risk_adjustment.bronze_risk_adjustment_member), (SELECT COUNT(*) FROM red_bricks_insurance.risk_adjustment.silver_risk_adjustment_member)   UNION ALL SELECT 'Risk Adj Provider', (SELECT COUNT(*) FROM red_bricks_insurance.risk_adjustment.bronze_risk_adjustment_provider), (SELECT COUNT(*) FROM red_bricks_insurance.risk_adjustment.silver_risk_adjustment_provider) ) "
+        "SELECT domain, bronze_count, silver_count,   bronze_count - silver_count AS dropped_count,   ROUND(silver_count * 100.0 / NULLIF(bronze_count, 0), 2) AS pass_rate_pct,   ROUND((bronze_count - silver_count) * 100.0 / NULLIF(bronze_count, 0), 2) AS drop_rate_pct FROM (   SELECT 'Members' AS domain, (SELECT COUNT(*) FROM members.bronze_members) AS bronze_count, (SELECT COUNT(*) FROM members.silver_members) AS silver_count   UNION ALL SELECT 'Enrollment', (SELECT COUNT(*) FROM members.bronze_enrollment), (SELECT COUNT(*) FROM members.silver_enrollment)   UNION ALL SELECT 'Claims Medical', (SELECT COUNT(*) FROM claims.bronze_claims_medical), (SELECT COUNT(*) FROM claims.silver_claims_medical)   UNION ALL SELECT 'Claims Pharmacy', (SELECT COUNT(*) FROM claims.bronze_claims_pharmacy), (SELECT COUNT(*) FROM claims.silver_claims_pharmacy)   UNION ALL SELECT 'Encounters', (SELECT COUNT(*) FROM clinical.bronze_encounters), (SELECT COUNT(*) FROM clinical.silver_encounters)   UNION ALL SELECT 'Lab Results', (SELECT COUNT(*) FROM clinical.bronze_lab_results), (SELECT COUNT(*) FROM clinical.silver_lab_results)   UNION ALL SELECT 'Vitals', (SELECT COUNT(*) FROM clinical.bronze_vitals), (SELECT COUNT(*) FROM clinical.silver_vitals)   UNION ALL SELECT 'Providers', (SELECT COUNT(*) FROM providers.bronze_providers), (SELECT COUNT(*) FROM providers.silver_providers)   UNION ALL SELECT 'Underwriting', (SELECT COUNT(*) FROM underwriting.bronze_underwriting), (SELECT COUNT(*) FROM underwriting.silver_underwriting)   UNION ALL SELECT 'Risk Adj Member', (SELECT COUNT(*) FROM risk_adjustment.bronze_risk_adjustment_member), (SELECT COUNT(*) FROM risk_adjustment.silver_risk_adjustment_member)   UNION ALL SELECT 'Risk Adj Provider', (SELECT COUNT(*) FROM risk_adjustment.bronze_risk_adjustment_provider), (SELECT COUNT(*) FROM risk_adjustment.silver_risk_adjustment_provider) ) "
       ]
     },
     {
       "name": "ds_dq_totals",
       "displayName": "DQ Pipeline Totals",
       "queryLines": [
-        "SELECT SUM(bronze_count) AS total_ingested, SUM(silver_count) AS total_passed,   SUM(bronze_count) - SUM(silver_count) AS total_dropped,   ROUND(SUM(silver_count) * 100.0 / NULLIF(SUM(bronze_count), 0), 2) AS overall_pass_rate,   ROUND((SUM(bronze_count) - SUM(silver_count)) * 100.0 / NULLIF(SUM(bronze_count), 0), 2) AS overall_drop_rate FROM (   SELECT (SELECT COUNT(*) FROM red_bricks_insurance.members.bronze_members) AS bronze_count, (SELECT COUNT(*) FROM red_bricks_insurance.members.silver_members) AS silver_count   UNION ALL SELECT (SELECT COUNT(*) FROM red_bricks_insurance.members.bronze_enrollment), (SELECT COUNT(*) FROM red_bricks_insurance.members.silver_enrollment)   UNION ALL SELECT (SELECT COUNT(*) FROM red_bricks_insurance.claims.bronze_claims_medical), (SELECT COUNT(*) FROM red_bricks_insurance.claims.silver_claims_medical)   UNION ALL SELECT (SELECT COUNT(*) FROM red_bricks_insurance.claims.bronze_claims_pharmacy), (SELECT COUNT(*) FROM red_bricks_insurance.claims.silver_claims_pharmacy)   UNION ALL SELECT (SELECT COUNT(*) FROM red_bricks_insurance.clinical.bronze_encounters), (SELECT COUNT(*) FROM red_bricks_insurance.clinical.silver_encounters)   UNION ALL SELECT (SELECT COUNT(*) FROM red_bricks_insurance.clinical.bronze_lab_results), (SELECT COUNT(*) FROM red_bricks_insurance.clinical.silver_lab_results)   UNION ALL SELECT (SELECT COUNT(*) FROM red_bricks_insurance.clinical.bronze_vitals), (SELECT COUNT(*) FROM red_bricks_insurance.clinical.silver_vitals)   UNION ALL SELECT (SELECT COUNT(*) FROM red_bricks_insurance.providers.bronze_providers), (SELECT COUNT(*) FROM red_bricks_insurance.providers.silver_providers)   UNION ALL SELECT (SELECT COUNT(*) FROM red_bricks_insurance.underwriting.bronze_underwriting), (SELECT COUNT(*) FROM red_bricks_insurance.underwriting.silver_underwriting)   UNION ALL SELECT (SELECT COUNT(*) FROM red_bricks_insurance.risk_adjustment.bronze_risk_adjustment_member), (SELECT COUNT(*) FROM red_bricks_insurance.risk_adjustment.silver_risk_adjustment_member)   UNION ALL SELECT (SELECT COUNT(*) FROM red_bricks_insurance.risk_adjustment.bronze_risk_adjustment_provider), (SELECT COUNT(*) FROM red_bricks_insurance.risk_adjustment.silver_risk_adjustment_provider) ) "
+        "SELECT SUM(bronze_count) AS total_ingested, SUM(silver_count) AS total_passed,   SUM(bronze_count) - SUM(silver_count) AS total_dropped,   ROUND(SUM(silver_count) * 100.0 / NULLIF(SUM(bronze_count), 0), 2) AS overall_pass_rate,   ROUND((SUM(bronze_count) - SUM(silver_count)) * 100.0 / NULLIF(SUM(bronze_count), 0), 2) AS overall_drop_rate FROM (   SELECT (SELECT COUNT(*) FROM members.bronze_members) AS bronze_count, (SELECT COUNT(*) FROM members.silver_members) AS silver_count   UNION ALL SELECT (SELECT COUNT(*) FROM members.bronze_enrollment), (SELECT COUNT(*) FROM members.silver_enrollment)   UNION ALL SELECT (SELECT COUNT(*) FROM claims.bronze_claims_medical), (SELECT COUNT(*) FROM claims.silver_claims_medical)   UNION ALL SELECT (SELECT COUNT(*) FROM claims.bronze_claims_pharmacy), (SELECT COUNT(*) FROM claims.silver_claims_pharmacy)   UNION ALL SELECT (SELECT COUNT(*) FROM clinical.bronze_encounters), (SELECT COUNT(*) FROM clinical.silver_encounters)   UNION ALL SELECT (SELECT COUNT(*) FROM clinical.bronze_lab_results), (SELECT COUNT(*) FROM clinical.silver_lab_results)   UNION ALL SELECT (SELECT COUNT(*) FROM clinical.bronze_vitals), (SELECT COUNT(*) FROM clinical.silver_vitals)   UNION ALL SELECT (SELECT COUNT(*) FROM providers.bronze_providers), (SELECT COUNT(*) FROM providers.silver_providers)   UNION ALL SELECT (SELECT COUNT(*) FROM underwriting.bronze_underwriting), (SELECT COUNT(*) FROM underwriting.silver_underwriting)   UNION ALL SELECT (SELECT COUNT(*) FROM risk_adjustment.bronze_risk_adjustment_member), (SELECT COUNT(*) FROM risk_adjustment.silver_risk_adjustment_member)   UNION ALL SELECT (SELECT COUNT(*) FROM risk_adjustment.bronze_risk_adjustment_provider), (SELECT COUNT(*) FROM risk_adjustment.silver_risk_adjustment_provider) ) "
       ]
     },
     {
       "name": "ds_dq_claims_detail",
       "displayName": "Claims DQ by Type and Status",
       "queryLines": [
-        "SELECT claim_type, claim_status,   SUM(total_claims) AS total_claims,   ROUND(AVG(denial_rate) * 100, 2) AS avg_denial_rate_pct FROM red_bricks_insurance.claims.gold_claims_summary GROUP BY claim_type, claim_status "
+        "SELECT claim_type, claim_status,   SUM(total_claims) AS total_claims,   ROUND(AVG(denial_rate) * 100, 2) AS avg_denial_rate_pct FROM claims.gold_claims_summary GROUP BY claim_type, claim_status "
       ]
     },
     {
       "name": "ds_claims_trend",
       "displayName": "Claims Trend Over Time",
       "queryLines": [
-        "SELECT claim_type, service_year_month,   SUM(total_claims) AS total_claims,   SUM(total_paid) AS total_paid,   ROUND(AVG(denial_rate) * 100, 2) AS denial_rate_pct FROM red_bricks_insurance.claims.gold_claims_summary WHERE service_year_month >= '2023-01-01' GROUP BY claim_type, service_year_month ORDER BY service_year_month "
+        "SELECT claim_type, service_year_month,   SUM(total_claims) AS total_claims,   SUM(total_paid) AS total_paid,   ROUND(AVG(denial_rate) * 100, 2) AS denial_rate_pct FROM claims.gold_claims_summary WHERE service_year_month >= '2023-01-01' GROUP BY claim_type, service_year_month ORDER BY service_year_month "
       ]
     },
     {
       "name": "ds_pmpm_trend",
       "displayName": "PMPM Trend by LOB",
       "queryLines": [
-        "SELECT line_of_business, service_year_month,   ROUND(pmpm_paid, 2) AS pmpm_paid,   ROUND(pmpm_allowed, 2) AS pmpm_allowed,   member_months FROM red_bricks_insurance.analytics.gold_pmpm WHERE service_year_month >= '2023-01-01' ORDER BY service_year_month "
+        "SELECT line_of_business, service_year_month,   ROUND(pmpm_paid, 2) AS pmpm_paid,   ROUND(pmpm_allowed, 2) AS pmpm_allowed,   member_months FROM analytics.gold_pmpm WHERE service_year_month >= '2023-01-01' ORDER BY service_year_month "
       ]
     },
     {
       "name": "ds_enrollment",
       "displayName": "Enrollment Summary",
       "queryLines": [
-        "SELECT line_of_business, plan_type,   active_member_count, total_member_count,   ROUND(avg_premium, 2) AS avg_premium,   ROUND(avg_risk_score, 3) AS avg_actuarial_risk_score,   ROUND(churn_rate_pct, 2) AS churn_rate_pct FROM red_bricks_insurance.members.gold_enrollment_summary "
+        "SELECT line_of_business, plan_type,   active_member_count, total_member_count,   ROUND(avg_premium, 2) AS avg_premium,   ROUND(avg_risk_score, 3) AS avg_actuarial_risk_score,   ROUND(churn_rate_pct, 2) AS churn_rate_pct FROM members.gold_enrollment_summary "
       ]
     },
     {
       "name": "ds_denial_by_category",
       "displayName": "AI-Classified Denial Analysis",
       "queryLines": [
-        "SELECT denial_category,   SUM(denial_count) AS denial_count,   ROUND(SUM(total_denied_amount), 2) AS total_denied_amount,   ROUND(AVG(avg_denied_amount), 2) AS avg_denied_amount FROM red_bricks_insurance.analytics.gold_denial_analysis GROUP BY denial_category "
+        "SELECT denial_category,   SUM(denial_count) AS denial_count,   ROUND(SUM(total_denied_amount), 2) AS total_denied_amount,   ROUND(AVG(avg_denied_amount), 2) AS avg_denied_amount FROM analytics.gold_denial_analysis GROUP BY denial_category "
       ]
     },
     {
       "name": "ds_denial_by_lob",
       "displayName": "Denials by LOB and Category",
       "queryLines": [
-        "SELECT denial_category, line_of_business,   SUM(denial_count) AS denial_count,   ROUND(SUM(total_denied_amount), 2) AS total_denied_amount FROM red_bricks_insurance.analytics.gold_denial_analysis GROUP BY denial_category, line_of_business "
+        "SELECT denial_category, line_of_business,   SUM(denial_count) AS denial_count,   ROUND(SUM(total_denied_amount), 2) AS total_denied_amount FROM analytics.gold_denial_analysis GROUP BY denial_category, line_of_business "
       ]
     },
     {
       "name": "ds_exec_kpis",
       "displayName": "Executive KPIs",
       "queryLines": [
-        "SELECT   (SELECT SUM(active_member_count) FROM red_bricks_insurance.members.gold_enrollment_summary) AS total_active_members,   (SELECT ROUND(SUM(total_paid), 2) FROM red_bricks_insurance.claims.gold_claims_summary) AS total_claims_paid,   (SELECT COUNT(DISTINCT claim_type) FROM red_bricks_insurance.claims.gold_claims_summary) AS claim_types "
+        "SELECT   (SELECT SUM(active_member_count) FROM members.gold_enrollment_summary) AS total_active_members,   (SELECT ROUND(SUM(total_paid), 2) FROM claims.gold_claims_summary) AS total_claims_paid,   (SELECT COUNT(DISTINCT claim_type) FROM claims.gold_claims_summary) AS claim_types "
       ]
     },
     {
       "name": "ds_mlr",
       "displayName": "Medical Loss Ratio by LOB",
       "queryLines": [
-        "SELECT line_of_business,   ROUND(SUM(total_claims_paid) * 100.0 / NULLIF(SUM(total_premiums), 0), 1) AS mlr_pct,   ROUND(MAX(CAST(target_mlr AS DOUBLE)) * 100, 0) AS target_mlr_pct FROM red_bricks_insurance.analytics.gold_mlr WHERE mlr IS NOT NULL AND total_premiums IS NOT NULL AND total_premiums > 0 GROUP BY line_of_business "
+        "SELECT line_of_business,   ROUND(SUM(total_claims_paid) * 100.0 / NULLIF(SUM(total_premiums), 0), 1) AS mlr_pct,   ROUND(MAX(CAST(target_mlr AS DOUBLE)) * 100, 0) AS target_mlr_pct FROM analytics.gold_mlr WHERE mlr IS NOT NULL AND total_premiums IS NOT NULL AND total_premiums > 0 GROUP BY line_of_business "
       ]
     },
     {
       "name": "ds_risk_adjustment",
       "displayName": "Risk Adjustment Analysis",
       "queryLines": [
-        "SELECT line_of_business, model_year, member_count,   ROUND(avg_raf_score, 3) AS avg_raf_score,   ROUND(pct_high_risk * 100, 2) AS pct_high_risk,   ROUND(estimated_annual_revenue, 2) AS estimated_annual_revenue FROM red_bricks_insurance.analytics.gold_risk_adjustment_analysis "
+        "SELECT line_of_business, model_year, member_count,   ROUND(avg_raf_score, 3) AS avg_raf_score,   ROUND(pct_high_risk * 100, 2) AS pct_high_risk,   ROUND(estimated_annual_revenue, 2) AS estimated_annual_revenue FROM analytics.gold_risk_adjustment_analysis "
       ]
     },
     {
       "name": "ds_member_demographics",
       "displayName": "Member Demographics",
       "queryLines": [
-        "SELECT line_of_business, age_band,   SUM(member_count) AS member_count FROM red_bricks_insurance.members.gold_member_demographics GROUP BY line_of_business, age_band "
+        "SELECT line_of_business, age_band,   SUM(member_count) AS member_count FROM members.gold_member_demographics GROUP BY line_of_business, age_band "
       ]
     },
     {
       "name": "ds_ai_risk_narratives",
       "displayName": "AI-Generated Risk Narratives",
       "queryLines": [
-        "SELECT member_id, ROUND(raf_score, 2) AS raf_score,   hcc_codes, hcc_count, line_of_business, risk_rank,   risk_category, clinical_summary FROM red_bricks_insurance.analytics.gold_member_risk_narrative WHERE risk_rank <= 20 ORDER BY risk_rank "
+        "SELECT member_id, ROUND(raf_score, 2) AS raf_score,   hcc_codes, hcc_count, line_of_business, risk_rank,   risk_category, clinical_summary FROM analytics.gold_member_risk_narrative WHERE risk_rank <= 20 ORDER BY risk_rank "
       ]
     },
     {
       "name": "ds_stars_provider",
       "displayName": "Provider CMS Star Ratings (1-5)",
       "queryLines": [
-        "SELECT s.star_rating, s.star_label, COALESCE(g.provider_count, 0) AS provider_count, s.star_color FROM (   SELECT 1 AS star_rating, '1 Star' AS star_label, '#D32F2F' AS star_color   UNION ALL SELECT 2, '2 Stars', '#F57C00'   UNION ALL SELECT 3, '3 Stars', '#FBC02D'   UNION ALL SELECT 4, '4 Stars', '#7CB342'   UNION ALL SELECT 5, '5 Stars', '#2E7D32' ) s LEFT JOIN (   SELECT star_rating, COUNT(*) AS provider_count   FROM red_bricks_insurance.analytics.gold_stars_provider   GROUP BY star_rating ) g ON s.star_rating = g.star_rating ORDER BY s.star_rating "
+        "SELECT s.star_rating, s.star_label, COALESCE(g.provider_count, 0) AS provider_count, s.star_color FROM (   SELECT 1 AS star_rating, '1 Star' AS star_label, '#D32F2F' AS star_color   UNION ALL SELECT 2, '2 Stars', '#F57C00'   UNION ALL SELECT 3, '3 Stars', '#FBC02D'   UNION ALL SELECT 4, '4 Stars', '#7CB342'   UNION ALL SELECT 5, '5 Stars', '#2E7D32' ) s LEFT JOIN (   SELECT star_rating, COUNT(*) AS provider_count   FROM analytics.gold_stars_provider   GROUP BY star_rating ) g ON s.star_rating = g.star_rating ORDER BY s.star_rating "
       ]
     }
   ],

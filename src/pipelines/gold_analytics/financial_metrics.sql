@@ -20,9 +20,11 @@ SELECT
   COUNT(DISTINCT c.member_id)                               AS member_months,
   SUM(c.paid_amount) / NULLIF(COUNT(DISTINCT c.member_id), 0)   AS pmpm_paid,
   SUM(c.allowed_amount) / NULLIF(COUNT(DISTINCT c.member_id), 0) AS pmpm_allowed
-FROM ${catalog}.claims.silver_claims_medical c
-INNER JOIN ${catalog}.members.silver_enrollment e
+FROM claims.silver_claims_medical c
+INNER JOIN members.silver_enrollment e
   ON c.member_id = e.member_id
+  AND c.service_from_date >= e.eligibility_start_date
+  AND c.service_from_date <= COALESCE(e.eligibility_end_date, current_date())
 GROUP BY
   e.line_of_business,
   c.service_year_month;
@@ -41,9 +43,11 @@ WITH medical_claims AS (
     e.line_of_business,
     YEAR(c.service_from_date) AS service_year,
     SUM(c.paid_amount)        AS medical_paid
-  FROM ${catalog}.claims.silver_claims_medical c
-  INNER JOIN ${catalog}.members.silver_enrollment e
+  FROM claims.silver_claims_medical c
+  INNER JOIN members.silver_enrollment e
     ON c.member_id = e.member_id
+    AND c.service_from_date >= e.eligibility_start_date
+    AND c.service_from_date <= COALESCE(e.eligibility_end_date, current_date())
   GROUP BY e.line_of_business, YEAR(c.service_from_date)
 ),
 
@@ -52,19 +56,31 @@ pharmacy_claims AS (
     e.line_of_business,
     YEAR(p.fill_date) AS service_year,
     SUM(p.plan_paid)  AS pharmacy_paid
-  FROM ${catalog}.claims.silver_claims_pharmacy p
-  INNER JOIN ${catalog}.members.silver_enrollment e
+  FROM claims.silver_claims_pharmacy p
+  INNER JOIN members.silver_enrollment e
     ON p.member_id = e.member_id
+    AND p.fill_date >= e.eligibility_start_date
+    AND p.fill_date <= COALESCE(e.eligibility_end_date, current_date())
   GROUP BY e.line_of_business, YEAR(p.fill_date)
 ),
 
+-- Distribute premiums across each calendar year of coverage
 premiums AS (
   SELECT
-    line_of_business,
-    YEAR(eligibility_start_date) AS service_year,
-    SUM(monthly_premium * coverage_months) AS total_premiums
-  FROM ${catalog}.members.silver_enrollment
-  GROUP BY line_of_business, YEAR(eligibility_start_date)
+    e.line_of_business,
+    y.service_year,
+    SUM(
+      e.monthly_premium * GREATEST(0, CEIL(MONTHS_BETWEEN(
+        LEAST(COALESCE(e.eligibility_end_date, current_date()), MAKE_DATE(y.service_year + 1, 1, 1)),
+        GREATEST(e.eligibility_start_date, MAKE_DATE(y.service_year, 1, 1))
+      )))
+    ) AS total_premiums
+  FROM members.silver_enrollment e
+  CROSS JOIN (SELECT DISTINCT YEAR(eligibility_start_date) AS service_year FROM members.silver_enrollment
+              UNION SELECT DISTINCT YEAR(eligibility_end_date) FROM members.silver_enrollment WHERE eligibility_end_date IS NOT NULL) y
+  WHERE e.eligibility_start_date < MAKE_DATE(y.service_year + 1, 1, 1)
+    AND COALESCE(e.eligibility_end_date, current_date()) >= MAKE_DATE(y.service_year, 1, 1)
+  GROUP BY e.line_of_business, y.service_year
 )
 
 SELECT
@@ -113,7 +129,7 @@ SELECT
     / NULLIF(COUNT(*), 0)                                         AS pct_over_90,
   SUM(CASE WHEN DATEDIFF(paid_date, service_from_date) < 90 THEN 1 ELSE 0 END)
     / NULLIF(COUNT(*), 0)                                         AS completion_factor
-FROM ${catalog}.claims.silver_claims_medical
+FROM claims.silver_claims_medical
 WHERE paid_date IS NOT NULL
   AND service_from_date IS NOT NULL
 GROUP BY service_year_month;

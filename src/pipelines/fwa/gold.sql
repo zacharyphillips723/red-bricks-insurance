@@ -164,9 +164,9 @@ SELECT
   e.plan_type
 
 FROM LIVE.silver_fwa_signals s
-LEFT JOIN ${catalog}.claims.silver_claims_medical c
+LEFT JOIN claims.silver_claims_medical c
   ON s.claim_id = c.claim_id
-LEFT JOIN ${catalog}.members.silver_enrollment e
+LEFT JOIN members.silver_enrollment e
   ON s.member_id = e.member_id;
 
 -- ---------------------------------------------------------------------------
@@ -204,7 +204,7 @@ SELECT
   ROUND(SUM(s.estimated_overpayment) / NULLIF(SUM(s.paid_amount), 0), 4) AS overpayment_ratio
 
 FROM LIVE.silver_fwa_signals s
-LEFT JOIN ${catalog}.members.silver_enrollment e
+LEFT JOIN members.silver_enrollment e
   ON s.member_id = e.member_id
 GROUP BY
   s.fraud_type,

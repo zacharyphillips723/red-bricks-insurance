@@ -24,7 +24,7 @@ WITH provider_member_sets AS (
     COUNT(DISTINCT member_id) AS unique_members,
     COUNT(DISTINCT claim_id) AS total_claims,
     SUM(paid_amount) AS total_paid
-  FROM ${catalog}.claims.silver_claims_medical
+  FROM claims.silver_claims_medical
   GROUP BY rendering_provider_npi
   HAVING COUNT(DISTINCT member_id) >= 10
 ),
@@ -66,8 +66,8 @@ SELECT
     ELSE 'Low'
   END AS network_risk_level
 FROM provider_pairs pp
-LEFT JOIN ${catalog}.providers.silver_providers pa ON pp.provider_a_npi = pa.npi
-LEFT JOIN ${catalog}.providers.silver_providers pb ON pp.provider_b_npi = pb.npi
+LEFT JOIN providers.silver_providers pa ON pp.provider_a_npi = pa.npi
+LEFT JOIN providers.silver_providers pb ON pp.provider_b_npi = pb.npi
 WHERE pp.shared_members * 100.0 / LEAST(pp.provider_a_members, pp.provider_b_members) > 20
 ORDER BY overlap_pct DESC;
 
@@ -86,7 +86,7 @@ WITH member_provider_counts AS (
     COUNT(DISTINCT rendering_provider_npi) AS unique_providers_90d,
     COUNT(DISTINCT primary_diagnosis_code) AS unique_diagnoses_90d,
     COUNT(DISTINCT claim_id) AS claims_90d
-  FROM ${catalog}.claims.silver_claims_medical
+  FROM claims.silver_claims_medical
   WHERE service_from_date >= DATE_ADD(CURRENT_DATE(), -90)
   GROUP BY member_id
 ),
@@ -99,7 +99,7 @@ member_pharmacy AS (
     COUNT(*) AS total_fills,
     SUM(CASE WHEN is_specialty THEN 1 ELSE 0 END) AS specialty_fills,
     SUM(total_cost) AS total_rx_cost
-  FROM ${catalog}.claims.silver_claims_pharmacy
+  FROM claims.silver_claims_pharmacy
   WHERE fill_date >= DATE_ADD(CURRENT_DATE(), -180)
   GROUP BY member_id
 ),
@@ -112,7 +112,7 @@ member_fwa_signals AS (
     SUM(estimated_overpayment) AS total_estimated_overpayment,
     COUNT(DISTINCT fraud_type) AS distinct_fraud_types,
     COLLECT_SET(fraud_type) AS fraud_types_flagged
-  FROM ${catalog}.fwa.silver_fwa_signals
+  FROM fwa.silver_fwa_signals
   GROUP BY member_id
 )
 
@@ -159,8 +159,8 @@ SELECT
     4
   ) AS composite_member_fwa_score
 
-FROM ${catalog}.members.silver_members m
-LEFT JOIN ${catalog}.members.silver_enrollment e ON m.member_id = e.member_id
+FROM members.silver_members m
+LEFT JOIN members.silver_enrollment e ON m.member_id = e.member_id
 LEFT JOIN member_provider_counts mpc ON m.member_id = mpc.member_id
 LEFT JOIN member_pharmacy mp ON m.member_id = mp.member_id
 LEFT JOIN member_fwa_signals fs ON m.member_id = fs.member_id;
@@ -196,9 +196,9 @@ WITH top_signals AS (
     c.claim_type,
     e.line_of_business,
     ROW_NUMBER() OVER (ORDER BY s.fraud_score DESC) AS signal_rank
-  FROM ${catalog}.fwa.silver_fwa_signals s
-  LEFT JOIN ${catalog}.claims.silver_claims_medical c ON s.claim_id = c.claim_id
-  LEFT JOIN ${catalog}.members.silver_enrollment e ON s.member_id = e.member_id
+  FROM fwa.silver_fwa_signals s
+  LEFT JOIN claims.silver_claims_medical c ON s.claim_id = c.claim_id
+  LEFT JOIN members.silver_enrollment e ON s.member_id = e.member_id
 )
 SELECT
   signal_id,
@@ -279,10 +279,10 @@ SELECT
     END
   ) AS ml_risk_tier
 
-FROM ${catalog}.claims.silver_claims_medical c
-LEFT JOIN ${catalog}.members.silver_enrollment e
+FROM claims.silver_claims_medical c
+LEFT JOIN members.silver_enrollment e
   ON c.member_id = e.member_id
-LEFT JOIN ${catalog}.analytics.fwa_ml_predictions ml
+LEFT JOIN analytics.fwa_ml_predictions ml
   ON c.claim_id = ml.claim_id
-LEFT JOIN ${catalog}.fwa.silver_fwa_signals s
+LEFT JOIN fwa.silver_fwa_signals s
   ON c.claim_id = s.claim_id;

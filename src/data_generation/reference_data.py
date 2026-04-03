@@ -178,25 +178,25 @@ LOB_CONFIG = {
         "weight": 40,
         "plan_types": ["PPO", "HMO", "POS", "HDHP"],
         "age_range": (18, 64),
-        "premium_range": (550, 1100),
+        "premium_range": (650, 1300),
     },
     "Medicare Advantage": {
-        "weight": 30,
+        "weight": 10,
         "plan_types": ["HMO", "PPO", "PFFS", "SNP"],
         "age_range": (65, 95),
-        "premium_range": (800, 1400),
+        "premium_range": (900, 1500),
     },
     "Medicaid": {
-        "weight": 15,
+        "weight": 20,
         "plan_types": ["Managed Care", "FFS"],
         "age_range": (0, 64),
-        "premium_range": (350, 700),
+        "premium_range": (400, 800),
     },
     "ACA Marketplace": {
-        "weight": 15,
+        "weight": 30,
         "plan_types": ["Bronze", "Silver", "Gold", "Platinum"],
         "age_range": (18, 64),
-        "premium_range": (450, 900),
+        "premium_range": (500, 1000),
     },
 }
 

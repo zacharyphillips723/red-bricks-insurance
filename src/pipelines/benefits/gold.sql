@@ -83,7 +83,7 @@ medical_by_category AS (
     SUM(paid_amount)           AS actual_paid_amount,
     SUM(billed_amount)         AS actual_billed_amount,
     SUM(member_responsibility) AS actual_member_responsibility
-  FROM ${catalog}.claims.silver_claims_medical
+  FROM claims.silver_claims_medical
   GROUP BY member_id,
     CASE
       WHEN claim_type = 'Institutional_IP' THEN 'Medical - Inpatient'
@@ -102,7 +102,7 @@ pharmacy_agg AS (
     SUM(plan_paid)            AS actual_paid_amount,
     SUM(total_cost)           AS actual_billed_amount,
     SUM(member_copay)         AS actual_member_responsibility
-  FROM ${catalog}.claims.silver_claims_pharmacy
+  FROM claims.silver_claims_pharmacy
   GROUP BY member_id
 ),
 
@@ -150,7 +150,7 @@ risk AS (
       hcc_codes,
       is_high_risk,
       ROW_NUMBER() OVER (PARTITION BY member_id ORDER BY raf_score DESC) AS rn
-    FROM ${catalog}.risk_adjustment.silver_risk_adjustment_member
+    FROM risk_adjustment.silver_risk_adjustment_member
   )
   WHERE rn = 1
 )

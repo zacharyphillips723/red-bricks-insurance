@@ -31,7 +31,7 @@ WITH group_tcoc AS (
       ' | Expected: ', SUM(CASE WHEN t.cost_tier = 'Expected' THEN 1 ELSE 0 END),
       ' | Low Utilizer: ', SUM(CASE WHEN t.cost_tier = 'Low Utilizer' THEN 1 ELSE 0 END)
     ) AS cost_tier_distribution
-  FROM ${catalog}.members.silver_enrollment e
+  FROM members.silver_enrollment e
   INNER JOIN gold_member_tcoc t
     ON e.member_id = t.member_id
   WHERE e.group_number IS NOT NULL

@@ -11,8 +11,8 @@
 --   - Access pattern: Resource[0].field, GET_JSON_OBJECT(Resource[0].subject, '$.reference')
 --
 -- Sources:
---   ${catalog}.${schema}.Encounter   (dbignite Delta)
---   ${catalog}.${schema}.Observation  (dbignite Delta)
+--   ${schema}.Encounter   (dbignite Delta)
+--   ${schema}.Observation  (dbignite Delta)
 --
 -- Column contracts are preserved for downstream silver/gold consumers.
 -- =============================================================================
@@ -56,13 +56,13 @@ SELECT
   )                                                         AS visit_type,
   'dbignite'                                                AS source_file,
   current_timestamp()                                       AS ingestion_timestamp
-FROM ${catalog}.${schema}.Encounter e
-LEFT JOIN ${catalog}.${schema}.synthea_crosswalk cx
+FROM ${schema}.Encounter e
+LEFT JOIN ${schema}.synthea_crosswalk cx
   ON REGEXP_EXTRACT(
     GET_JSON_OBJECT(e.Encounter[0].subject, '$.reference'),
     'Patient/(.+)', 1
   ) = cx.synthea_uuid
-LEFT JOIN ${catalog}.${schema}.synthea_practitioner_crosswalk pcx
+LEFT JOIN ${schema}.synthea_practitioner_crosswalk pcx
   ON REGEXP_EXTRACT(
     GET_JSON_OBJECT(e.Encounter[0].participant[0].individual, '$.reference'),
     'Practitioner/(.+)', 1
@@ -114,8 +114,8 @@ SELECT
   o.Observation[0].effectiveDateTime                        AS collection_date,
   'dbignite'                                                AS source_file,
   current_timestamp()                                       AS ingestion_timestamp
-FROM ${catalog}.${schema}.Observation o
-LEFT JOIN ${catalog}.${schema}.synthea_crosswalk cx
+FROM ${schema}.Observation o
+LEFT JOIN ${schema}.synthea_crosswalk cx
   ON REGEXP_EXTRACT(
     GET_JSON_OBJECT(o.Observation[0].subject, '$.reference'),
     'Patient/(.+)', 1
@@ -154,8 +154,8 @@ SELECT
   o.Observation[0].effectiveDateTime                        AS measurement_date,
   'dbignite'                                                AS source_file,
   current_timestamp()                                       AS ingestion_timestamp
-FROM ${catalog}.${schema}.Observation o
-LEFT JOIN ${catalog}.${schema}.synthea_crosswalk cx
+FROM ${schema}.Observation o
+LEFT JOIN ${schema}.synthea_crosswalk cx
   ON REGEXP_EXTRACT(
     GET_JSON_OBJECT(o.Observation[0].subject, '$.reference'),
     'Patient/(.+)', 1

@@ -38,8 +38,8 @@ WITH claims_agg AS (
     SUM(c.allowed_amount)           AS total_allowed,
     -- IP admits: count distinct claim_ids for inpatient only
     COUNT(DISTINCT CASE WHEN c.claim_type LIKE '%IP%' THEN c.claim_id END) AS ip_admits
-  FROM ${catalog}.claims.silver_claims_medical c
-  INNER JOIN ${catalog}.members.silver_enrollment e
+  FROM claims.silver_claims_medical c
+  INNER JOIN members.silver_enrollment e
     ON c.member_id = e.member_id
   WHERE c.claim_status != 'Denied'
   GROUP BY e.line_of_business, YEAR(c.service_from_date),
@@ -56,7 +56,7 @@ member_months_agg AS (
     line_of_business,
     eligibility_year AS service_year,
     COUNT(*)         AS member_months
-  FROM ${catalog}.members.silver_member_months
+  FROM members.silver_member_months
   GROUP BY line_of_business, eligibility_year
 )
 
@@ -104,8 +104,8 @@ SELECT
   ) AS INT)                                AS development_month,
   SUM(c.paid_amount)                       AS incremental_paid,
   COUNT(*)                                 AS claim_count
-FROM ${catalog}.claims.silver_claims_medical c
-INNER JOIN ${catalog}.members.silver_enrollment e
+FROM claims.silver_claims_medical c
+INNER JOIN members.silver_enrollment e
   ON c.member_id = e.member_id
 WHERE c.paid_date IS NOT NULL
   AND c.claim_status != 'Denied'
