@@ -166,6 +166,19 @@ export interface Member360Detail {
   last_encounter_date: string | null;
   last_encounter_type: string | null;
   pcp_npi: string | null;
+  recent_labs: LabResult[];
+}
+
+export interface LabResult {
+  lab_result_id: string | null;
+  member_id: string | null;
+  lab_name: string | null;
+  value: string | null;
+  unit: string | null;
+  reference_range_low: string | null;
+  reference_range_high: string | null;
+  collection_date: string | null;
+  is_abnormal: string | null;
 }
 
 export interface CaseNote {

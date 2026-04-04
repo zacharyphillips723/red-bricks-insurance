@@ -30,14 +30,14 @@ SELECT
     cx.member_id,
     REGEXP_EXTRACT(
       GET_JSON_OBJECT(e.Encounter[0].subject, '$.reference'),
-      'Patient/(.+)', 1
+      '(?:Patient/|urn:uuid:)(.+)', 1
     )
   )                                                         AS member_id,
   COALESCE(
     pcx.provider_npi,
     REGEXP_EXTRACT(
       GET_JSON_OBJECT(e.Encounter[0].participant[0].individual, '$.reference'),
-      '([0-9]{10})', 1
+      '(?:Practitioner/|urn:uuid:)([0-9a-f-]+)', 1
     )
   )                                                         AS provider_npi,
   e.Encounter[0].period.start                               AS date_of_service,
@@ -60,12 +60,12 @@ FROM ${schema}.Encounter e
 LEFT JOIN ${schema}.synthea_crosswalk cx
   ON REGEXP_EXTRACT(
     GET_JSON_OBJECT(e.Encounter[0].subject, '$.reference'),
-    'Patient/(.+)', 1
+    '(?:Patient/|urn:uuid:)(.+)', 1
   ) = cx.synthea_uuid
 LEFT JOIN ${schema}.synthea_practitioner_crosswalk pcx
   ON REGEXP_EXTRACT(
     GET_JSON_OBJECT(e.Encounter[0].participant[0].individual, '$.reference'),
-    'Practitioner/(.+)', 1
+    '(?:Practitioner/|urn:uuid:)(.+)', 1
   ) = pcx.synthea_practitioner_uuid;
 
 -- ---------------------------------------------------------------------------
@@ -81,7 +81,7 @@ SELECT
     cx.member_id,
     REGEXP_EXTRACT(
       GET_JSON_OBJECT(o.Observation[0].subject, '$.reference'),
-      'Patient/(.+)', 1
+      '(?:Patient/|urn:uuid:)(.+)', 1
     )
   )                                                         AS member_id,
   CASE o.Observation[0].code.coding[0].code
@@ -118,7 +118,7 @@ FROM ${schema}.Observation o
 LEFT JOIN ${schema}.synthea_crosswalk cx
   ON REGEXP_EXTRACT(
     GET_JSON_OBJECT(o.Observation[0].subject, '$.reference'),
-    'Patient/(.+)', 1
+    '(?:Patient/|urn:uuid:)(.+)', 1
   ) = cx.synthea_uuid
 WHERE o.Observation[0].category[0].coding[0].code = 'laboratory';
 
@@ -135,7 +135,7 @@ SELECT
     cx.member_id,
     REGEXP_EXTRACT(
       GET_JSON_OBJECT(o.Observation[0].subject, '$.reference'),
-      'Patient/(.+)', 1
+      '(?:Patient/|urn:uuid:)(.+)', 1
     )
   )                                                         AS member_id,
   CASE o.Observation[0].code.coding[0].code
@@ -158,6 +158,6 @@ FROM ${schema}.Observation o
 LEFT JOIN ${schema}.synthea_crosswalk cx
   ON REGEXP_EXTRACT(
     GET_JSON_OBJECT(o.Observation[0].subject, '$.reference'),
-    'Patient/(.+)', 1
+    '(?:Patient/|urn:uuid:)(.+)', 1
   ) = cx.synthea_uuid
 WHERE o.Observation[0].category[0].coding[0].code = 'vital-signs';

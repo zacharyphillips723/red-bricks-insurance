@@ -217,8 +217,21 @@ class MemberListOut(BaseModel):
     county: Optional[str] = None
 
 
+class LabResultOut(BaseModel):
+    """Individual lab result."""
+    lab_result_id: Optional[str] = None
+    member_id: Optional[str] = None
+    lab_name: Optional[str] = None
+    value: Optional[str] = None
+    unit: Optional[str] = None
+    reference_range_low: Optional[str] = None
+    reference_range_high: Optional[str] = None
+    collection_date: Optional[str] = None
+    is_abnormal: Optional[str] = None
+
+
 class Member360Out(BaseModel):
-    """Full member 360 profile — all fields from gold_member_360."""
+    """Full member 360 profile — all fields from gold_member_360 plus recent labs."""
     member_id: str
     first_name: Optional[str] = None
     last_name: Optional[str] = None
@@ -259,6 +272,7 @@ class Member360Out(BaseModel):
     last_encounter_date: Optional[str] = None
     last_encounter_type: Optional[str] = None
     pcp_npi: Optional[str] = None
+    recent_labs: list[LabResultOut] = []
 
 
 class CaseNoteOut(BaseModel):

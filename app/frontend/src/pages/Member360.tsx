@@ -16,6 +16,7 @@ import {
   Calendar,
   DollarSign,
   Sparkles,
+  TestTubes,
 } from "lucide-react";
 import {
   api,
@@ -28,7 +29,7 @@ import {
 const SUGGESTED_QUESTIONS = [
   "Summarize this member's care history",
   "What are the key risk factors?",
-  "Describe recent outreach attempts",
+  "Are there any abnormal lab values to be concerned about?",
   "What HEDIS gaps need attention?",
   "Summarize recent claims activity",
   "What medications have been discussed?",
@@ -427,6 +428,59 @@ export function Member360() {
                   </div>
                 </div>
               </div>
+
+              {/* Recent Lab Results */}
+              {member.recent_labs && member.recent_labs.length > 0 && (
+                <div className="card p-5">
+                  <h4 className="text-sm font-semibold text-databricks-dark mb-3 flex items-center gap-2">
+                    <TestTubes className="w-4 h-4 text-databricks-red" /> Recent Lab Results
+                    <span className="text-xs font-normal text-gray-400">({member.recent_labs.length} results)</span>
+                  </h4>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-200 text-xs text-gray-400">
+                          <th className="text-left py-2 pr-3">Lab Name</th>
+                          <th className="text-right py-2 px-3">Value</th>
+                          <th className="text-left py-2 px-3">Unit</th>
+                          <th className="text-center py-2 px-3">Ref Range</th>
+                          <th className="text-left py-2 px-3">Date</th>
+                          <th className="text-center py-2 pl-3">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {member.recent_labs.map((lab, idx) => {
+                          const abnormal = String(lab.is_abnormal).toLowerCase() === "true" || lab.is_abnormal === "1";
+                          return (
+                            <tr key={lab.lab_result_id || idx} className="border-b border-gray-100 last:border-0">
+                              <td className="py-2 pr-3 font-medium text-databricks-dark">{lab.lab_name}</td>
+                              <td className={`py-2 px-3 text-right font-mono ${abnormal ? "text-red-600 font-semibold" : ""}`}>
+                                {lab.value}
+                              </td>
+                              <td className="py-2 px-3 text-gray-500">{lab.unit}</td>
+                              <td className="py-2 px-3 text-center text-gray-400 font-mono text-xs">
+                                {lab.reference_range_low}–{lab.reference_range_high}
+                              </td>
+                              <td className="py-2 px-3 text-gray-500">{lab.collection_date}</td>
+                              <td className="py-2 pl-3 text-center">
+                                {abnormal ? (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700 border border-red-200">
+                                    <AlertTriangle className="w-3 h-3 mr-1" /> Abnormal
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700 border border-green-200">
+                                    Normal
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
 
               {/* Recent Encounters */}
               {member.last_encounter_date && (

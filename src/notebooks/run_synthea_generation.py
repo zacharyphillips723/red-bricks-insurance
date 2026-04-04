@@ -150,7 +150,7 @@ exporter.baseDirectory = {LOCAL_OUTPUT_DIR}
 
 # === Generation Settings ===
 generate.payers.insurance_companies.default_file = payers/insurance_companies.csv
-exporter.years_of_history = 10
+exporter.years_of_history = 25
 
 # === Seed for Reproducibility ===
 generate.seed = {SEED}

@@ -17,17 +17,19 @@ from .env_config import UC_CATALOG, SQL_WAREHOUSE_ID, LLM_ENDPOINT
 
 MEMBER_360_TABLE = f"{UC_CATALOG}.analytics.gold_member_360"
 CASE_NOTES_TABLE = f"{UC_CATALOG}.documents.silver_case_notes"
+LAB_RESULTS_TABLE = f"{UC_CATALOG}.clinical.silver_lab_results"
 VS_INDEX_NAME = f"{UC_CATALOG}.documents.case_notes_vs_index"
 
 SYSTEM_PROMPT = """You are a care management assistant for Red Bricks Insurance.
 You help care managers prepare for member outreach by synthesizing structured data
-(demographics, claims, risk scores, HEDIS gaps) with unstructured data (case notes,
-call transcripts, claims summaries).
+(demographics, claims, risk scores, HEDIS gaps, lab results) with unstructured data
+(case notes, call transcripts, claims summaries).
 
-You will be given the member's profile and relevant case note excerpts. Synthesize
-this information into a clear, actionable summary. Always:
+You will be given the member's profile, recent lab results, and relevant case note
+excerpts. Synthesize this information into a clear, actionable summary. Always:
 - Cite sources (e.g., "According to the case note from January 15, 2025...")
 - Highlight key risk factors and care gaps
+- Call out abnormal lab values and trends (e.g., rising HbA1c, declining eGFR)
 - Suggest relevant follow-up actions
 - Flag concerning trends (rising costs, worsening conditions)
 
@@ -104,13 +106,15 @@ def search_members(query: str) -> list[dict]:
 
 
 def get_member_360(member_id: str) -> dict | None:
-    """Get full Member 360 profile."""
+    """Get full Member 360 profile including recent lab results."""
     try:
         sql = f"SELECT * FROM {MEMBER_360_TABLE} WHERE member_id = :member_id LIMIT 1"
         rows = _execute_sql(sql, [{"name": "member_id", "value": member_id}])
         if rows:
-            print(f"[Member 360] Found profile for {member_id}")
-            return rows[0]
+            profile = rows[0]
+            profile["recent_labs"] = get_member_labs(member_id)
+            print(f"[Member 360] Found profile for {member_id} with {len(profile['recent_labs'])} lab results")
+            return profile
         print(f"[Member 360] No profile found for {member_id}")
         return None
     except Exception as e:
@@ -135,6 +139,27 @@ def get_case_notes(member_id: str, limit: int = 20) -> list[dict]:
         return rows
     except Exception as e:
         print(f"[Case Notes] ERROR: {e}")
+        traceback.print_exc()
+        return []
+
+
+def get_member_labs(member_id: str, limit: int = 20) -> list[dict]:
+    """Get recent lab results for a member, ordered by collection date descending."""
+    try:
+        sql = f"""
+            SELECT lab_result_id, member_id, lab_name, value, unit,
+                   reference_range_low, reference_range_high, collection_date,
+                   is_abnormal
+            FROM {LAB_RESULTS_TABLE}
+            WHERE member_id = :member_id
+            ORDER BY collection_date DESC
+            LIMIT {limit}
+        """
+        rows = _execute_sql(sql, [{"name": "member_id", "value": member_id}])
+        print(f"[Lab Results] Found {len(rows)} results for {member_id}")
+        return rows
+    except Exception as e:
+        print(f"[Lab Results] ERROR: {e}")
         traceback.print_exc()
         return []
 
@@ -173,15 +198,30 @@ def query_member_agent(member_id: str, question: str) -> dict:
         profile_rows = _execute_sql(sql, [{"name": "member_id", "value": member_id}])
         profile = profile_rows[0] if profile_rows else {}
 
-        # Step 2: Search case notes via Vector Search (SDK auth)
+        # Step 2: Get recent lab results
+        labs = get_member_labs(member_id)
+
+        # Step 3: Search case notes via Vector Search (SDK auth)
         case_chunks = []
         try:
             case_chunks = _search_vs_index(member_id, question)
         except Exception as vs_err:
             print(f"[Agent] Vector Search error (continuing without): {vs_err}")
 
-        # Step 3: Build context for the LLM
+        # Step 4: Build context for the LLM
         profile_text = json.dumps(profile, indent=2, default=str) if profile else "No profile found."
+
+        labs_text = ""
+        if labs:
+            labs_text = "\n".join(
+                f"- {l.get('lab_name', 'Unknown')}: {l.get('value', '')} {l.get('unit', '')} "
+                f"(ref: {l.get('reference_range_low', '')}-{l.get('reference_range_high', '')}) "
+                f"on {l.get('collection_date', 'unknown date')}"
+                f"{' **ABNORMAL**' if str(l.get('is_abnormal', '')).lower() in ('true', '1') else ''}"
+                for l in labs
+            )
+        else:
+            labs_text = "No lab results found for this member."
 
         chunks_text = ""
         sources = []
@@ -201,11 +241,14 @@ def query_member_agent(member_id: str, question: str) -> dict:
         if not chunks_text:
             chunks_text = "No case notes or documents found for this member."
 
-        # Step 4: Call LLM
+        # Step 5: Call LLM
         user_message = f"""Question: {question}
 
 ## Member Profile
 {profile_text}
+
+## Recent Lab Results
+{labs_text}
 
 ## Relevant Case Notes and Documents
 {chunks_text}"""
