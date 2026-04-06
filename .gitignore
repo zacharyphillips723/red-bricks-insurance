@@ -5,6 +5,7 @@ __pycache__/
 .env
 .env.local
 .DS_Store
+member360_architecture*
 *.egg-info/
 dist/
 build/
