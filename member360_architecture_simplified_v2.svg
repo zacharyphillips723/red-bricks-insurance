@@ -1,0 +1,383 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2200 820" width="2200" height="820" font-family="Segoe UI, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#555" />
+    </marker>
+    <marker id="arr-org" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#FF9900" />
+    </marker>
+    <marker id="arr-red" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#FF3621" />
+    </marker>
+    <marker id="arr-blu" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#1E5FA8" />
+    </marker>
+    <marker id="arr-grn" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#1B6B3A" />
+    </marker>
+    <marker id="arr-pur" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#7B1FA2" />
+    </marker>
+    <marker id="arr-azu" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#0078D4" />
+    </marker>
+    <filter id="sh" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="1" dy="1" stdDeviation="2" flood-color="#00000018" />
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="2200" height="820" fill="#F8F9FA" />
+
+  <!-- Title -->
+  <rect width="2200" height="50" fill="#1C1C1C" />
+  <text x="1100" y="22" text-anchor="middle" font-size="17" font-weight="700" fill="white" letter-spacing="1">BCBS ALABAMA — MEMBER 360 AGENTIC WORKFLOW</text>
+  <text x="1100" y="40" text-anchor="middle" font-size="11" fill="#AAAAAA">2.8M Members · Databricks Lakehouse · Azure Delta Sharing Federation · Mosaic AI</text>
+
+  <!-- UC Governance banner -->
+  <rect x="260" y="56" width="1920" height="20" rx="4" fill="#6B21A8" opacity="0.08" stroke="#6B21A8" stroke-width="1" stroke-dasharray="4,3" />
+  <text x="1220" y="70" text-anchor="middle" font-size="9" font-weight="600" fill="#6B21A8">Unity Catalog Governance — Row Filters · Column Masking · PHI Tagging · Data Lineage · HIPAA Compliant</text>
+
+  <!-- Databricks Platform background -->
+  <rect x="255" y="52" width="1925" height="720" rx="12" fill="#FFF8F6" stroke="#FF3621" stroke-width="1.5" opacity="0.4" />
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <!-- COLUMN 1: DATA SOURCES (x: 10-245) -->
+  <!-- ══════════════════════════════════════════════════════ -->
+  <circle cx="30" cy="95" r="16" fill="#FF9900" />
+  <text x="30" y="100" text-anchor="middle" font-size="14" font-weight="700" fill="white">1</text>
+  <text x="55" y="100" font-size="12" font-weight="700" fill="#FF9900">DATA SOURCES</text>
+
+  <!-- S3 container -->
+  <rect x="10" y="115" width="240" height="320" rx="10" fill="white" stroke="#FF9900" stroke-width="2" filter="url(#sh)" />
+  <rect x="10" y="115" width="240" height="26" rx="10" fill="#FF9900" />
+  <rect x="10" y="131" width="240" height="10" fill="#FF9900" />
+  <text x="130" y="135" text-anchor="middle" font-size="11" font-weight="700" fill="white">AWS S3 Landing Zone</text>
+
+  <!-- Row A: PDFs -->
+  <rect x="22" y="152" width="216" height="38" rx="6" fill="#FFF5EB" stroke="#FF9900" stroke-width="1" />
+  <text x="130" y="169" text-anchor="middle" font-size="10" font-weight="600" fill="#333">Medical Record PDFs</text>
+  <text x="130" y="183" text-anchor="middle" font-size="8" fill="#888">Unstructured · Multi-format</text>
+
+  <!-- Row B: Claims -->
+  <rect x="22" y="198" width="216" height="38" rx="6" fill="#FFF5EB" stroke="#FF9900" stroke-width="1" />
+  <text x="130" y="215" text-anchor="middle" font-size="10" font-weight="600" fill="#333">Claims (Structured)</text>
+  <text x="130" y="229" text-anchor="middle" font-size="8" fill="#888">X12 837/835 · Parquet</text>
+
+  <!-- Row C: Inquiries -->
+  <rect x="22" y="244" width="216" height="38" rx="6" fill="#FFF5EB" stroke="#FF9900" stroke-width="1" />
+  <text x="130" y="261" text-anchor="middle" font-size="10" font-weight="600" fill="#333">Customer Inquiries</text>
+  <text x="130" y="275" text-anchor="middle" font-size="8" fill="#888">Structured · CSV/Parquet</text>
+
+  <!-- Row D: FHIR from S3 -->
+  <rect x="22" y="290" width="216" height="38" rx="6" fill="#FFF5EB" stroke="#FF9900" stroke-width="1" />
+  <text x="130" y="307" text-anchor="middle" font-size="10" font-weight="600" fill="#333">FHIR R4 Bundles</text>
+  <text x="130" y="321" text-anchor="middle" font-size="8" fill="#888">Partial provider coverage</text>
+
+  <!-- S3 volume label -->
+  <text x="130" y="355" text-anchor="middle" font-size="9" fill="#888">Nightly incremental loads</text>
+  <text x="130" y="370" text-anchor="middle" font-size="9" fill="#888">6-month lookback window</text>
+  <text x="130" y="392" text-anchor="middle" font-size="10" font-weight="700" fill="#FF9900">~2.8M members</text>
+  <text x="130" y="408" text-anchor="middle" font-size="9" fill="#888">Tens of millions of PDFs</text>
+  <text x="130" y="423" text-anchor="middle" font-size="9" fill="#888">Hundreds of millions of claims</text>
+
+  <!-- Azure Delta Sharing -->
+  <rect x="10" y="450" width="240" height="90" rx="10" fill="white" stroke="#0078D4" stroke-width="2" filter="url(#sh)" />
+  <rect x="10" y="450" width="240" height="26" rx="10" fill="#0078D4" />
+  <rect x="10" y="466" width="240" height="10" fill="#0078D4" />
+  <text x="130" y="470" text-anchor="middle" font-size="11" font-weight="700" fill="white">Azure Databricks</text>
+
+  <rect x="22" y="488" width="216" height="40" rx="6" fill="#E8F0FE" stroke="#0078D4" stroke-width="1.5" />
+  <text x="130" y="506" text-anchor="middle" font-size="11" font-weight="700" fill="#0078D4">Delta Sharing</text>
+  <text x="130" y="521" text-anchor="middle" font-size="9" fill="#555">FHIR clinical · Cross-cloud</text>
+
+  <!-- On-Prem DB2 Connector Note -->
+  <rect x="10" y="555" width="240" height="80" rx="10" fill="white" stroke="#666" stroke-width="1.5" stroke-dasharray="5,3" filter="url(#sh)" />
+  <rect x="10" y="555" width="240" height="24" rx="10" fill="#555" />
+  <rect x="10" y="569" width="240" height="10" fill="#555" />
+  <text x="130" y="573" text-anchor="middle" font-size="10" font-weight="700" fill="white">On-Prem Systems</text>
+  <text x="130" y="596" text-anchor="middle" font-size="9" font-weight="600" fill="#333">DB2 · Mainframe · Legacy EHR</text>
+  <text x="130" y="611" text-anchor="middle" font-size="8" fill="#888">Connect via Partner Connectors</text>
+  <text x="130" y="624" text-anchor="middle" font-size="8" fill="#888">(Fivetran, Qlik, Informatica, etc.)</text>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <!-- COLUMN 2: INGESTION (x: 270-410) -->
+  <!-- ══════════════════════════════════════════════════════ -->
+  <circle cx="285" cy="95" r="16" fill="#FF3621" />
+  <text x="285" y="100" text-anchor="middle" font-size="14" font-weight="700" fill="white">2</text>
+  <text x="310" y="100" font-size="12" font-weight="700" fill="#FF3621">INGEST</text>
+
+  <rect x="270" y="115" width="140" height="100" rx="10" fill="white" stroke="#FF3621" stroke-width="1.5" filter="url(#sh)" />
+  <rect x="282" y="125" width="116" height="36" rx="6" fill="#FFF5F0" stroke="#FF3621" stroke-width="1" />
+  <text x="340" y="141" text-anchor="middle" font-size="10" font-weight="700" fill="#FF3621">Auto Loader</text>
+  <text x="340" y="155" text-anchor="middle" font-size="8" fill="#888">cloudFiles · Incremental</text>
+
+  <rect x="282" y="170" width="116" height="36" rx="6" fill="#E8F0FE" stroke="#0078D4" stroke-width="1" />
+  <text x="340" y="186" text-anchor="middle" font-size="10" font-weight="700" fill="#0078D4">Delta Sharing</text>
+  <text x="340" y="200" text-anchor="middle" font-size="8" fill="#888">Federated read</text>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <!-- COLUMN 3: PROCESSING - 3 horizontal paths (x: 430-830) -->
+  <!-- ══════════════════════════════════════════════════════ -->
+  <circle cx="445" cy="95" r="16" fill="#FF3621" />
+  <text x="445" y="100" text-anchor="middle" font-size="14" font-weight="700" fill="white">3</text>
+  <text x="470" y="100" font-size="12" font-weight="700" fill="#FF3621">PROCESS</text>
+
+  <!-- PATH A: PDFs (top row) -->
+  <rect x="430" y="115" width="400" height="130" rx="10" fill="white" stroke="#5E35B1" stroke-width="1.5" filter="url(#sh)" />
+  <text x="630" y="133" text-anchor="middle" font-size="10" font-weight="700" fill="#5E35B1">Path A: PDF → Vector Search</text>
+
+  <rect x="442" y="142" width="62" height="30" rx="5" fill="#FDF0E6" stroke="#CD6020" stroke-width="1" />
+  <text x="473" y="161" text-anchor="middle" font-size="9" font-weight="700" fill="#CD6020">Bronze</text>
+
+  <line x1="504" y1="157" x2="516" y2="157" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)" />
+
+  <rect x="522" y="142" width="80" height="30" rx="5" fill="#E8F4FD" stroke="#1E5FA8" stroke-width="1" />
+  <text x="562" y="155" text-anchor="middle" font-size="8" font-weight="700" fill="#1E5FA8">AI Doc Parse</text>
+  <text x="562" y="166" text-anchor="middle" font-size="7" fill="#888">PDF → JSON</text>
+
+  <line x1="602" y1="157" x2="614" y2="157" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)" />
+
+  <rect x="620" y="142" width="62" height="30" rx="5" fill="#E8F5E9" stroke="#2E7D32" stroke-width="1" />
+  <text x="651" y="155" text-anchor="middle" font-size="9" font-weight="700" fill="#2E7D32">Silver</text>
+  <text x="651" y="166" text-anchor="middle" font-size="7" fill="#888">Chunks</text>
+
+  <line x1="682" y1="157" x2="694" y2="157" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)" />
+
+  <rect x="700" y="138" width="118" height="38" rx="6" fill="#EDE7F6" stroke="#5E35B1" stroke-width="2" />
+  <text x="759" y="155" text-anchor="middle" font-size="10" font-weight="700" fill="#5E35B1">Vector Search</text>
+  <text x="759" y="169" text-anchor="middle" font-size="8" fill="#888">bge-large-en</text>
+
+  <text x="630" y="200" text-anchor="middle" font-size="8" fill="#7B1FA2">Filter by member_id · Managed embeddings · Delta Sync</text>
+
+  <!-- Semantic output indicator -->
+  <rect x="700" y="183" width="118" height="20" rx="4" fill="#EDE7F6" stroke="#5E35B1" stroke-width="1" stroke-dasharray="3,2" />
+  <text x="759" y="197" text-anchor="middle" font-size="8" font-weight="600" fill="#5E35B1">→ Sub-Agent 3</text>
+
+  <!-- PATH B: Claims + Inquiries (middle row) -->
+  <rect x="430" y="260" width="400" height="130" rx="10" fill="white" stroke="#1565C0" stroke-width="1.5" filter="url(#sh)" />
+  <text x="630" y="278" text-anchor="middle" font-size="10" font-weight="700" fill="#1565C0">Path B: Claims + Inquiries</text>
+
+  <rect x="442" y="288" width="62" height="30" rx="5" fill="#FDF0E6" stroke="#CD6020" stroke-width="1" />
+  <text x="473" y="307" text-anchor="middle" font-size="9" font-weight="700" fill="#CD6020">Bronze</text>
+
+  <line x1="504" y1="303" x2="520" y2="303" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)" />
+
+  <rect x="526" y="288" width="62" height="30" rx="5" fill="#E8F5E9" stroke="#2E7D32" stroke-width="1" />
+  <text x="557" y="307" text-anchor="middle" font-size="9" font-weight="700" fill="#2E7D32">Silver</text>
+
+  <line x1="588" y1="303" x2="604" y2="303" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)" />
+
+  <rect x="610" y="288" width="62" height="30" rx="5" fill="#FFFDE7" stroke="#F9A825" stroke-width="1" />
+  <text x="641" y="307" text-anchor="middle" font-size="9" font-weight="700" fill="#C77800">Gold</text>
+
+  <line x1="672" y1="303" x2="694" y2="303" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)" />
+
+  <rect x="700" y="285" width="118" height="38" rx="6" fill="#E3F2FD" stroke="#1565C0" stroke-width="2" />
+  <text x="759" y="302" text-anchor="middle" font-size="10" font-weight="700" fill="#1565C0">Genie Space</text>
+  <text x="759" y="316" text-anchor="middle" font-size="8" fill="#888">NL → SQL</text>
+
+  <text x="630" y="345" text-anchor="middle" font-size="8" fill="#1565C0">SDP/Lakeflow medallion · DLT expectations · Gold aggregations</text>
+
+  <rect x="700" y="330" width="118" height="20" rx="4" fill="#E3F2FD" stroke="#1565C0" stroke-width="1" stroke-dasharray="3,2" />
+  <text x="759" y="344" text-anchor="middle" font-size="8" font-weight="600" fill="#1565C0">→ Sub-Agent 1</text>
+
+  <!-- PATH C: FHIR (bottom row) -->
+  <rect x="430" y="405" width="400" height="155" rx="10" fill="white" stroke="#1B6B3A" stroke-width="1.5" filter="url(#sh)" />
+  <text x="630" y="423" text-anchor="middle" font-size="10" font-weight="700" fill="#1B6B3A">Path C: FHIR Clinical Data</text>
+
+  <!-- Delta Sharing badge -->
+  <rect x="445" y="432" width="185" height="18" rx="9" fill="#E8F0FE" stroke="#0078D4" stroke-width="1" />
+  <text x="537" y="445" text-anchor="middle" font-size="8" font-weight="700" fill="#0078D4">Federated via Delta Sharing from Azure</text>
+
+  <rect x="442" y="458" width="62" height="30" rx="5" fill="#FDF0E6" stroke="#CD6020" stroke-width="1" />
+  <text x="473" y="477" text-anchor="middle" font-size="9" font-weight="700" fill="#CD6020">Bronze</text>
+
+  <line x1="504" y1="473" x2="516" y2="473" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)" />
+
+  <rect x="522" y="458" width="78" height="30" rx="5" fill="#FFF8E1" stroke="#F57F17" stroke-width="1.5" />
+  <text x="561" y="477" text-anchor="middle" font-size="9" font-weight="700" fill="#E65100">dbignite</text>
+
+  <line x1="600" y1="473" x2="614" y2="473" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)" />
+
+  <rect x="620" y="458" width="62" height="30" rx="5" fill="#E8F5E9" stroke="#2E7D32" stroke-width="1" />
+  <text x="651" y="477" text-anchor="middle" font-size="9" font-weight="700" fill="#2E7D32">Silver</text>
+
+  <line x1="682" y1="473" x2="694" y2="473" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)" />
+
+  <rect x="700" y="455" width="118" height="38" rx="6" fill="#E3F2FD" stroke="#1565C0" stroke-width="2" />
+  <text x="759" y="472" text-anchor="middle" font-size="10" font-weight="700" fill="#1565C0">Genie Space</text>
+  <text x="759" y="486" text-anchor="middle" font-size="8" fill="#888">Clinical NL → SQL</text>
+
+  <rect x="700" y="500" width="118" height="20" rx="4" fill="#E3F2FD" stroke="#1565C0" stroke-width="1" stroke-dasharray="3,2" />
+  <text x="759" y="514" text-anchor="middle" font-size="8" font-weight="600" fill="#1B6B3A">→ Sub-Agent 2</text>
+
+  <!-- fhir_provider_coverage -->
+  <rect x="445" y="500" width="185" height="24" rx="6" fill="#F3E5F5" stroke="#7B1FA2" stroke-width="1.5" />
+  <text x="537" y="517" text-anchor="middle" font-size="9" font-weight="700" fill="#7B1FA2">fhir_provider_coverage</text>
+
+  <text x="630" y="545" text-anchor="middle" font-size="8" fill="#1B6B3A">dbignite FHIR R4 parser · Encounters · Conditions · Observations · Medications</text>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <!-- COLUMN 4: AGENT LAYER (x: 855-1560) -->
+  <!-- ══════════════════════════════════════════════════════ -->
+  <circle cx="870" cy="95" r="16" fill="#1E5FA8" />
+  <text x="870" y="100" text-anchor="middle" font-size="14" font-weight="700" fill="white">4</text>
+  <text x="895" y="100" font-size="12" font-weight="700" fill="#1E5FA8">AGENT LAYER</text>
+
+  <rect x="855" y="115" width="540" height="445" rx="12" fill="#F0F4FA" stroke="#1E5FA8" stroke-width="2" filter="url(#sh)" />
+
+  <!-- Supervisor -->
+  <rect x="872" y="130" width="505" height="65" rx="8" fill="white" stroke="#1E5FA8" stroke-width="2" />
+  <rect x="872" y="130" width="505" height="24" rx="8" fill="#1E5FA8" />
+  <rect x="872" y="146" width="505" height="8" fill="#1E5FA8" />
+  <text x="1124" y="147" text-anchor="middle" font-size="11" font-weight="700" fill="white">SUPERVISOR AGENT</text>
+  <text x="1124" y="170" text-anchor="middle" font-size="9" fill="#555">Extracts member_id · Checks FHIR coverage · Routes to sub-agents · Parallel dispatch</text>
+  <text x="1124" y="185" text-anchor="middle" font-size="8" fill="#888">MLflow ChatModel · Registered in Unity Catalog · Mosaic AI Gateway LLM backend</text>
+
+  <!-- Route diamond -->
+  <polygon points="1124,210 1158,232 1124,254 1090,232" fill="#E3F2FD" stroke="#1E5FA8" stroke-width="2" />
+  <text x="1124" y="230" text-anchor="middle" font-size="8" font-weight="700" fill="#1E5FA8">ROUTE</text>
+  <text x="1124" y="241" text-anchor="middle" font-size="7" fill="#1565C0">has_fhir?</text>
+
+  <line x1="1124" y1="195" x2="1124" y2="210" stroke="#1E5FA8" stroke-width="1.5" marker-end="url(#arr-blu)" />
+
+  <!-- Route labels -->
+  <text x="970" y="270" text-anchor="middle" font-size="9" fill="#1B6B3A" font-weight="600">Always</text>
+  <text x="1124" y="270" text-anchor="middle" font-size="9" fill="#1B6B3A" font-weight="600">FHIR?</text>
+  <text x="1280" y="270" text-anchor="middle" font-size="9" fill="#E65100" font-weight="600">No FHIR</text>
+
+  <!-- Sub-Agent 1: Claims (left) -->
+  <rect x="882" y="280" width="160" height="90" rx="8" fill="white" stroke="#1E5FA8" stroke-width="1.5" />
+  <rect x="882" y="280" width="160" height="22" rx="8" fill="#1E5FA8" opacity="0.85" />
+  <rect x="882" y="294" width="160" height="8" fill="#1E5FA8" opacity="0.85" />
+  <text x="962" y="296" text-anchor="middle" font-size="9" font-weight="700" fill="white">SUB-AGENT 1</text>
+  <text x="962" y="318" text-anchor="middle" font-size="10" font-weight="600" fill="#1E5FA8">Claims/Inquiries</text>
+  <text x="962" y="333" text-anchor="middle" font-size="10" font-weight="600" fill="#1E5FA8">Genie</text>
+  <rect x="898" y="342" width="128" height="16" rx="8" fill="#1B6B3A" />
+  <text x="962" y="354" text-anchor="middle" font-size="8" font-weight="700" fill="white">ALWAYS INVOKED</text>
+
+  <!-- Sub-Agent 2: FHIR (middle) -->
+  <rect x="1054" y="280" width="140" height="90" rx="8" fill="white" stroke="#1B6B3A" stroke-width="1.5" />
+  <rect x="1054" y="280" width="140" height="22" rx="8" fill="#1B6B3A" opacity="0.85" />
+  <rect x="1054" y="294" width="140" height="8" fill="#1B6B3A" opacity="0.85" />
+  <text x="1124" y="296" text-anchor="middle" font-size="9" font-weight="700" fill="white">SUB-AGENT 2</text>
+  <text x="1124" y="318" text-anchor="middle" font-size="10" font-weight="600" fill="#1B6B3A">FHIR Clinical</text>
+  <text x="1124" y="333" text-anchor="middle" font-size="10" font-weight="600" fill="#1B6B3A">Genie</text>
+  <rect x="1062" y="342" width="124" height="16" rx="8" fill="#FFF3E0" stroke="#E65100" stroke-width="1" />
+  <text x="1124" y="354" text-anchor="middle" font-size="8" font-weight="600" fill="#E65100">IF provider has FHIR</text>
+
+  <!-- Sub-Agent 3: Vector Search (right) -->
+  <rect x="1206" y="280" width="160" height="90" rx="8" fill="white" stroke="#5E35B1" stroke-width="1.5" />
+  <rect x="1206" y="280" width="160" height="22" rx="8" fill="#5E35B1" opacity="0.85" />
+  <rect x="1206" y="294" width="160" height="8" fill="#5E35B1" opacity="0.85" />
+  <text x="1286" y="296" text-anchor="middle" font-size="9" font-weight="700" fill="white">SUB-AGENT 3</text>
+  <text x="1286" y="318" text-anchor="middle" font-size="10" font-weight="600" fill="#5E35B1">PDF Vector</text>
+  <text x="1286" y="333" text-anchor="middle" font-size="10" font-weight="600" fill="#5E35B1">Search</text>
+  <rect x="1214" y="342" width="144" height="16" rx="8" fill="#FFF3E0" stroke="#E65100" stroke-width="1" />
+  <text x="1286" y="354" text-anchor="middle" font-size="8" font-weight="600" fill="#E65100">IF no FHIR / supplement</text>
+
+  <!-- Routing arrows (internal to agent layer only) -->
+  <path d="M1090,232 L962,280" stroke="#1B6B3A" stroke-width="1.5" fill="none" marker-end="url(#arr-grn)" />
+  <path d="M1124,254 L1124,280" stroke="#1B6B3A" stroke-width="1.5" fill="none" marker-end="url(#arr-grn)" />
+  <path d="M1158,232 L1286,280" stroke="#E65100" stroke-width="1.5" fill="none" marker-end="url(#arrow)" />
+
+  <!-- Response Synthesis -->
+  <rect x="872" y="390" width="505" height="55" rx="8" fill="white" stroke="#1E5FA8" stroke-width="2" />
+  <rect x="872" y="390" width="505" height="22" rx="8" fill="#1E5FA8" opacity="0.85" />
+  <rect x="872" y="404" width="505" height="8" fill="#1E5FA8" opacity="0.85" />
+  <text x="1124" y="407" text-anchor="middle" font-size="10" font-weight="700" fill="white">RESPONSE SYNTHESIS</text>
+  <text x="1124" y="428" text-anchor="middle" font-size="9" fill="#555">SOAP format (Subjective · Objective · Assessment · Plan) · Source citations · PHI redaction</text>
+  <text x="1124" y="440" text-anchor="middle" font-size="8" fill="#888">Confidence scoring · MLflow trace · Audit trail → Unity Catalog</text>
+
+  <!-- Sub-agents to synthesis (internal arrows) -->
+  <line x1="962" y1="370" x2="1000" y2="390" stroke="#1E5FA8" stroke-width="1.5" marker-end="url(#arr-blu)" />
+  <line x1="1124" y1="370" x2="1124" y2="390" stroke="#1E5FA8" stroke-width="1.5" marker-end="url(#arr-blu)" />
+  <line x1="1286" y1="370" x2="1248" y2="390" stroke="#1E5FA8" stroke-width="1.5" marker-end="url(#arr-blu)" />
+
+  <!-- Priority -->
+  <rect x="872" y="455" width="505" height="22" rx="6" fill="#E8F5E9" stroke="#1B6B3A" stroke-width="1" />
+  <text x="1124" y="470" text-anchor="middle" font-size="9" font-weight="700" fill="#1B6B3A">Priority: FHIR structured &gt; Claims &gt; PDF content &gt; Inquiries</text>
+
+  <!-- Model Serving (below agent layer) -->
+  <rect x="872" y="495" width="240" height="50" rx="8" fill="white" stroke="#FF3621" stroke-width="1.5" filter="url(#sh)" />
+  <text x="992" y="517" text-anchor="middle" font-size="10" font-weight="700" fill="#FF3621">Mosaic AI Gateway</text>
+  <text x="992" y="533" text-anchor="middle" font-size="8" fill="#888">LLM endpoint · Rate limits · PII guardrails</text>
+
+  <rect x="1137" y="495" width="240" height="50" rx="8" fill="white" stroke="#FF3621" stroke-width="1.5" filter="url(#sh)" />
+  <text x="1257" y="517" text-anchor="middle" font-size="10" font-weight="700" fill="#FF3621">MLflow + UC Registry</text>
+  <text x="1257" y="533" text-anchor="middle" font-size="8" fill="#888">Agent versioning · Evaluation · Tracing</text>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <!-- COLUMN 5: CLINICIAN (x: 1420-1620) -->
+  <!-- ══════════════════════════════════════════════════════ -->
+  <circle cx="1420" cy="95" r="16" fill="#1B6B3A" />
+  <text x="1420" y="100" text-anchor="middle" font-size="14" font-weight="700" fill="white">5</text>
+  <text x="1445" y="100" font-size="12" font-weight="700" fill="#1B6B3A">CLINICIAN</text>
+
+  <rect x="1420" y="115" width="180" height="280" rx="10" fill="white" stroke="#1B6B3A" stroke-width="2" filter="url(#sh)" />
+  <rect x="1420" y="115" width="180" height="26" rx="10" fill="#1B6B3A" />
+  <rect x="1420" y="131" width="180" height="10" fill="#1B6B3A" />
+  <text x="1510" y="135" text-anchor="middle" font-size="11" font-weight="700" fill="white">Databricks App</text>
+
+  <!-- Monitor -->
+  <rect x="1476" y="152" width="68" height="46" rx="5" fill="#E8F5E9" stroke="#1B6B3A" stroke-width="1.5" />
+  <rect x="1482" y="158" width="56" height="34" rx="3" fill="#1B6B3A" opacity="0.1" />
+  <line x1="1492" y1="166" x2="1528" y2="166" stroke="#1B6B3A" stroke-width="1" opacity="0.4" />
+  <line x1="1492" y1="174" x2="1528" y2="174" stroke="#1B6B3A" stroke-width="1" opacity="0.4" />
+  <line x1="1492" y1="182" x2="1528" y2="182" stroke="#1B6B3A" stroke-width="1" opacity="0.4" />
+  <rect x="1504" y="198" width="12" height="5" rx="2" fill="#1B6B3A" opacity="0.3" />
+
+  <text x="1510" y="218" text-anchor="middle" font-size="10" font-weight="600" fill="#333">Chat Interface</text>
+  <text x="1510" y="233" text-anchor="middle" font-size="9" fill="#888">Streamlit / React</text>
+
+  <!-- SOAP -->
+  <rect x="1432" y="248" width="156" height="60" rx="6" fill="#F9FBE7" stroke="#9E9D24" stroke-width="1" />
+  <text x="1510" y="266" text-anchor="middle" font-size="10" font-weight="700" fill="#558B2F">SOAP Note Output</text>
+  <text x="1510" y="281" text-anchor="middle" font-size="9" fill="#555">S · O · A · P</text>
+  <text x="1510" y="296" text-anchor="middle" font-size="8" fill="#888">Citations · Member timeline</text>
+
+  <!-- Security -->
+  <rect x="1432" y="318" width="156" height="50" rx="6" fill="#FCE4EC" stroke="#C62828" stroke-width="1" />
+  <text x="1510" y="337" text-anchor="middle" font-size="9" font-weight="700" fill="#C62828">Security &amp; Compliance</text>
+  <text x="1510" y="352" text-anchor="middle" font-size="8" fill="#555">HIPAA · PHI masking · SSO</text>
+  <text x="1510" y="364" text-anchor="middle" font-size="8" fill="#888">Row-level filters · Audit</text>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <!-- LEGEND (compact, bottom right) -->
+  <!-- ══════════════════════════════════════════════════════ -->
+  <rect x="1620" y="115" width="230" height="240" rx="8" fill="white" stroke="#DDD" stroke-width="1" filter="url(#sh)" />
+  <rect x="1620" y="115" width="230" height="24" rx="8" fill="#1C1C1C" />
+  <rect x="1620" y="131" width="230" height="8" fill="#1C1C1C" />
+  <text x="1735" y="133" text-anchor="middle" font-size="10" font-weight="700" fill="white">KEY</text>
+
+  <rect x="1635" y="148" width="10" height="10" rx="2" fill="#CD6020" />
+  <text x="1653" y="157" font-size="8" fill="#555">Bronze (raw)</text>
+  <rect x="1635" y="164" width="10" height="10" rx="2" fill="#2E7D32" />
+  <text x="1653" y="173" font-size="8" fill="#555">Silver (validated)</text>
+  <rect x="1635" y="180" width="10" height="10" rx="2" fill="#F9A825" />
+  <text x="1653" y="189" font-size="8" fill="#555">Gold (aggregated)</text>
+
+  <line x1="1635" y1="200" x2="1670" y2="200" stroke="#FF9900" stroke-width="2" />
+  <text x="1678" y="204" font-size="8" fill="#555">S3 ingestion</text>
+  <line x1="1635" y1="215" x2="1670" y2="215" stroke="#0078D4" stroke-width="2" stroke-dasharray="5,3" />
+  <text x="1678" y="219" font-size="8" fill="#555">Delta Sharing (Azure)</text>
+  <line x1="1635" y1="230" x2="1670" y2="230" stroke="#FF3621" stroke-width="2" />
+  <text x="1678" y="234" font-size="8" fill="#555">Pipeline flow</text>
+  <line x1="1635" y1="245" x2="1670" y2="245" stroke="#1E5FA8" stroke-width="2" />
+  <text x="1678" y="249" font-size="8" fill="#555">Agent routing</text>
+  <line x1="1635" y1="260" x2="1670" y2="260" stroke="#1B6B3A" stroke-width="2.5" />
+  <text x="1678" y="264" font-size="8" fill="#555">Clinician output</text>
+  <line x1="1635" y1="275" x2="1670" y2="275" stroke="#7B1FA2" stroke-width="1.5" stroke-dasharray="5,3" />
+  <text x="1678" y="279" font-size="8" fill="#555">FHIR routing lookup</text>
+
+  <line x1="1630" y1="290" x2="1840" y2="290" stroke="#EEE" stroke-width="1" />
+  <text x="1635" y="305" font-size="9" font-weight="700" fill="#333">Databricks Features</text>
+  <text x="1635" y="320" font-size="8" fill="#555">Auto Loader · SDP/Lakeflow</text>
+  <text x="1635" y="334" font-size="8" fill="#555">Vector Search · Genie Spaces</text>
+  <text x="1635" y="348" font-size="8" fill="#555">Delta Sharing · dbignite · MLflow</text>
+
+  <!-- Footer -->
+  <rect x="0" y="780" width="2200" height="40" fill="#1C1C1C" />
+  <text x="1100" y="805" text-anchor="middle" font-size="10" fill="#AAAAAA">BCBS Alabama · Member 360 Agentic Workflow · Databricks Lakehouse + Azure Delta Sharing · Confidential</text>
+</svg>

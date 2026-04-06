@@ -17,6 +17,7 @@ Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB
   - [Command Center](#command-center-app)
   - [Group Reporting Portal](#group-reporting-portal-app-group-reporting)
   - [FWA Investigation Portal](#fwa-investigation-portal-app-fwa)
+  - [Underwriting Simulation Portal](#underwriting-simulation-portal-app-underwriting-sim)
 - [Dashboards](#dashboards)
 - [Project Structure](#project-structure)
 - [Deployment](#deployment)
@@ -268,6 +269,25 @@ SIU-focused application for fraud, waste, and abuse investigation:
 - **Data Architecture**: Hybrid — Lakebase for transactional investigation state (status changes, assignments, audit log, evidence) + Statement Execution API for analytics (provider risk profiles, flagged claims, ML predictions from gold tables)
 - **Config**: `app-fwa/app.yml`, DAB resource: `resources/app_fwa.yml`
 
+### Underwriting Simulation Portal (`app-underwriting-sim/`)
+
+What-if analysis tool for actuaries and underwriters to model pricing scenarios in real time:
+
+- **Backend**: FastAPI (Python), Lakebase PostgreSQL (async SQLAlchemy + OAuth token refresh), Statement Execution API with 15-min in-memory cache, Foundation Model API (Llama 4 Maverick)
+- **Frontend**: React 19 + Vite 6 + Tailwind (Databricks-branded dark theme)
+- **Simulation Engine**: 10 pure-Python simulation types with sub-100ms execution (no Spark required):
+  - Premium Rate, Benefit Design, Group Renewal, Population Mix, Medical Trend, Stop-Loss, Risk Adjustment, Utilization Change, New Group Quote, IBNR Reserve
+  - All return baseline vs. projected with delta, narrative summary, and warnings
+- **Pages**:
+  - **Dashboard** — KPI cards (total premium, claims, MLR, member count), baseline summary, recent simulations, quick-sim launcher
+  - **Simulation Builder** — dynamic form per simulation type with parameter inputs, delta-colored results, save dialog
+  - **Scenario Comparison** — side-by-side comparison of 2–4 simulations
+  - **Simulation History** — list/detail view with status management (draft/computed/approved/archived), notes, and immutable audit trail
+  - **Agent Chat** — conversational interface with tool-calling (`run_simulation`, `get_baseline`, `get_group_detail`, `query_uc_table`); SQL validation blocks write operations
+- **Genie Integration**: natural language SQL exploration against UC gold tables (graceful degradation if GENIE_SPACE_ID not set)
+- **Data Architecture**: Hybrid — Lakebase for transactional state (simulations, comparisons, audit log) + Statement Execution API for gold table aggregates (`gold_pmpm`, `gold_mlr`, `gold_enrollment_summary`, `gold_utilization_per_1000`, `gold_risk_adjustment_analysis`, etc.)
+- **Config**: `app-underwriting-sim/app.yml`, DAB resource: `resources/app_underwriting_sim.yml`
+
 ## Dashboards
 
 | Dashboard | Description |
@@ -310,6 +330,20 @@ red-bricks-insurance/
 │   │   └── genie.py                  #   Genie space integration
 │   ├── frontend/                     #   React + Vite + Tailwind source
 │   └── static/                       #   Built frontend output
+├── app-underwriting-sim/                # Underwriting Simulation Portal Databricks App
+│   ├── app.yml                       #   App config (Lakebase, SQL warehouse, LLM endpoint)
+│   ├── main.py                       #   FastAPI backend
+│   ├── backend/
+│   │   ├── router.py                 #   API routes (simulations, comparisons, agent, genie)
+│   │   ├── models.py                 #   Pydantic models (10 simulation types)
+│   │   ├── simulation_engine.py      #   Pure-Python simulation functions
+│   │   ├── data_loader.py            #   Statement Execution API + caching
+│   │   ├── database.py               #   Lakebase connection with OAuth token refresh
+│   │   ├── scenarios.py              #   Lakebase CRUD (simulations, comparisons, audit)
+│   │   ├── agent.py                  #   UW agent (tool-calling with simulations + UC queries)
+│   │   └── genie.py                  #   Genie space integration
+│   ├── frontend/                     #   React + Vite + Tailwind source
+│   └── static/                       #   Built frontend output
 ├── resources/
 │   ├── full_demo_job.yml             # End-to-end orchestration (25+ tasks)
 │   ├── refresh_demo_job.yml          # Refresh without Synthea (data gen → all downstream)
@@ -318,6 +352,7 @@ red-bricks-insurance/
 │   ├── agent_comparison_dashboard.yml# Agent eval dashboard
 │   ├── app_group_reporting.yml       # Group Reporting Portal app resource
 │   ├── app_fwa.yml                  # FWA Investigation Portal app resource
+│   ├── app_underwriting_sim.yml     # Underwriting Simulation Portal app resource
 │   ├── pipeline_members.yml          # Members & Enrollment SDP
 │   ├── pipeline_providers.yml        # Providers SDP
 │   ├── pipeline_claims.yml           # Claims SDP
@@ -550,7 +585,7 @@ databricks bundle run fwa_pipeline                 # Just FWA domain (signals, p
 
 ## Apps — Frontend Build
 
-All three apps (`app/` Command Center, `app-group-reporting/` Group Reporting Portal, `app-fwa/` FWA Investigation Portal) use React + Vite + Tailwind. **Frontends must be built before deploying the bundle** — the DAB deploys the pre-built `static/` directory, not the source.
+All four apps (`app/` Command Center, `app-group-reporting/` Group Reporting Portal, `app-fwa/` FWA Investigation Portal, `app-underwriting-sim/` Underwriting Simulation Portal) use React + Vite + Tailwind. **Frontends must be built before deploying the bundle** — the DAB deploys the pre-built `static/` directory, not the source.
 
 ```bash
 # Command Center
@@ -561,6 +596,9 @@ cd app-group-reporting/frontend && npm install && npm run build   # → outputs 
 
 # FWA Investigation Portal
 cd app-fwa/frontend && npm install && npm run build   # → outputs to app-fwa/static/
+
+# Underwriting Simulation Portal
+cd app-underwriting-sim/frontend && npm install && npm run build   # → outputs to app-underwriting-sim/static/
 ```
 
 The `.bundleignore` excludes `node_modules/`, `src/`, and other frontend build artifacts from the bundle upload. Only the `static/` directories are deployed.
@@ -659,7 +697,7 @@ This requires a **two-phase deploy** — see [Deploying to a New Workspace](#dep
 
 ### Token Refresh
 
-OAuth tokens expire after 1 hour. Both apps implement a background refresh loop (every 50 minutes) using SQLAlchemy's `do_connect` event to inject fresh tokens. See `app/backend/database.py` and `app-fwa/backend/database.py`.
+OAuth tokens expire after 1 hour. All three Lakebase-connected apps implement a background refresh loop (every 50 minutes) using SQLAlchemy's `do_connect` event to inject fresh tokens. See `app/backend/database.py`, `app-fwa/backend/database.py`, and `app-underwriting-sim/backend/database.py`.
 
 ## Deployment Notes & Known Issues
 
