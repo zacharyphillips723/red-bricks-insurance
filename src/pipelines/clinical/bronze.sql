@@ -161,3 +161,35 @@ LEFT JOIN ${schema}.synthea_crosswalk cx
     '(?:Patient/|urn:uuid:)(.+)', 1
   ) = cx.synthea_uuid
 WHERE o.Observation[0].category[0].coding[0].code = 'vital-signs';
+
+-- ---------------------------------------------------------------------------
+-- bronze_conditions
+-- Flatten Condition FHIR structs into analytics columns
+-- ---------------------------------------------------------------------------
+CREATE OR REFRESH MATERIALIZED VIEW bronze_conditions
+COMMENT 'Flattened FHIR Condition records from dbignite Delta tables. Maps SNOMED-CT codes to human-readable condition names.'
+AS
+SELECT
+  c.Condition[0].id                                         AS condition_id,
+  COALESCE(
+    cx.member_id,
+    REGEXP_EXTRACT(
+      GET_JSON_OBJECT(c.Condition[0].subject, '$.reference'),
+      '(?:Patient/|urn:uuid:)(.+)', 1
+    )
+  )                                                         AS member_id,
+  c.Condition[0].code.coding[0].code                        AS condition_code,
+  c.Condition[0].code.coding[0].system                      AS code_system,
+  c.Condition[0].code.coding[0].display                     AS condition_display,
+  c.Condition[0].clinicalStatus.coding[0].code              AS clinical_status,
+  c.Condition[0].verificationStatus.coding[0].code          AS verification_status,
+  c.Condition[0].onsetDateTime                              AS onset_date,
+  c.Condition[0].abatementDateTime                          AS abatement_date,
+  'dbignite'                                                AS source_file,
+  current_timestamp()                                       AS ingestion_timestamp
+FROM ${schema}.Condition c
+LEFT JOIN ${schema}.synthea_crosswalk cx
+  ON REGEXP_EXTRACT(
+    GET_JSON_OBJECT(c.Condition[0].subject, '$.reference'),
+    '(?:Patient/|urn:uuid:)(.+)', 1
+  ) = cx.synthea_uuid;

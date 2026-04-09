@@ -85,3 +85,29 @@ SELECT
   source_file,
   ingestion_timestamp
 FROM LIVE.bronze_vitals;
+
+-- ---------------------------------------------------------------------------
+-- silver_conditions
+-- Cleansed condition records with typed dates
+-- ---------------------------------------------------------------------------
+CREATE OR REFRESH MATERIALIZED VIEW silver_conditions (
+  CONSTRAINT valid_condition_id EXPECT (condition_id IS NOT NULL) ON VIOLATION DROP ROW,
+  CONSTRAINT valid_member_id    EXPECT (member_id IS NOT NULL)    ON VIOLATION DROP ROW,
+  CONSTRAINT valid_code         EXPECT (condition_code IS NOT NULL),
+  CONSTRAINT valid_onset_date   EXPECT (TRY_CAST(onset_date AS DATE) IS NOT NULL)
+)
+COMMENT 'Cleansed clinical conditions with validated IDs, typed dates, and quality tracking on code and onset date validity.'
+AS
+SELECT
+  condition_id,
+  member_id,
+  condition_code,
+  code_system,
+  condition_display,
+  clinical_status,
+  verification_status,
+  TRY_CAST(onset_date AS DATE)      AS onset_date,
+  TRY_CAST(abatement_date AS DATE)  AS abatement_date,
+  source_file,
+  ingestion_timestamp
+FROM LIVE.bronze_conditions;

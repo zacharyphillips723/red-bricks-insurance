@@ -70,3 +70,47 @@ SELECT
   ROUND(STDDEV(value), 2)                 AS std_dev
 FROM LIVE.silver_vitals
 GROUP BY vital_name;
+
+-- ---------------------------------------------------------------------------
+-- gold_member_conditions
+-- Per-member condition detail — Genie-friendly for clinical queries like
+-- "patients with hypertension and high BMI"
+-- ---------------------------------------------------------------------------
+CREATE OR REFRESH MATERIALIZED VIEW gold_member_conditions
+COMMENT 'Per-member condition detail with active flag. Supports Genie clinical queries by joining with vitals/labs on member_id.'
+AS
+SELECT
+  member_id,
+  condition_code,
+  code_system,
+  condition_display,
+  clinical_status,
+  onset_date,
+  abatement_date,
+  CASE
+    WHEN abatement_date IS NULL AND clinical_status = 'active' THEN TRUE
+    ELSE FALSE
+  END AS is_active
+FROM LIVE.silver_conditions;
+
+-- ---------------------------------------------------------------------------
+-- gold_condition_prevalence
+-- Population-level condition prevalence — supports population health
+-- monitoring, risk stratification, and chronic disease trending.
+-- ---------------------------------------------------------------------------
+CREATE OR REFRESH MATERIALIZED VIEW gold_condition_prevalence
+COMMENT 'Population-level condition prevalence rates. Supports chronic disease trending and population health analysis.'
+AS
+SELECT
+  condition_display,
+  condition_code,
+  COUNT(DISTINCT member_id)           AS affected_members,
+  COUNT(*)                            AS total_diagnoses,
+  ROUND(
+    COUNT(DISTINCT member_id)
+    / NULLIF((SELECT COUNT(DISTINCT member_id) FROM LIVE.silver_conditions), 0),
+    4
+  )                                   AS prevalence_rate,
+  SUM(CASE WHEN clinical_status = 'active' THEN 1 ELSE 0 END) AS active_count
+FROM LIVE.silver_conditions
+GROUP BY condition_display, condition_code;
