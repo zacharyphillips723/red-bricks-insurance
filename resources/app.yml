@@ -11,10 +11,12 @@ resources:
           - --host=0.0.0.0
           - --port=8000
         env:
-          - name: LAKEBASE_INSTANCE_NAME
-            value: red-bricks-command-center
+          - name: LAKEBASE_PROJECT_ID
+            value: ${var.lakebase_project_id}
           - name: LAKEBASE_DATABASE_NAME
             value: red_bricks_alerts
+          - name: LAKEBASE_BRANCH
+            value: production
           - name: GENIE_SPACE_ID
             value: auto
           - name: SQL_WAREHOUSE_ID
@@ -34,11 +36,6 @@ resources:
           serving_endpoint:
             name: databricks-bge-large-en
             permission: CAN_QUERY
-        # Lakebase — provisions the security label so the app SP can authenticate via OAuth
-        - name: lakebase-cc
-          database:
-            instance_name: red-bricks-command-center
-            database_name: red_bricks_alerts
-            permission: CAN_CONNECT_AND_CREATE
+        # Lakebase — SP access granted by bootstrap script (DAB doesn't support Autoscaling resource blocks yet)
         # vector_search_index not yet supported as a DAB app resource
         # The app accesses vs index via SDK using its service principal

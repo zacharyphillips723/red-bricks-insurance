@@ -7,15 +7,16 @@ from databricks.sdk.service.sql import StatementParameterListItem
 
 from .env_config import UC_CATALOG, SQL_WAREHOUSE_ID
 
-REPORT_CARD_TABLE = f"{UC_CATALOG}.analytics.gold_group_report_card"
-EXPERIENCE_TABLE = f"{UC_CATALOG}.analytics.gold_group_experience"
-STOP_LOSS_TABLE = f"{UC_CATALOG}.analytics.gold_group_stop_loss"
-RENEWAL_TABLE = f"{UC_CATALOG}.analytics.gold_group_renewal"
-TCOC_TABLE = f"{UC_CATALOG}.analytics.gold_member_tcoc"
-ENROLLMENT_TABLE = f"{UC_CATALOG}.members.silver_enrollment"
-MEMBER_360_TABLE = f"{UC_CATALOG}.analytics.gold_member_360"
-CLAIMS_MEDICAL_TABLE = f"{UC_CATALOG}.claims.silver_claims_medical"
-CLAIMS_PHARMACY_TABLE = f"{UC_CATALOG}.claims.silver_claims_pharmacy"
+_CAT = f"`{UC_CATALOG}`"  # SQL-safe quoting (handles hyphens in catalog names)
+REPORT_CARD_TABLE = f"{_CAT}.analytics.gold_group_report_card"
+EXPERIENCE_TABLE = f"{_CAT}.analytics.gold_group_experience"
+STOP_LOSS_TABLE = f"{_CAT}.analytics.gold_group_stop_loss"
+RENEWAL_TABLE = f"{_CAT}.analytics.gold_group_renewal"
+TCOC_TABLE = f"{_CAT}.analytics.gold_member_tcoc"
+ENROLLMENT_TABLE = f"{_CAT}.members.silver_enrollment"
+MEMBER_360_TABLE = f"{_CAT}.analytics.gold_member_360"
+CLAIMS_MEDICAL_TABLE = f"{_CAT}.claims.silver_claims_medical"
+CLAIMS_PHARMACY_TABLE = f"{_CAT}.claims.silver_claims_pharmacy"
 
 
 def _execute_sql(sql: str, params: list | None = None) -> list[dict]:

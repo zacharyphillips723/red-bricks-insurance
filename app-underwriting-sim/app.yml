@@ -5,10 +5,14 @@ command:
   - --port=8000
 
 env:
-  - name: LAKEBASE_INSTANCE_NAME
-    value: uw-simulations
+  - name: LAKEBASE_PROJECT_ID
+    value: red-bricks-insurance
   - name: LAKEBASE_DATABASE_NAME
     value: uw_sim
+  - name: LAKEBASE_BRANCH
+    value: production
+  - name: GENIE_SPACE_ID
+    value: auto
   - name: SQL_WAREHOUSE_ID
     value: auto
   - name: LLM_ENDPOINT

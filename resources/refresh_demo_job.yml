@@ -72,6 +72,22 @@ resources:
             pipeline_id: ${resources.pipelines.documents_pipeline.id}
             full_refresh: true
 
+        # Clinical data: parse existing Synthea FHIR bundles → clinical pipeline
+        - task_key: parse_fhir_with_dbignite
+          depends_on:
+            - task_key: data_generation
+          notebook_task:
+            notebook_path: ../src/notebooks/parse_fhir_with_dbignite.py
+            base_parameters:
+              catalog: ${var.catalog}
+
+        - task_key: clinical_pipeline
+          depends_on:
+            - task_key: parse_fhir_with_dbignite
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.clinical_pipeline.id}
+            full_refresh: true
+
         - task_key: fwa_pipeline
           depends_on:
             - task_key: data_generation
@@ -90,13 +106,13 @@ resources:
               catalog: ${var.catalog}
 
 
-        # Step 3: Gold analytics (depends on domain pipelines + member months + FWA)
-        # NOTE: clinical_pipeline is NOT re-run — Synthea data unchanged
+        # Step 3: Gold analytics (depends on ALL domain pipelines + member months + FWA)
         - task_key: gold_analytics_pipeline
           depends_on:
             - task_key: members_pipeline
             - task_key: providers_pipeline
             - task_key: claims_pipeline
+            - task_key: clinical_pipeline
             - task_key: underwriting_pipeline
             - task_key: risk_adjustment_pipeline
             - task_key: build_member_months

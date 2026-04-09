@@ -14,6 +14,7 @@ from databricks.sdk.service.sql import StatementParameterListItem
 
 from .env_config import UC_CATALOG, SQL_WAREHOUSE_ID
 
+_CAT = f"`{UC_CATALOG}`"  # SQL-safe quoting (handles hyphens in catalog names)
 CACHE_TTL = 15 * 60  # 15 minutes
 
 
@@ -87,7 +88,7 @@ class DataCache:
         if cached is not None:
             return cached
         try:
-            rows = _execute_sql(f"SELECT * FROM {UC_CATALOG}.analytics.gold_pmpm")
+            rows = _execute_sql(f"SELECT * FROM {_CAT}.analytics.gold_pmpm")
             return self._set_cached("pmpm", rows)
         except Exception as e:
             print(f"[data_loader] Failed to load gold_pmpm: {e}")
@@ -98,7 +99,7 @@ class DataCache:
         if cached is not None:
             return cached
         try:
-            rows = _execute_sql(f"SELECT * FROM {UC_CATALOG}.analytics.gold_mlr")
+            rows = _execute_sql(f"SELECT * FROM {_CAT}.analytics.gold_mlr")
             return self._set_cached("mlr", rows)
         except Exception as e:
             print(f"[data_loader] Failed to load gold_mlr: {e}")
@@ -109,7 +110,7 @@ class DataCache:
         if cached is not None:
             return cached
         try:
-            rows = _execute_sql(f"SELECT * FROM {UC_CATALOG}.members.gold_enrollment_summary")
+            rows = _execute_sql(f"SELECT * FROM {_CAT}.members.gold_enrollment_summary")
             return self._set_cached("enrollment_summary", rows)
         except Exception as e:
             print(f"[data_loader] Failed to load gold_enrollment_summary: {e}")
@@ -120,7 +121,7 @@ class DataCache:
         if cached is not None:
             return cached
         try:
-            rows = _execute_sql(f"SELECT * FROM {UC_CATALOG}.analytics.gold_utilization_per_1000")
+            rows = _execute_sql(f"SELECT * FROM {_CAT}.analytics.gold_utilization_per_1000")
             return self._set_cached("utilization", rows)
         except Exception as e:
             print(f"[data_loader] Failed to load gold_utilization_per_1000: {e}")
@@ -131,7 +132,7 @@ class DataCache:
         if cached is not None:
             return cached
         try:
-            rows = _execute_sql(f"SELECT * FROM {UC_CATALOG}.analytics.gold_ibnr_completion_factors")
+            rows = _execute_sql(f"SELECT * FROM {_CAT}.analytics.gold_ibnr_completion_factors")
             return self._set_cached("ibnr_cf", rows)
         except Exception as e:
             print(f"[data_loader] Failed to load gold_ibnr_completion_factors: {e}")
@@ -142,7 +143,7 @@ class DataCache:
         if cached is not None:
             return cached
         try:
-            rows = _execute_sql(f"SELECT * FROM {UC_CATALOG}.analytics.gold_ibnr_triangle")
+            rows = _execute_sql(f"SELECT * FROM {_CAT}.analytics.gold_ibnr_triangle")
             return self._set_cached("ibnr_triangle", rows)
         except Exception as e:
             print(f"[data_loader] Failed to load gold_ibnr_triangle: {e}")
@@ -153,7 +154,7 @@ class DataCache:
         if cached is not None:
             return cached
         try:
-            rows = _execute_sql(f"SELECT * FROM {UC_CATALOG}.analytics.gold_risk_adjustment_analysis")
+            rows = _execute_sql(f"SELECT * FROM {_CAT}.analytics.gold_risk_adjustment_analysis")
             return self._set_cached("risk_adj", rows)
         except Exception as e:
             print(f"[data_loader] Failed to load gold_risk_adjustment_analysis: {e}")
@@ -164,7 +165,7 @@ class DataCache:
         if cached is not None:
             return cached
         try:
-            rows = _execute_sql(f"SELECT * FROM {UC_CATALOG}.analytics.gold_coding_completeness")
+            rows = _execute_sql(f"SELECT * FROM {_CAT}.analytics.gold_coding_completeness")
             return self._set_cached("coding", rows)
         except Exception as e:
             print(f"[data_loader] Failed to load gold_coding_completeness: {e}")
@@ -175,7 +176,7 @@ class DataCache:
         if cached is not None:
             return cached
         try:
-            rows = _execute_sql(f"SELECT * FROM {UC_CATALOG}.analytics.gold_tcoc_summary")
+            rows = _execute_sql(f"SELECT * FROM {_CAT}.analytics.gold_tcoc_summary")
             return self._set_cached("tcoc_summary", rows)
         except Exception as e:
             print(f"[data_loader] Failed to load gold_tcoc_summary: {e}")
@@ -190,7 +191,7 @@ class DataCache:
             return cached
         try:
             rows = _execute_sql(
-                f"SELECT * FROM {UC_CATALOG}.analytics.gold_group_experience WHERE group_id = :gid",
+                f"SELECT * FROM {_CAT}.analytics.gold_group_experience WHERE group_id = :gid",
                 params=[{"name": "gid", "value": group_id}],
             )
             return self._set_cached(key, rows)
@@ -205,7 +206,7 @@ class DataCache:
             return cached
         try:
             rows = _execute_sql(
-                f"SELECT * FROM {UC_CATALOG}.analytics.gold_group_stop_loss WHERE group_id = :gid",
+                f"SELECT * FROM {_CAT}.analytics.gold_group_stop_loss WHERE group_id = :gid",
                 params=[{"name": "gid", "value": group_id}],
             )
             return self._set_cached(key, rows)
@@ -220,7 +221,7 @@ class DataCache:
             return cached
         try:
             rows = _execute_sql(
-                f"SELECT * FROM {UC_CATALOG}.analytics.gold_group_renewal WHERE group_id = :gid",
+                f"SELECT * FROM {_CAT}.analytics.gold_group_renewal WHERE group_id = :gid",
                 params=[{"name": "gid", "value": group_id}],
             )
             return self._set_cached(key, rows)
@@ -235,7 +236,7 @@ class DataCache:
             return cached
         try:
             rows = _execute_sql(
-                f"""SELECT * FROM {UC_CATALOG}.analytics.gold_member_tcoc
+                f"""SELECT * FROM {_CAT}.analytics.gold_member_tcoc
                     WHERE group_id = :gid ORDER BY actual_cost DESC""",
                 params=[{"name": "gid", "value": group_id}],
             )
@@ -251,7 +252,7 @@ class DataCache:
             return cached
         try:
             rows = _execute_sql(
-                f"SELECT * FROM {UC_CATALOG}.benefits.silver_benefits WHERE lob = :lob",
+                f"SELECT * FROM {_CAT}.benefits.silver_benefits WHERE lob = :lob",
                 params=[{"name": "lob", "value": lob}],
             )
             return self._set_cached(key, rows)

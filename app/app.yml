@@ -8,10 +8,12 @@ command:
 # When deployed via `databricks bundle deploy`, the DAB resource config
 # (resources/app.yml) overrides with resolved values. Catalog is always red_bricks_insurance.
 env:
-  - name: LAKEBASE_INSTANCE_NAME
-    value: red-bricks-command-center
+  - name: LAKEBASE_PROJECT_ID
+    value: red-bricks-insurance
   - name: LAKEBASE_DATABASE_NAME
     value: red_bricks_alerts
+  - name: LAKEBASE_BRANCH
+    value: production
   - name: GENIE_SPACE_ID
     value: auto
   - name: SQL_WAREHOUSE_ID

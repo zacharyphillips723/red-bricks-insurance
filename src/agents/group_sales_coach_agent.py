@@ -121,11 +121,12 @@ class GroupSalesCoachAgent(ChatModel):
         self.llm_endpoint = os.environ.get(
             "LLM_ENDPOINT", "databricks-llama-4-maverick"
         )
-        self.report_card_table = f"{self.catalog}.analytics.gold_group_report_card"
-        self.experience_table = f"{self.catalog}.analytics.gold_group_experience"
-        self.stop_loss_table = f"{self.catalog}.analytics.gold_group_stop_loss"
-        self.renewal_table = f"{self.catalog}.analytics.gold_group_renewal"
-        self.tcoc_table = f"{self.catalog}.analytics.gold_member_tcoc"
+        _cat = f"`{self.catalog}`"  # SQL-safe quoting (handles hyphens in catalog names)
+        self.report_card_table = f"{_cat}.analytics.gold_group_report_card"
+        self.experience_table = f"{_cat}.analytics.gold_group_experience"
+        self.stop_loss_table = f"{_cat}.analytics.gold_group_stop_loss"
+        self.renewal_table = f"{_cat}.analytics.gold_group_renewal"
+        self.tcoc_table = f"{_cat}.analytics.gold_member_tcoc"
 
     def _auto_detect_warehouse(self) -> str:
         """Auto-detect a SQL warehouse when none is configured."""

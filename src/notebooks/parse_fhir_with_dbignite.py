@@ -22,9 +22,10 @@
 dbutils.widgets.text("catalog", "red_bricks_insurance", "Catalog")
 
 catalog = dbutils.widgets.get("catalog")
+catalog_sql = f"`{catalog}`"
 volume_base = f"/Volumes/{catalog}/raw/raw_sources"
 fhir_path = f"{volume_base}/synthea_raw/fhir"
-clinical_schema = f"{catalog}.clinical"
+clinical_schema = f"{catalog_sql}.clinical"
 
 print(f"Catalog: {catalog}")
 print(f"Clinical schema: {clinical_schema}")
@@ -44,9 +45,10 @@ dbutils.library.restartPython()
 
 # Re-read widgets after Python restart
 catalog = dbutils.widgets.get("catalog")
+catalog_sql = f"`{catalog}`"
 volume_base = f"/Volumes/{catalog}/raw/raw_sources"
 fhir_path = f"{volume_base}/synthea_raw/fhir"
-clinical_schema = f"{catalog}.clinical"
+clinical_schema = f"{catalog_sql}.clinical"
 
 # COMMAND ----------
 

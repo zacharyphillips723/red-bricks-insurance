@@ -18,6 +18,7 @@
 dbutils.widgets.text("catalog", "red_bricks_insurance", "Catalog")
 
 catalog = dbutils.widgets.get("catalog")
+catalog_sql = f"`{catalog}`"  # SQL-safe quoting (handles hyphens in catalog names)
 
 # Domain schema constants
 ANALYTICS_SCHEMA = "analytics"
@@ -39,13 +40,13 @@ print(f"Creating metric views in: {catalog}.{ANALYTICS_SCHEMA}")
 # COMMAND ----------
 
 spark.sql(f"""
-CREATE OR REPLACE VIEW {catalog}.{ANALYTICS_SCHEMA}.mv_financial_overview
+CREATE OR REPLACE VIEW {catalog_sql}.{ANALYTICS_SCHEMA}.mv_financial_overview
 WITH METRICS
 LANGUAGE YAML
 AS {DD}
   version: 1.1
   comment: "Governed financial KPIs — PMPM paid/allowed, total paid/allowed, member months. Source of truth for cost metrics across all consumers."
-  source: {catalog}.{ANALYTICS_SCHEMA}.gold_pmpm
+  source: '{catalog_sql}.{ANALYTICS_SCHEMA}.gold_pmpm'
   dimensions:
     - name: line_of_business
       expr: line_of_business
@@ -82,13 +83,13 @@ print("✓ mv_financial_overview created")
 # COMMAND ----------
 
 spark.sql(f"""
-CREATE OR REPLACE VIEW {catalog}.{ANALYTICS_SCHEMA}.mv_mlr_compliance
+CREATE OR REPLACE VIEW {catalog_sql}.{ANALYTICS_SCHEMA}.mv_mlr_compliance
 WITH METRICS
 LANGUAGE YAML
 AS {DD}
   version: 1.1
   comment: "Governed MLR and admin ratio metrics with ACA compliance context."
-  source: {catalog}.{ANALYTICS_SCHEMA}.gold_mlr
+  source: '{catalog_sql}.{ANALYTICS_SCHEMA}.gold_mlr'
   dimensions:
     - name: line_of_business
       expr: line_of_business
@@ -128,13 +129,13 @@ print("✓ mv_mlr_compliance created")
 # COMMAND ----------
 
 spark.sql(f"""
-CREATE OR REPLACE VIEW {catalog}.{ANALYTICS_SCHEMA}.mv_utilization
+CREATE OR REPLACE VIEW {catalog_sql}.{ANALYTICS_SCHEMA}.mv_utilization
 WITH METRICS
 LANGUAGE YAML
 AS {DD}
   version: 1.1
   comment: "Governed utilization benchmarks per 1,000 member months — standard actuarial rates for cross-LOB comparison."
-  source: {catalog}.{ANALYTICS_SCHEMA}.gold_utilization_per_1000
+  source: '{catalog_sql}.{ANALYTICS_SCHEMA}.gold_utilization_per_1000'
   dimensions:
     - name: line_of_business
       expr: line_of_business
@@ -179,13 +180,13 @@ print("✓ mv_utilization created")
 # COMMAND ----------
 
 spark.sql(f"""
-CREATE OR REPLACE VIEW {catalog}.{ANALYTICS_SCHEMA}.mv_enrollment
+CREATE OR REPLACE VIEW {catalog_sql}.{ANALYTICS_SCHEMA}.mv_enrollment
 WITH METRICS
 LANGUAGE YAML
 AS {DD}
   version: 1.1
   comment: "Governed enrollment exposure metrics — member months, active members, premium revenue, and risk scores."
-  source: {catalog}.{MEMBERS_SCHEMA}.silver_member_months
+  source: '{catalog_sql}.{MEMBERS_SCHEMA}.silver_member_months'
   dimensions:
     - name: line_of_business
       expr: line_of_business
@@ -226,13 +227,13 @@ print("✓ mv_enrollment created")
 # COMMAND ----------
 
 spark.sql(f"""
-CREATE OR REPLACE VIEW {catalog}.{ANALYTICS_SCHEMA}.mv_ibnr
+CREATE OR REPLACE VIEW {catalog_sql}.{ANALYTICS_SCHEMA}.mv_ibnr
 WITH METRICS
 LANGUAGE YAML
 AS {DD}
   version: 1.1
   comment: "Governed IBNR reserve indicators — payment lag, completion rates, and outstanding claims beyond 90 days."
-  source: {catalog}.{ANALYTICS_SCHEMA}.gold_ibnr_estimate
+  source: '{catalog_sql}.{ANALYTICS_SCHEMA}.gold_ibnr_estimate'
   dimensions:
     - name: service_year_month
       expr: service_year_month
@@ -264,13 +265,13 @@ print("✓ mv_ibnr created")
 # COMMAND ----------
 
 spark.sql(f"""
-CREATE OR REPLACE VIEW {catalog}.{ANALYTICS_SCHEMA}.mv_denials
+CREATE OR REPLACE VIEW {catalog_sql}.{ANALYTICS_SCHEMA}.mv_denials
 WITH METRICS
 LANGUAGE YAML
 AS {DD}
   version: 1.1
   comment: "Governed denial financial impact — denial counts, denied amounts, and averages by AI-classified category."
-  source: {catalog}.{ANALYTICS_SCHEMA}.gold_denial_analysis
+  source: '{catalog_sql}.{ANALYTICS_SCHEMA}.gold_denial_analysis'
   dimensions:
     - name: denial_category
       expr: denial_category
@@ -303,13 +304,13 @@ print("✓ mv_denials created")
 # COMMAND ----------
 
 spark.sql(f"""
-CREATE OR REPLACE VIEW {catalog}.{ANALYTICS_SCHEMA}.mv_cost_of_care
+CREATE OR REPLACE VIEW {catalog_sql}.{ANALYTICS_SCHEMA}.mv_cost_of_care
 WITH METRICS
 LANGUAGE YAML
 AS {DD}
   version: 1.1
   comment: "Governed Total Cost of Care (TCOC) and Total Cost Index (TCI) metrics. TCOC normalizes cost for risk acuity; TCI benchmarks members against LOB averages."
-  source: {catalog}.{ANALYTICS_SCHEMA}.gold_member_tcoc
+  source: '{catalog_sql}.{ANALYTICS_SCHEMA}.gold_member_tcoc'
   dimensions:
     - name: line_of_business
       expr: line_of_business
@@ -365,13 +366,13 @@ print("✓ mv_cost_of_care created")
 # COMMAND ----------
 
 spark.sql(f"""
-CREATE OR REPLACE VIEW {catalog}.{ANALYTICS_SCHEMA}.mv_fwa_risk
+CREATE OR REPLACE VIEW {catalog_sql}.{ANALYTICS_SCHEMA}.mv_fwa_risk
 WITH METRICS
 LANGUAGE YAML
 AS {DD}
   version: 1.1
   comment: "Governed FWA risk metrics — signal counts, estimated overpayment, average fraud scores, and severity distribution by fraud type and LOB."
-  source: {catalog}.fwa.gold_fwa_summary
+  source: '{catalog_sql}.fwa.gold_fwa_summary'
   dimensions:
     - name: fraud_type
       expr: fraud_type
@@ -427,7 +428,7 @@ metric_views = ["mv_financial_overview", "mv_mlr_compliance", "mv_utilization",
 
 for mv in metric_views:
     try:
-        cols = spark.sql(f"DESCRIBE {catalog}.{ANALYTICS_SCHEMA}.{mv}").collect()
+        cols = spark.sql(f"DESCRIBE {catalog_sql}.{ANALYTICS_SCHEMA}.{mv}").collect()
         print(f"\n✓ {mv} — {len(cols)} columns")
     except Exception as e:
         print(f"\n✗ {mv} — ERROR: {e}")
@@ -443,7 +444,7 @@ for mv in metric_views:
 print("PMPM by Line of Business:")
 display(spark.sql(f"""
     SELECT `line_of_business`, MEASURE(`PMPM Paid`) AS pmpm_paid, MEASURE(`Member Months`) AS member_months
-    FROM {catalog}.{ANALYTICS_SCHEMA}.mv_financial_overview
+    FROM {catalog_sql}.{ANALYTICS_SCHEMA}.mv_financial_overview
     GROUP BY `line_of_business`
     ORDER BY pmpm_paid DESC
 """))
@@ -454,7 +455,7 @@ display(spark.sql(f"""
 print("MLR by Line of Business:")
 display(spark.sql(f"""
     SELECT `line_of_business`, `service_year`, MEASURE(`MLR`) AS mlr, MEASURE(`Admin Ratio`) AS admin_ratio
-    FROM {catalog}.{ANALYTICS_SCHEMA}.mv_mlr_compliance
+    FROM {catalog_sql}.{ANALYTICS_SCHEMA}.mv_mlr_compliance
     GROUP BY `line_of_business`, `service_year`
     ORDER BY `service_year` DESC, mlr DESC
 """))
@@ -467,7 +468,7 @@ display(spark.sql(f"""
     SELECT `service_category`, `line_of_business`,
            MEASURE(`Claims per 1000`) AS claims_per_1000,
            MEASURE(`Cost per 1000`) AS cost_per_1000
-    FROM {catalog}.{ANALYTICS_SCHEMA}.mv_utilization
+    FROM {catalog_sql}.{ANALYTICS_SCHEMA}.mv_utilization
     GROUP BY `service_category`, `line_of_business`
     ORDER BY cost_per_1000 DESC
 """))
@@ -479,7 +480,7 @@ print("Enrollment by LOB:")
 display(spark.sql(f"""
     SELECT `line_of_business`, MEASURE(`Member Months`) AS member_months,
            MEASURE(`Active Members`) AS active_members, MEASURE(`Premium Revenue`) AS premium_revenue
-    FROM {catalog}.{ANALYTICS_SCHEMA}.mv_enrollment
+    FROM {catalog_sql}.{ANALYTICS_SCHEMA}.mv_enrollment
     GROUP BY `line_of_business`
     ORDER BY member_months DESC
 """))
@@ -494,7 +495,7 @@ display(spark.sql(f"""
            MEASURE(`Avg TCI`) AS avg_tci,
            MEASURE(`Total Members`) AS members,
            MEASURE(`Avg RAF Score`) AS avg_raf
-    FROM {catalog}.{ANALYTICS_SCHEMA}.mv_cost_of_care
+    FROM {catalog_sql}.{ANALYTICS_SCHEMA}.mv_cost_of_care
     GROUP BY `line_of_business`, `cost_tier`
     ORDER BY avg_tci DESC
 """))

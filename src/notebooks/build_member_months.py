@@ -15,9 +15,10 @@
 dbutils.widgets.text("catalog", "red_bricks_insurance", "Catalog")
 
 catalog = dbutils.widgets.get("catalog")
+catalog_sql = f"`{catalog}`"  # SQL-safe quoting (handles hyphens in catalog names)
 
-TABLE_NAME = f"{catalog}.members.silver_member_months"
-SOURCE_TABLE = f"{catalog}.members.silver_enrollment"
+TABLE_NAME = f"{catalog_sql}.members.silver_member_months"
+SOURCE_TABLE = f"{catalog_sql}.members.silver_enrollment"
 
 print(f"Source:  {SOURCE_TABLE}")
 print(f"Target:  {TABLE_NAME}")

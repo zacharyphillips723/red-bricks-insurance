@@ -1,11 +1,12 @@
-resources:
-  database_instances:
-    lakebase_command_center:
-      name: red-bricks-command-center
-      capacity: CU_1
-    lakebase_fwa:
-      name: fwa-investigations
-      capacity: CU_1
-    lakebase_uw_sim:
-      name: uw-simulations
-      capacity: CU_1
+# Lakebase Autoscaling
+#
+# The Lakebase Autoscaling project (var.lakebase_project_id) is managed by the
+# bootstrap_workspace notebook because DAB does not yet support native
+# Autoscaling project resources. The bootstrap script:
+#   1. Creates the project via w.postgres.create_project()
+#   2. Creates databases (red_bricks_alerts, fwa_cases, uw_sim)
+#   3. Runs DDL, grants PUBLIC access, and creates SP roles
+#
+# Previously this file defined 3 Provisioned database_instance resources
+# (red-bricks-command-center, fwa-investigations, uw-simulations).
+# Those have been replaced by a single Autoscaling project with 3 databases.

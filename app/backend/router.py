@@ -48,7 +48,7 @@ async def health_check():
         "status": "ok",
         "db_initialized": db._initialized,
         "lakebase_pg_url_set": bool(os.environ.get("LAKEBASE_PG_URL")),
-        "lakebase_instance": os.environ.get("LAKEBASE_INSTANCE_NAME", "not set"),
+        "lakebase_project": os.environ.get("LAKEBASE_PROJECT_ID", "not set"),
         "lakebase_database": os.environ.get("LAKEBASE_DATABASE_NAME", "not set"),
         "genie_space_id": os.environ.get("GENIE_SPACE_ID", "not set"),
         "sql_warehouse_id": os.environ.get("SQL_WAREHOUSE_ID", "not set"),

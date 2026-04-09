@@ -18,7 +18,7 @@ env:
   - name: UC_SCHEMA
     value: analytics
   - name: GENIE_SPACE_ID
-    value: ""
+    value: auto
   # Optional enrichment integrations — leave empty to disable
   - name: SLACK_BOT_TOKEN
     value: ""

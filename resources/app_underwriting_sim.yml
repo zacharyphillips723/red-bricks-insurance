@@ -11,10 +11,14 @@ resources:
           - --host=0.0.0.0
           - --port=8000
         env:
-          - name: LAKEBASE_INSTANCE_NAME
-            value: uw-simulations
+          - name: LAKEBASE_PROJECT_ID
+            value: ${var.lakebase_project_id}
           - name: LAKEBASE_DATABASE_NAME
             value: uw_sim
+          - name: LAKEBASE_BRANCH
+            value: production
+          - name: GENIE_SPACE_ID
+            value: auto
           - name: SQL_WAREHOUSE_ID
             value: ${var.warehouse_id}
           - name: LLM_ENDPOINT
@@ -28,12 +32,7 @@ resources:
           serving_endpoint:
             name: databricks-llama-4-maverick
             permission: CAN_QUERY
-        # Lakebase — provisions the security label so the app SP can authenticate via OAuth
-        - name: lakebase-uw-sim
-          database:
-            instance_name: uw-simulations
-            database_name: uw_sim
-            permission: CAN_CONNECT_AND_CREATE
+        # Lakebase — SP access granted by bootstrap script (DAB doesn't support Autoscaling resource blocks yet)
         - name: sql-warehouse
           sql_warehouse:
             id: ${var.warehouse_id}

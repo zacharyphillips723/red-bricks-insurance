@@ -20,7 +20,7 @@ resources:
           - name: UC_SCHEMA
             value: analytics
           - name: GENIE_SPACE_ID
-            value: ""
+            value: auto
           # Optional enrichment — leave empty to disable
           - name: SLACK_BOT_TOKEN
             value: ""

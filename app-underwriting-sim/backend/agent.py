@@ -16,6 +16,7 @@ from .data_loader import data_cache
 from .env_config import UC_CATALOG, SQL_WAREHOUSE_ID, LLM_ENDPOINT
 from .simulation_engine import run_simulation, SIMULATION_FUNCTIONS
 
+_CAT = f"`{UC_CATALOG}`"  # SQL-safe quoting (handles hyphens in catalog names)
 ALLOWED_SCHEMAS = ["analytics", "claims", "members", "providers", "benefits", "pharmacy"]
 
 SYSTEM_PROMPT = f"""You are an Underwriting & Actuarial Analysis Assistant for Red Bricks Insurance.
@@ -96,17 +97,17 @@ TOOLS = [
         "function": {
             "name": "query_uc_table",
             "description": (
-                f"Execute a read-only SQL SELECT query against Unity Catalog tables in {UC_CATALOG}. "
+                f"Execute a read-only SQL SELECT query against Unity Catalog tables in {_CAT}. "
                 f"Key tables:\n"
-                f"- {UC_CATALOG}.analytics.gold_pmpm\n"
-                f"- {UC_CATALOG}.analytics.gold_mlr\n"
-                f"- {UC_CATALOG}.analytics.gold_enrollment_summary\n"
-                f"- {UC_CATALOG}.analytics.gold_utilization_per_1000\n"
-                f"- {UC_CATALOG}.analytics.gold_risk_adjustment_analysis\n"
-                f"- {UC_CATALOG}.analytics.gold_tcoc_summary\n"
-                f"- {UC_CATALOG}.analytics.gold_group_experience\n"
-                f"- {UC_CATALOG}.claims.silver_claims_medical\n"
-                f"- {UC_CATALOG}.members.silver_enrollment\n"
+                f"- {_CAT}.analytics.gold_pmpm\n"
+                f"- {_CAT}.analytics.gold_mlr\n"
+                f"- {_CAT}.analytics.gold_enrollment_summary\n"
+                f"- {_CAT}.analytics.gold_utilization_per_1000\n"
+                f"- {_CAT}.analytics.gold_risk_adjustment_analysis\n"
+                f"- {_CAT}.analytics.gold_tcoc_summary\n"
+                f"- {_CAT}.analytics.gold_group_experience\n"
+                f"- {_CAT}.claims.silver_claims_medical\n"
+                f"- {_CAT}.members.silver_enrollment\n"
                 "Always include LIMIT (max 50). Only SELECT/WITH/DESCRIBE allowed."
             ),
             "parameters": {

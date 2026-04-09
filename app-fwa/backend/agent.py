@@ -15,12 +15,13 @@ from databricks.sdk.service.sql import StatementParameterListItem
 
 from .env_config import UC_CATALOG, SQL_WAREHOUSE_ID, LLM_ENDPOINT, FWA_MODEL_ENDPOINT
 
+_CAT = f"`{UC_CATALOG}`"  # SQL-safe quoting (handles hyphens in catalog names)
 # Table references (used by direct API routes)
-PROVIDER_RISK_TABLE = f"{UC_CATALOG}.fwa.gold_fwa_provider_risk"
-CLAIM_FLAGS_TABLE = f"{UC_CATALOG}.fwa.gold_fwa_claim_flags"
-MEMBER_RISK_TABLE = f"{UC_CATALOG}.analytics.gold_fwa_member_risk"
-MODEL_INFERENCE_TABLE = f"{UC_CATALOG}.analytics.gold_fwa_model_scores"
-FWA_SUMMARY_TABLE = f"{UC_CATALOG}.fwa.gold_fwa_summary"
+PROVIDER_RISK_TABLE = f"{_CAT}.fwa.gold_fwa_provider_risk"
+CLAIM_FLAGS_TABLE = f"{_CAT}.fwa.gold_fwa_claim_flags"
+MEMBER_RISK_TABLE = f"{_CAT}.analytics.gold_fwa_member_risk"
+MODEL_INFERENCE_TABLE = f"{_CAT}.analytics.gold_fwa_model_scores"
+FWA_SUMMARY_TABLE = f"{_CAT}.fwa.gold_fwa_summary"
 
 # Allowed schemas the agent can query
 ALLOWED_SCHEMAS = ["fwa", "analytics", "claims", "members", "providers", "pharmacy", "benefits"]
@@ -64,19 +65,19 @@ TOOLS = [
         "function": {
             "name": "query_uc_table",
             "description": (
-                f"Execute a read-only SQL SELECT query against Unity Catalog tables in the {UC_CATALOG} catalog. "
+                f"Execute a read-only SQL SELECT query against Unity Catalog tables in the {_CAT} catalog. "
                 "Key FWA tables:\n"
-                f"- {UC_CATALOG}.fwa.gold_fwa_provider_risk: Provider risk scorecards\n"
-                f"- {UC_CATALOG}.fwa.gold_fwa_claim_flags: Flagged claims with evidence\n"
-                f"- {UC_CATALOG}.fwa.gold_fwa_summary: Aggregate FWA metrics\n"
-                f"- {UC_CATALOG}.fwa.silver_fwa_signals: Individual FWA signals\n"
-                f"- {UC_CATALOG}.fwa.silver_fwa_investigation_cases: Investigation case records\n"
-                f"- {UC_CATALOG}.analytics.gold_fwa_member_risk: Member-level fraud indicators\n"
-                f"- {UC_CATALOG}.analytics.gold_fwa_network_analysis: Provider referral rings\n"
-                f"- {UC_CATALOG}.analytics.gold_fwa_model_scores: ML model fraud predictions per claim\n"
-                f"- {UC_CATALOG}.claims.silver_claims_medical: Medical claims detail\n"
-                f"- {UC_CATALOG}.members.silver_enrollment: Member enrollment\n"
-                f"- {UC_CATALOG}.providers.silver_providers: Provider demographics\n"
+                f"- {_CAT}.fwa.gold_fwa_provider_risk: Provider risk scorecards\n"
+                f"- {_CAT}.fwa.gold_fwa_claim_flags: Flagged claims with evidence\n"
+                f"- {_CAT}.fwa.gold_fwa_summary: Aggregate FWA metrics\n"
+                f"- {_CAT}.fwa.silver_fwa_signals: Individual FWA signals\n"
+                f"- {_CAT}.fwa.silver_fwa_investigation_cases: Investigation case records\n"
+                f"- {_CAT}.analytics.gold_fwa_member_risk: Member-level fraud indicators\n"
+                f"- {_CAT}.analytics.gold_fwa_network_analysis: Provider referral rings\n"
+                f"- {_CAT}.analytics.gold_fwa_model_scores: ML model fraud predictions per claim\n"
+                f"- {_CAT}.claims.silver_claims_medical: Medical claims detail\n"
+                f"- {_CAT}.members.silver_enrollment: Member enrollment\n"
+                f"- {_CAT}.providers.silver_providers: Provider demographics\n"
                 "Always include a LIMIT clause (max 50 rows). Only SELECT/WITH/DESCRIBE allowed."
             ),
             "parameters": {
@@ -99,7 +100,7 @@ TOOLS = [
                 "properties": {
                     "table_name": {
                         "type": "string",
-                        "description": f"Table name (e.g. 'fwa.gold_fwa_provider_risk'). Catalog '{UC_CATALOG}' is added automatically.",
+                        "description": f"Table name (e.g. 'fwa.gold_fwa_provider_risk'). Catalog '{_CAT}' is added automatically.",
                     },
                 },
                 "required": ["table_name"],
@@ -183,8 +184,9 @@ def _execute_tool(tool_name: str, tool_args: dict) -> str:
 
     elif tool_name == "list_table_columns":
         table_name = tool_args.get("table_name", "").strip()
-        if not table_name.startswith(UC_CATALOG):
-            table_name = f"{UC_CATALOG}.{table_name}"
+        # Normalize: strip any existing catalog prefix, then re-add with backticks
+        table_name = table_name.replace(f"`{UC_CATALOG}`.", "").replace(f"{UC_CATALOG}.", "")
+        table_name = f"{_CAT}.{table_name}"
         try:
             rows = _execute_sql(f"DESCRIBE TABLE {table_name}")
             return json.dumps({"table": table_name, "columns": rows}, default=str)
@@ -278,21 +280,20 @@ def _fetch_investigation_from_lakebase(inv_id: str) -> str | None:
     try:
         from .database import db as _db
         import psycopg
-        import uuid as _uuid
         from databricks.sdk import WorkspaceClient as _WC
 
-        instance_name = os.environ.get("LAKEBASE_INSTANCE_NAME", "fwa-investigations")
+        project_id = os.environ.get("LAKEBASE_PROJECT_ID", "red-bricks-insurance")
+        branch = os.environ.get("LAKEBASE_BRANCH", "production")
         database_name = os.environ.get("LAKEBASE_DATABASE_NAME", "fwa_cases")
+        endpoint_path = f"projects/{project_id}/branches/{branch}/endpoints/primary"
 
         w = _WC()
-        instance = w.database.get_database_instance(name=instance_name)
-        cred = w.database.generate_database_credential(
-            request_id=str(_uuid.uuid4()),
-            instance_names=[instance_name],
-        )
+        ep = w.postgres.get_endpoint(name=endpoint_path)
+        host = ep.status.hosts.host
+        cred = w.postgres.generate_database_credential(endpoint=endpoint_path)
         username = w.current_user.me().user_name
         conn_string = (
-            f"host={instance.read_write_dns} "
+            f"host={host} "
             f"dbname={database_name} "
             f"user={username} "
             f"password={cred.token} "
@@ -355,7 +356,7 @@ def query_fwa_agent(target_id: str, target_type: str, question: str) -> dict:
         context_hint = f"Question: {question}\n"
         if target_id:
             context_hint += f"Target: {target_id} (type: {target_type})\n\n"
-        context_hint += f"The Unity Catalog is: {UC_CATALOG}\n"
+        context_hint += f"The Unity Catalog is: {_CAT}\n"
         context_hint += "Use the query_uc_table tool to gather all relevant data before generating your analysis.\n\n"
 
         if target_type == "investigation":
@@ -372,7 +373,7 @@ def query_fwa_agent(target_id: str, target_type: str, question: str) -> dict:
             else:
                 context_hint += (
                     f"Investigation {target_id} was not found in Lakebase. "
-                    f"Try querying: SELECT * FROM {UC_CATALOG}.fwa.silver_fwa_investigation_cases "
+                    f"Try querying: SELECT * FROM {_CAT}.fwa.silver_fwa_investigation_cases "
                     f"WHERE investigation_id = '{target_id}' LIMIT 1\n"
                 )
         elif target_type == "provider":

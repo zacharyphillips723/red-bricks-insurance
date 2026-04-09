@@ -19,6 +19,9 @@ variables:
   node_type_large:
     description: Large node type (16 vCPU, 56GB) — Azure DS5_v2 or AWS m5.4xlarge
     default: Standard_DS5_v2
+  lakebase_project_id:
+    description: Lakebase Autoscaling project ID
+    default: red-bricks-insurance
 
 include:
   - resources/*.yml

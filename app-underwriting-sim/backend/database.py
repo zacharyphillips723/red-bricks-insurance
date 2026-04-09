@@ -1,4 +1,4 @@
-"""Lakebase database connection manager with OAuth token refresh.
+"""Lakebase Autoscaling database connection manager with OAuth token refresh.
 
 Same pattern as Command Center and FWA apps — SQLAlchemy async engine
 with automatic Databricks OAuth token injection.
@@ -6,7 +6,7 @@ with automatic Databricks OAuth token injection.
 
 import asyncio
 import os
-import uuid
+import time
 import traceback
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Optional
@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 
 class LakebaseConnection:
-    """Manages Lakebase Provisioned connections with automatic token refresh."""
+    """Manages Lakebase Autoscaling connections with automatic token refresh."""
 
     def __init__(self) -> None:
         self._engine = None
@@ -25,22 +25,40 @@ class LakebaseConnection:
         self._refresh_task: Optional[asyncio.Task] = None
         self._initialized = False
 
-    def _generate_token(self, instance_name: str) -> str:
+    def _build_endpoint_path(self) -> str:
+        project_id = os.environ.get("LAKEBASE_PROJECT_ID", "red-bricks-insurance")
+        branch = os.environ.get("LAKEBASE_BRANCH", "production")
+        return f"projects/{project_id}/branches/{branch}/endpoints/primary"
+
+    def _generate_token(self, endpoint_path: str) -> str:
         from databricks.sdk import WorkspaceClient
 
         w = WorkspaceClient()
-        cred = w.database.generate_database_credential(
-            request_id=str(uuid.uuid4()),
-            instance_names=[instance_name],
-        )
+        cred = w.postgres.generate_database_credential(endpoint=endpoint_path)
         return cred.token
 
-    async def _refresh_loop(self, instance_name: str) -> None:
+    def _get_host(self, endpoint_path: str) -> str:
+        """Resolve the Autoscaling endpoint host, retrying for scale-to-zero wake-up."""
+        from databricks.sdk import WorkspaceClient
+
+        w = WorkspaceClient()
+        max_attempts = 10
+        for attempt in range(1, max_attempts + 1):
+            ep = w.postgres.get_endpoint(name=endpoint_path)
+            if ep.status and ep.status.hosts and ep.status.hosts.host:
+                return ep.status.hosts.host
+            if attempt < max_attempts:
+                wait = min(5 * attempt, 30)
+                print(f"[DB] Endpoint not ready (attempt {attempt}/{max_attempts}), retrying in {wait}s...")
+                time.sleep(wait)
+        raise RuntimeError(f"Endpoint {endpoint_path} did not become ready after {max_attempts} attempts")
+
+    async def _refresh_loop(self, endpoint_path: str) -> None:
         while True:
             await asyncio.sleep(50 * 60)  # Refresh every 50 min (tokens expire at 60)
             try:
                 self._current_token = await asyncio.to_thread(
-                    self._generate_token, instance_name
+                    self._generate_token, endpoint_path
                 )
                 print("Lakebase token refreshed successfully")
             except Exception as e:
@@ -51,7 +69,8 @@ class LakebaseConnection:
         pg_url = os.environ.get("LAKEBASE_PG_URL")
 
         print(f"[DB] LAKEBASE_PG_URL set: {bool(pg_url)}")
-        print(f"[DB] LAKEBASE_INSTANCE_NAME: {os.environ.get('LAKEBASE_INSTANCE_NAME', 'not set')}")
+        print(f"[DB] LAKEBASE_PROJECT_ID: {os.environ.get('LAKEBASE_PROJECT_ID', 'not set')}")
+        print(f"[DB] LAKEBASE_BRANCH: {os.environ.get('LAKEBASE_BRANCH', 'not set')}")
         print(f"[DB] LAKEBASE_DATABASE_NAME: {os.environ.get('LAKEBASE_DATABASE_NAME', 'not set')}")
 
         if pg_url:
@@ -62,31 +81,33 @@ class LakebaseConnection:
                 pool_size=5,
                 max_overflow=10,
                 pool_recycle=3600,
+                pool_pre_ping=True,
                 connect_args={"sslmode": "require"},
             )
         else:
             from databricks.sdk import WorkspaceClient
 
-            instance_name = os.environ.get("LAKEBASE_INSTANCE_NAME", "uw-simulations")
+            endpoint_path = self._build_endpoint_path()
             database_name = os.environ.get("LAKEBASE_DATABASE_NAME", "uw_sim")
 
-            print(f"[DB] Using Databricks OAuth mode for instance '{instance_name}'")
+            print(f"[DB] Using Databricks OAuth mode for endpoint '{endpoint_path}'")
 
             w = WorkspaceClient()
-            instance = w.database.get_database_instance(name=instance_name)
+            host = self._get_host(endpoint_path)
             username = os.environ.get("LAKEBASE_USERNAME", w.current_user.me().user_name)
 
-            self._current_token = self._generate_token(instance_name)
+            self._current_token = self._generate_token(endpoint_path)
 
             url = (
                 f"postgresql+psycopg://{username}@"
-                f"{instance.read_write_dns}:5432/{database_name}"
+                f"{host}:5432/{database_name}"
             )
             self._engine = create_async_engine(
                 url,
                 pool_size=5,
                 max_overflow=10,
                 pool_recycle=3600,
+                pool_pre_ping=True,
                 connect_args={"sslmode": "require"},
             )
 
@@ -101,10 +122,10 @@ class LakebaseConnection:
         print("[DB] Underwriting simulation database engine initialized successfully")
 
     def start_refresh(self) -> None:
-        instance_name = os.environ.get("LAKEBASE_INSTANCE_NAME", "uw-simulations")
+        endpoint_path = self._build_endpoint_path()
         if not os.environ.get("LAKEBASE_PG_URL") and not self._refresh_task:
             self._refresh_task = asyncio.create_task(
-                self._refresh_loop(instance_name)
+                self._refresh_loop(endpoint_path)
             )
 
     async def close(self) -> None:

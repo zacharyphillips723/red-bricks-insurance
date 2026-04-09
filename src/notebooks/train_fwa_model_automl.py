@@ -26,6 +26,7 @@
 dbutils.widgets.text("catalog", "red_bricks_insurance", "Catalog")
 
 catalog = dbutils.widgets.get("catalog")
+catalog_sql = f"`{catalog}`"  # SQL-safe quoting (handles hyphens in catalog names)
 
 FWA_SCHEMA = "fwa"
 CLAIMS_SCHEMA = "claims"
@@ -76,7 +77,7 @@ WITH claim_features AS (
     + CASE WHEN c.secondary_diagnosis_code_3 IS NOT NULL THEN 1 ELSE 0 END
     + 1 AS diagnosis_code_count
 
-  FROM {catalog}.{CLAIMS_SCHEMA}.silver_claims_medical c
+  FROM {catalog_sql}.{CLAIMS_SCHEMA}.silver_claims_medical c
 ),
 
 provider_features AS (
@@ -91,7 +92,7 @@ provider_features AS (
     fwa_signal_count AS provider_fwa_signal_count,
     fwa_score_avg AS provider_fwa_score_avg,
     composite_risk_score AS provider_composite_risk_score
-  FROM {catalog}.{FWA_SCHEMA}.silver_fwa_provider_profiles
+  FROM {catalog_sql}.{FWA_SCHEMA}.silver_fwa_provider_profiles
 ),
 
 member_features AS (
@@ -102,15 +103,15 @@ member_features AS (
     COUNT(DISTINCT c2.claim_id) AS member_total_claims,
     COUNT(DISTINCT c2.rendering_provider_npi) AS member_unique_providers,
     COUNT(DISTINCT c2.primary_diagnosis_code) AS member_unique_diagnoses
-  FROM {catalog}.{MEMBERS_SCHEMA}.silver_members m
-  LEFT JOIN {catalog}.{MEMBERS_SCHEMA}.silver_enrollment e ON m.member_id = e.member_id
-  LEFT JOIN {catalog}.{CLAIMS_SCHEMA}.silver_claims_medical c2 ON m.member_id = c2.member_id
+  FROM {catalog_sql}.{MEMBERS_SCHEMA}.silver_members m
+  LEFT JOIN {catalog_sql}.{MEMBERS_SCHEMA}.silver_enrollment e ON m.member_id = e.member_id
+  LEFT JOIN {catalog_sql}.{CLAIMS_SCHEMA}.silver_claims_medical c2 ON m.member_id = c2.member_id
   GROUP BY m.member_id, e.line_of_business, e.risk_score
 ),
 
 labels AS (
   SELECT DISTINCT claim_id, 1 AS is_fraud
-  FROM {catalog}.{FWA_SCHEMA}.silver_fwa_signals
+  FROM {catalog_sql}.{FWA_SCHEMA}.silver_fwa_signals
   WHERE fraud_score >= 0.5
 )
 
@@ -347,8 +348,8 @@ inference_with_context = inference_result_df.join(
                c.claim_type, c.procedure_code, c.billed_amount, c.allowed_amount,
                c.paid_amount, c.service_from_date, c.service_year_month,
                e.line_of_business
-        FROM {catalog}.{CLAIMS_SCHEMA}.silver_claims_medical c
-        LEFT JOIN {catalog}.{MEMBERS_SCHEMA}.silver_enrollment e ON c.member_id = e.member_id
+        FROM {catalog_sql}.{CLAIMS_SCHEMA}.silver_claims_medical c
+        LEFT JOIN {catalog_sql}.{MEMBERS_SCHEMA}.silver_enrollment e ON c.member_id = e.member_id
     """),
     on="claim_id",
     how="inner",

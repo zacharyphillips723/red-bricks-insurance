@@ -15,10 +15,11 @@ from databricks.sdk.service.sql import StatementParameterListItem
 
 from .env_config import UC_CATALOG, SQL_WAREHOUSE_ID, LLM_ENDPOINT
 
-MEMBER_360_TABLE = f"{UC_CATALOG}.analytics.gold_member_360"
-CASE_NOTES_TABLE = f"{UC_CATALOG}.documents.silver_case_notes"
-LAB_RESULTS_TABLE = f"{UC_CATALOG}.clinical.silver_lab_results"
-VS_INDEX_NAME = f"{UC_CATALOG}.documents.case_notes_vs_index"
+_CAT = f"`{UC_CATALOG}`"  # SQL-safe quoting (handles hyphens in catalog names)
+MEMBER_360_TABLE = f"{_CAT}.analytics.gold_member_360"
+CASE_NOTES_TABLE = f"{_CAT}.documents.silver_case_notes"
+LAB_RESULTS_TABLE = f"{_CAT}.clinical.silver_lab_results"
+VS_INDEX_NAME = f"{UC_CATALOG}.documents.case_notes_vs_index"  # SDK name, no backticks
 
 SYSTEM_PROMPT = """You are a care management assistant for Red Bricks Insurance.
 You help care managers prepare for member outreach by synthesizing structured data

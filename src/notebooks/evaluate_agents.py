@@ -23,11 +23,12 @@
 dbutils.widgets.text("catalog", "red_bricks_insurance", "Catalog")
 
 catalog = dbutils.widgets.get("catalog")
+catalog_sql = f"`{catalog}`"  # SQL-safe quoting (handles hyphens in catalog names)
 
 V1_MODEL_NAME = f"{catalog}.analytics.care_intelligence_agent"
 V2_MODEL_NAME = f"{catalog}.analytics.care_intelligence_agent_v2"
-RESULTS_TABLE = f"{catalog}.analytics.agent_evaluation_results"
-SUMMARY_TABLE = f"{catalog}.analytics.agent_evaluation_summary"
+RESULTS_TABLE = f"{catalog_sql}.analytics.agent_evaluation_results"
+SUMMARY_TABLE = f"{catalog_sql}.analytics.agent_evaluation_summary"
 JUDGE_ENDPOINT = "databricks-claude-sonnet-4"
 
 print(f"v1 Model:       {V1_MODEL_NAME}")
@@ -49,7 +50,7 @@ import pandas as pd
 high_risk_df = spark.sql(f"""
     SELECT member_id, raf_score, hcc_count, line_of_business,
            top_diagnoses, hedis_gap_measures
-    FROM {catalog}.analytics.gold_member_360
+    FROM {catalog_sql}.analytics.gold_member_360
     WHERE raf_score > 2.0
     ORDER BY raf_score DESC
     LIMIT 8

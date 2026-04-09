@@ -32,6 +32,7 @@ dbutils.library.restartPython()
 
 # Re-read widgets after Python restart
 catalog = dbutils.widgets.get("catalog")
+catalog_sql = f"`{catalog}`"  # SQL-safe quoting (handles hyphens in catalog names)
 volume_base = f"/Volumes/{catalog}/raw/raw_sources"
 
 # COMMAND ----------
@@ -90,7 +91,7 @@ _catalog_ready = False
 
 # Attempt 1: SQL CREATE CATALOG
 try:
-    spark.sql(f"CREATE CATALOG IF NOT EXISTS {catalog}")
+    spark.sql(f"CREATE CATALOG IF NOT EXISTS {catalog_sql}")
     print(f"Catalog '{catalog}' created (or already exists) via SQL.")
     _catalog_ready = True
 except Exception as e:
@@ -121,7 +122,7 @@ if not _catalog_ready:
 # Attempt 3: Check if the catalog already exists and is usable
 if not _catalog_ready:
     try:
-        spark.sql(f"USE CATALOG {catalog}")
+        spark.sql(f"USE CATALOG {catalog_sql}")
         print(f"Catalog '{catalog}' exists and is usable (created externally).")
         _catalog_ready = True
     except Exception as e3:
@@ -138,10 +139,10 @@ DOMAIN_SCHEMAS = [
     "risk_adjustment", "underwriting", "clinical", "benefits", "analytics", "fwa",
 ]
 for s in DOMAIN_SCHEMAS:
-    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{s}")
+    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog_sql}.{s}")
     print(f"  Schema: {catalog}.{s}")
 
-spark.sql(f"CREATE VOLUME IF NOT EXISTS {catalog}.raw.raw_sources")
+spark.sql(f"CREATE VOLUME IF NOT EXISTS {catalog_sql}.raw.raw_sources")
 
 # Clean old data so Auto Loader doesn't re-ingest stale files on pipeline refresh
 for subdir in ["members", "enrollment", "providers", "claims_medical", "claims_pharmacy",
@@ -538,7 +539,7 @@ print(f"  FWA investigation cases total: {len(fwa_investigation_cases_data):,}")
 # Create empty fwa_ml_predictions table so gold_fwa_model_scores MV can reference it
 # before the ML model training notebook populates it with real scores.
 spark.sql(f"""
-    CREATE TABLE IF NOT EXISTS {catalog}.analytics.fwa_ml_predictions (
+    CREATE TABLE IF NOT EXISTS {catalog_sql}.analytics.fwa_ml_predictions (
         claim_id STRING,
         ml_fraud_probability DOUBLE,
         ml_risk_tier STRING,

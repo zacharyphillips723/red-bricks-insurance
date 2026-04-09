@@ -20,6 +20,7 @@
 dbutils.widgets.text("catalog", "red_bricks_insurance", "Catalog")
 
 catalog = dbutils.widgets.get("catalog")
+catalog_sql = f"`{catalog}`"  # SQL-safe quoting (handles hyphens in catalog names)
 
 FWA_SCHEMA = "fwa"
 CLAIMS_SCHEMA = "claims"
@@ -69,7 +70,7 @@ WITH claim_features AS (
     + CASE WHEN c.secondary_diagnosis_code_3 IS NOT NULL THEN 1 ELSE 0 END
     + 1 AS diagnosis_code_count
 
-  FROM {catalog}.{CLAIMS_SCHEMA}.silver_claims_medical c
+  FROM {catalog_sql}.{CLAIMS_SCHEMA}.silver_claims_medical c
 ),
 
 provider_features AS (
@@ -84,7 +85,7 @@ provider_features AS (
     fwa_signal_count AS provider_fwa_signal_count,
     fwa_score_avg AS provider_fwa_score_avg,
     composite_risk_score AS provider_composite_risk_score
-  FROM {catalog}.{FWA_SCHEMA}.silver_fwa_provider_profiles
+  FROM {catalog_sql}.{FWA_SCHEMA}.silver_fwa_provider_profiles
 ),
 
 member_features AS (
@@ -95,16 +96,16 @@ member_features AS (
     COUNT(DISTINCT c2.claim_id) AS member_total_claims,
     COUNT(DISTINCT c2.rendering_provider_npi) AS member_unique_providers,
     COUNT(DISTINCT c2.primary_diagnosis_code) AS member_unique_diagnoses
-  FROM {catalog}.{MEMBERS_SCHEMA}.silver_members m
-  LEFT JOIN {catalog}.{MEMBERS_SCHEMA}.silver_enrollment e ON m.member_id = e.member_id
-  LEFT JOIN {catalog}.{CLAIMS_SCHEMA}.silver_claims_medical c2 ON m.member_id = c2.member_id
+  FROM {catalog_sql}.{MEMBERS_SCHEMA}.silver_members m
+  LEFT JOIN {catalog_sql}.{MEMBERS_SCHEMA}.silver_enrollment e ON m.member_id = e.member_id
+  LEFT JOIN {catalog_sql}.{CLAIMS_SCHEMA}.silver_claims_medical c2 ON m.member_id = c2.member_id
   GROUP BY m.member_id, e.line_of_business, e.risk_score
 ),
 
 -- Labels: 1 if claim has a fraud signal with score >= 0.5
 labels AS (
   SELECT DISTINCT claim_id, 1 AS is_fraud
-  FROM {catalog}.{FWA_SCHEMA}.silver_fwa_signals
+  FROM {catalog_sql}.{FWA_SCHEMA}.silver_fwa_signals
   WHERE fraud_score >= 0.5
 )
 
@@ -161,7 +162,7 @@ print(f"Feature table: {total:,} rows, {fraud_count:,} fraud ({fraud_count/total
 # COMMAND ----------
 
 # Write feature table to Unity Catalog
-feature_table_name = f"{catalog}.{ANALYTICS_SCHEMA}.fwa_training_features"
+feature_table_name = f"{catalog_sql}.{ANALYTICS_SCHEMA}.fwa_training_features"
 feature_df.write.mode("overwrite").saveAsTable(feature_table_name)
 print(f"Feature table written to: {feature_table_name}")
 
@@ -460,7 +461,8 @@ inference_pd["ml_risk_tier"] = inference_pd["ml_fraud_probability"].apply(
 # --- Write Phase 2 predictions table (standalone, used by gold MV) ---
 from datetime import datetime
 
-predictions_table_name = f"{catalog}.{ANALYTICS_SCHEMA}.fwa_ml_predictions"
+predictions_table_name = f"{catalog_sql}.{ANALYTICS_SCHEMA}.fwa_ml_predictions"
+predictions_table_sql = f"{catalog_sql}.{ANALYTICS_SCHEMA}.fwa_ml_predictions"
 predictions_pd = inference_pd[["claim_id", "ml_fraud_probability", "ml_risk_tier"]].copy()
 predictions_pd["model_version"] = str(latest_version.version)
 predictions_pd["scored_at"] = datetime.utcnow().isoformat()
@@ -470,8 +472,8 @@ predictions_spark_df = spark.createDataFrame(predictions_pd)
 predictions_spark_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(predictions_table_name)
 
 pred_count = spark.table(predictions_table_name).count()
-high_risk_pred = spark.sql(f"SELECT COUNT(*) FROM {predictions_table_name} WHERE ml_risk_tier = 'High'").collect()[0][0]
-med_risk_pred = spark.sql(f"SELECT COUNT(*) FROM {predictions_table_name} WHERE ml_risk_tier = 'Medium'").collect()[0][0]
+high_risk_pred = spark.sql(f"SELECT COUNT(*) FROM {predictions_table_sql} WHERE ml_risk_tier = 'High'").collect()[0][0]
+med_risk_pred = spark.sql(f"SELECT COUNT(*) FROM {predictions_table_sql} WHERE ml_risk_tier = 'Medium'").collect()[0][0]
 print(f"\nPredictions table written: {predictions_table_name}")
 print(f"  Total scored claims: {pred_count:,}")
 print(f"  High risk (>=0.7):   {high_risk_pred:,}")
@@ -481,15 +483,15 @@ print(f"  Model version:       {latest_version.version}")
 # --- Also write the full inference table with claim context ---
 inference_result_df = spark.createDataFrame(inference_pd[["claim_id", "ml_fraud_probability", "ml_risk_tier"]])
 
-inference_table_name = f"{catalog}.{ANALYTICS_SCHEMA}.fwa_model_inference"
+inference_table_name = f"{catalog_sql}.{ANALYTICS_SCHEMA}.fwa_model_inference"
 inference_with_context = inference_result_df.join(
     spark.sql(f"""
         SELECT c.claim_id, c.member_id, c.rendering_provider_npi AS provider_npi,
                c.claim_type, c.procedure_code, c.billed_amount, c.allowed_amount,
                c.paid_amount, c.service_from_date, c.service_year_month,
                e.line_of_business
-        FROM {catalog}.{CLAIMS_SCHEMA}.silver_claims_medical c
-        LEFT JOIN {catalog}.{MEMBERS_SCHEMA}.silver_enrollment e ON c.member_id = e.member_id
+        FROM {catalog_sql}.{CLAIMS_SCHEMA}.silver_claims_medical c
+        LEFT JOIN {catalog_sql}.{MEMBERS_SCHEMA}.silver_enrollment e ON c.member_id = e.member_id
     """),
     on="claim_id",
     how="inner",

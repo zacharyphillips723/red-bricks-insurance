@@ -14,7 +14,7 @@ dbutils.widgets.text("catalog", "red_bricks_insurance", "Unity Catalog Name")
 
 import time
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.service.apps import AppDeploymentMode
+from databricks.sdk.service.apps import AppDeployment, AppDeploymentMode
 
 w = WorkspaceClient()
 
@@ -64,6 +64,7 @@ def wait_for_compute(app_name: str, timeout: int = 600) -> str:
 
 
 results = {}
+deploy_ids = {}
 
 for app_name, source_dir in APP_SOURCE_MAP.items():
     print(f"\n{'='*50}")
@@ -93,13 +94,17 @@ for app_name, source_dir in APP_SOURCE_MAP.items():
     # 3. Deploy source code
     print(f"  Deploying from {source_path}...")
     try:
-        deployment = w.apps.deploy(
+        deploy_wait = w.apps.deploy(
             app_name=app_name,
-            source_code_path=source_path,
-            mode=AppDeploymentMode.SNAPSHOT,
+            app_deployment=AppDeployment(
+                source_code_path=source_path,
+                mode=AppDeploymentMode.SNAPSHOT,
+            ),
         )
+        dep_id = deploy_wait.response.deployment_id
+        deploy_ids[app_name] = dep_id
         results[app_name] = "DEPLOYED"
-        print(f"  Deployment initiated: {deployment.deployment_id}")
+        print(f"  Deployment initiated: {dep_id}")
     except Exception as e:
         results[app_name] = f"FAILED: {e}"
         print(f"  Deploy failed: {e}")
@@ -115,16 +120,19 @@ print("\nWaiting for all deployments to complete...")
 for app_name in APP_SOURCE_MAP:
     if not results.get(app_name, "").startswith("DEPLOYED"):
         continue
+    target_dep_id = deploy_ids.get(app_name)
     for i in range(60):  # up to 10 min per app
         app = w.apps.get(app_name)
-        if app.active_deployment and app.active_deployment.status:
-            dep_state = app.active_deployment.status.state.value
+        # Check pending deployment first (our deploy may not be active yet)
+        dep = app.pending_deployment if app.pending_deployment else app.active_deployment
+        if dep and dep.status and dep.deployment_id == target_dep_id:
+            dep_state = dep.status.state.value
             if dep_state == "SUCCEEDED":
                 results[app_name] = "SUCCESS"
                 print(f"  {app_name}: deployment SUCCEEDED")
                 break
             elif dep_state == "FAILED":
-                msg = app.active_deployment.status.message or ""
+                msg = dep.status.message or ""
                 results[app_name] = f"DEPLOY_FAILED: {msg[:200]}"
                 print(f"  {app_name}: deployment FAILED — {msg[:200]}")
                 break
@@ -154,6 +162,8 @@ for app in w.apps.list():
 
 failed = [k for k, v in results.items() if v not in ("SUCCESS", "DEPLOYED")]
 if failed:
-    print(f"\nWARNING: {len(failed)} app(s) had issues: {failed}")
+    msg = f"{len(failed)} app(s) had deployment issues: {failed}"
+    print(f"\nERROR: {msg}")
+    raise RuntimeError(msg)
 else:
     print(f"\nAll {len(results)} apps deployed successfully.")

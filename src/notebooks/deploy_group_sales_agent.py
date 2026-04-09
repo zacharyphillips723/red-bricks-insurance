@@ -29,9 +29,10 @@ if not warehouse_id.strip():
     else:
         print("WARNING: No running SQL warehouse found. Data validation will be skipped.")
 
-REPORT_CARD_TABLE = f"{catalog}.analytics.gold_group_report_card"
+catalog_sql = f"`{catalog}`"  # SQL-safe quoting (handles hyphens in catalog names)
+REPORT_CARD_TABLE = f"{catalog_sql}.analytics.gold_group_report_card"
 LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT", "databricks-llama-4-maverick")
-MODEL_NAME = f"{catalog}.analytics.group_sales_coach_agent"
+MODEL_NAME = f"{catalog}.analytics.group_sales_coach_agent"  # UC model name — no backticks
 
 print(f"Report Card:     {REPORT_CARD_TABLE}")
 print(f"LLM Endpoint:    {LLM_ENDPOINT}")

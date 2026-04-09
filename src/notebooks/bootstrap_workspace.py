@@ -3,18 +3,19 @@
 # MAGIC # Red Bricks Insurance — Workspace Bootstrap
 # MAGIC
 # MAGIC **One-command post-deploy setup** for any workspace. Run this after `databricks bundle deploy`
-# MAGIC to provision Lakebase instances, apply UC/warehouse grants for app service principals,
+# MAGIC to provision the Lakebase Autoscaling project, apply UC/warehouse grants for app service principals,
 # MAGIC and seed operational data.
 # MAGIC
 # MAGIC ### What this notebook does:
-# MAGIC 1. Creates Lakebase instances (Command Center + FWA Investigation + UW Simulation)
-# MAGIC 2. Creates databases and runs DDL schemas
+# MAGIC 1. Creates Lakebase Autoscaling project with 3 databases (Command Center + FWA + UW Sim)
+# MAGIC 2. Runs DDL schemas and grants PUBLIC access
 # MAGIC 3. Seeds care managers and fraud investigators
 # MAGIC 4. Discovers app service principals and grants:
+# MAGIC    - Lakebase: project-level access via permissions API (replaces DAB security labels)
 # MAGIC    - Unity Catalog: USE CATALOG, USE SCHEMA, SELECT on all domain schemas
 # MAGIC    - SQL Warehouse: CAN_USE permission
 # MAGIC    - Genie Spaces: CAN_RUN permission
-# MAGIC    - Lakebase: PUBLIC access for app connections
+# MAGIC    - Lakebase: PostgreSQL roles for app connections
 # MAGIC 5. Creates Genie spaces (Analytics, FWA, Group Reporting, Financial, Underwriting) with dynamic table references
 # MAGIC 6. Seeds alerts and investigation cases from gold tables
 # MAGIC 7. Creates the empty `fwa_ml_predictions` table for gold MV compatibility
@@ -44,15 +45,17 @@ print(f"Warehouse ID: {warehouse_id or '(will auto-detect)'}")
 # COMMAND ----------
 
 catalog = dbutils.widgets.get("catalog")
+catalog_sql = f"`{catalog}`"  # SQL-safe quoting (handles hyphens in catalog names)
 warehouse_id = dbutils.widgets.get("warehouse_id")
 
 import json
 import random
-import uuid
 from pathlib import Path
 
 import psycopg
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.apps import AppDeployment, AppDeploymentMode
+from databricks.sdk.service.postgres import Project, ProjectSpec
 
 random.seed(42)
 w = WorkspaceClient()
@@ -84,7 +87,7 @@ print(f"Repo root: {_repo_root}")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 1: Lakebase Instances
+# MAGIC ## Step 1: Lakebase Autoscaling Project
 
 # COMMAND ----------
 
@@ -93,21 +96,22 @@ print(f"Repo root: {_repo_root}")
 
 # COMMAND ----------
 
-LAKEBASE_CONFIGS = [
+LAKEBASE_PROJECT_ID = "red-bricks-insurance"
+LAKEBASE_BRANCH = "production"
+LAKEBASE_ENDPOINT_PATH = f"projects/{LAKEBASE_PROJECT_ID}/branches/{LAKEBASE_BRANCH}/endpoints/primary"
+
+LAKEBASE_DATABASES = [
     {
-        "instance_name": "red-bricks-command-center",
         "database_name": "red_bricks_alerts",
         "schema_file": "src/lakebase_schema.sql",
         "app_name": "red-bricks-command-center-app",
     },
     {
-        "instance_name": "fwa-investigations",
         "database_name": "fwa_cases",
         "schema_file": "src/fwa_lakebase_schema.sql",
         "app_name": "red-bricks-fwa-portal-app",
     },
     {
-        "instance_name": "uw-simulations",
         "database_name": "uw_sim",
         "schema_file": "src/underwriting_sim_lakebase_schema.sql",
         "app_name": "rb-uw-sim",
@@ -138,39 +142,65 @@ UC_SCHEMAS = [
     "analytics", "fwa",
 ]
 
-CAPACITY = "CU_1"
-
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create Instances + Databases + DDL
+# MAGIC ### Create Autoscaling Project + Databases + DDL
 
 # COMMAND ----------
 
-def get_or_create_instance(instance_name: str) -> None:
-    """Create a Lakebase instance if it doesn't already exist."""
+import time
+
+
+def get_or_create_project(project_id: str) -> None:
+    """Create a Lakebase Autoscaling project if it doesn't already exist."""
+    from databricks.sdk.errors import NotFound
+    resource_name = f"projects/{project_id}"
     try:
-        inst = w.database.get_database_instance(name=instance_name)
-        print(f"  Instance '{instance_name}' already exists (state: {inst.state})")
-    except Exception:
-        print(f"  Creating instance '{instance_name}'...")
-        inst = w.database.create_database_instance(
-            name=instance_name,
-            capacity=CAPACITY,
-            stopped=False,
-        )
-        print(f"  Created. DNS: {inst.read_write_dns}, State: {inst.state}")
+        project = w.postgres.get_project(name=resource_name)
+        print(f"  Project '{project_id}' already exists (uid: {project.uid})")
+    except NotFound:
+        print(f"  Creating Autoscaling project '{project_id}' (this may take 1-2 min)...")
+        project = w.postgres.create_project(
+            project=Project(
+                spec=ProjectSpec(
+                    display_name=project_id,
+                    pg_version="17",
+                )
+            ),
+            project_id=project_id,
+        ).wait()
+        print(f"  Created. UID: {project.uid}")
 
 
-def get_pg_connection(instance_name: str, database_name: str) -> psycopg.Connection:
-    """Get a psycopg connection to a Lakebase database."""
-    instance = w.database.get_database_instance(name=instance_name)
-    cred = w.database.generate_database_credential(
-        request_id=str(uuid.uuid4()),
-        instance_names=[instance_name],
-    )
+def ensure_endpoint_awake(endpoint_path: str) -> str:
+    """Poll the endpoint until hosts are available (handles scale-to-zero wake-up).
+
+    Returns the resolved host.
+    """
+    print(f"  Ensuring endpoint is awake: {endpoint_path}")
+    max_attempts = 15
+    for attempt in range(1, max_attempts + 1):
+        ep = w.postgres.get_endpoint(name=endpoint_path)
+        if ep.status and ep.status.hosts and ep.status.hosts.host:
+            host = ep.status.hosts.host
+            print(f"  Endpoint ready: {host}")
+            return host
+        if attempt < max_attempts:
+            wait = min(5 * attempt, 30)
+            print(f"  Endpoint not ready (attempt {attempt}/{max_attempts}), retrying in {wait}s...")
+            time.sleep(wait)
+    raise RuntimeError(f"Endpoint {endpoint_path} did not become ready after {max_attempts} attempts")
+
+
+def get_pg_connection(project_id: str, database_name: str) -> psycopg.Connection:
+    """Get a psycopg connection to a Lakebase Autoscaling database."""
+    endpoint_path = f"projects/{project_id}/branches/{LAKEBASE_BRANCH}/endpoints/primary"
+    ep = w.postgres.get_endpoint(name=endpoint_path)
+    host = ep.status.hosts.host
+    cred = w.postgres.generate_database_credential(endpoint=endpoint_path)
     return psycopg.connect(
-        f"host={instance.read_write_dns} "
+        f"host={host} "
         f"dbname={database_name} "
         f"user={w.current_user.me().user_name} "
         f"password={cred.token} "
@@ -178,9 +208,9 @@ def get_pg_connection(instance_name: str, database_name: str) -> psycopg.Connect
     )
 
 
-def create_database(instance_name: str, database_name: str) -> None:
-    """Create the database if it doesn't exist (connects to 'postgres' first)."""
-    conn = get_pg_connection(instance_name, "postgres")
+def create_database(project_id: str, database_name: str) -> None:
+    """Create the database if it doesn't exist (connects to 'databricks_postgres' first)."""
+    conn = get_pg_connection(project_id, "databricks_postgres")
     conn.autocommit = True
     with conn.cursor() as cur:
         cur.execute(f"SELECT 1 FROM pg_database WHERE datname = '{database_name}'")
@@ -192,22 +222,22 @@ def create_database(instance_name: str, database_name: str) -> None:
     conn.close()
 
 
-def run_ddl(instance_name: str, database_name: str, schema_file: str) -> None:
+def run_ddl(project_id: str, database_name: str, schema_file: str) -> None:
     """Run the DDL schema SQL file against the database."""
     schema_path = _repo_root / schema_file
     ddl = schema_path.read_text()
     print(f"  Running DDL from {schema_file}...")
-    with get_pg_connection(instance_name, database_name) as conn:
+    with get_pg_connection(project_id, database_name) as conn:
         with conn.cursor() as cur:
             cur.execute(ddl)
         conn.commit()
     print(f"  DDL applied successfully.")
 
 
-def grant_public_access(instance_name: str, database_name: str) -> None:
+def grant_public_access(project_id: str, database_name: str) -> None:
     """Grant PUBLIC access so app service principals can connect."""
     print(f"  Granting PUBLIC access on {database_name}...")
-    with get_pg_connection(instance_name, database_name) as conn:
+    with get_pg_connection(project_id, database_name) as conn:
         with conn.cursor() as cur:
             cur.execute("GRANT ALL ON ALL TABLES IN SCHEMA public TO PUBLIC")
             cur.execute("GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO PUBLIC")
@@ -218,45 +248,137 @@ def grant_public_access(instance_name: str, database_name: str) -> None:
     print(f"  PUBLIC access granted.")
 
 
-def create_lakebase_roles_for_sps(instance_name: str, database_name: str, sp_client_ids: list[str]) -> None:
-    """Create PostgreSQL roles for app service principals.
+def create_lakebase_roles_for_sps(project_id: str, sp_client_ids: list[str]) -> None:
+    """Create Lakebase-managed OAuth roles for app service principals.
 
-    Apps connect to Lakebase as their SP client_id (UUID). The role must exist
-    in PostgreSQL before the connection succeeds, even with PUBLIC grants.
+    Uses the SDK postgres.create_role API to register SPs with LAKEBASE_OAUTH_V1
+    auth. This is required for SPs to generate valid database credentials —
+    raw PostgreSQL CREATE ROLE results in NO_LOGIN auth which rejects OAuth tokens.
+
+    On clean redeploys, apps get new SPs. This function deletes stale roles from
+    previous deploys before creating roles for the current SPs.
     """
+    import time
+    from databricks.sdk.service.postgres import Role, RoleRoleSpec, RoleAuthMethod, RoleIdentityType
+
     if not sp_client_ids:
         return
-    print(f"  Creating Lakebase roles for {len(sp_client_ids)} app SPs...")
-    with get_pg_connection(instance_name, database_name) as conn:
-        with conn.cursor() as cur:
-            for sp_id in sp_client_ids:
-                try:
-                    # Use quoted identifier — UUIDs contain hyphens
-                    cur.execute(f'CREATE ROLE "{sp_id}" WITH LOGIN')
-                    print(f"    Role created: {sp_id}")
-                except Exception as e:
-                    if "already exists" in str(e).lower():
-                        print(f"    Role exists: {sp_id}")
-                        conn.rollback()
-                    else:
-                        print(f"    Role creation failed for {sp_id}: {e}")
-                        conn.rollback()
-        conn.commit()
+
+    branch = f"projects/{project_id}/branches/{LAKEBASE_BRANCH}"
+
+    # Snapshot all existing roles on this branch
+    existing_roles = list(w.postgres.list_roles(parent=branch))
+    existing_by_pg_role = {r.status.postgres_role: r for r in existing_roles}
+    current_sp_set = set(sp_client_ids)
+
+    # --- Clean up orphaned roles from previous deploys ---
+    # On a clean redeploy, old SPs are gone but their Lakebase roles persist.
+    # These stale roles also block role_id reuse, so delete them first.
+    for role in existing_roles:
+        pg_role = role.status.postgres_role
+        role_name = role.name or ""
+        if pg_role not in current_sp_set and "/roles/sp-" in role_name:
+            print(f"    Deleting stale role for old SP: {pg_role} ({role_name})")
+            try:
+                w.postgres.delete_role(name=role_name)
+                time.sleep(5)
+            except Exception as e:
+                print(f"    Could not delete stale role: {e}")
+
+    # --- Create / verify roles for current SPs ---
+    print(f"  Creating Lakebase OAuth roles for {len(sp_client_ids)} app SPs...")
+    for sp_id in sp_client_ids:
+        if sp_id in existing_by_pg_role:
+            role = existing_by_pg_role[sp_id]
+            if role.status.auth_method == RoleAuthMethod.LAKEBASE_OAUTH_V1:
+                print(f"    {sp_id}: OAuth role already exists")
+                continue
+            # Delete NO_LOGIN role so we can recreate with OAuth
+            print(f"    {sp_id}: Deleting NO_LOGIN role...")
+            w.postgres.delete_role(name=role.name)
+            time.sleep(8)
+
+        # Derive role_id from SP UUID — deterministic and avoids index-based collisions
+        # Pattern: ^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$
+        role_id = f"sp-{sp_id}"
+        try:
+            op = w.postgres.create_role(
+                parent=branch,
+                role=Role(
+                    spec=RoleRoleSpec(
+                        postgres_role=sp_id,
+                        auth_method=RoleAuthMethod.LAKEBASE_OAUTH_V1,
+                        identity_type=RoleIdentityType.SERVICE_PRINCIPAL,
+                    )
+                ),
+                role_id=role_id,
+            )
+            result = op.wait()
+            print(f"    {sp_id}: OAuth role created ({result.name})")
+            time.sleep(5)
+        except Exception as e:
+            print(f"    {sp_id}: Role creation failed: {e}")
+
+
+def grant_lakebase_access_to_sps(project_id: str, sp_infos: list[dict]) -> None:
+    """Grant SP access to the Autoscaling project via permissions API.
+
+    Uses the database-projects permissions endpoint with the project UID.
+    Permission level CAN_USE allows SPs to generate credentials and connect.
+    """
+    if not sp_infos:
+        return
+
+    import requests
+    host = spark.conf.get("spark.databricks.workspaceUrl")
+    token = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    # Resolve project UID — the permissions API requires the UID, not the display name
+    project = w.postgres.get_project(name=f"projects/{project_id}")
+    project_uid = project.uid
+    print(f"  Project UID: {project_uid}")
+
+    # Build ACL with all SPs in a single PATCH
+    acl = [
+        {"service_principal_name": sp["sp_name"], "permission_level": "CAN_USE"}
+        for sp in sp_infos
+    ]
+
+    print(f"  Granting CAN_USE on database-projects/{project_uid} to {len(acl)} app SPs...")
+    resp = requests.patch(
+        f"https://{host}/api/2.0/permissions/database-projects/{project_uid}",
+        headers=headers,
+        json={"access_control_list": acl},
+    )
+    if resp.status_code == 200:
+        for sp in sp_infos:
+            print(f"    {sp['app_name']}: CAN_USE granted")
+    else:
+        print(f"  Permission grant failed ({resp.status_code}): {resp.text[:300]}")
+        print(f"  Grant manually: Workspace Settings → Lakebase → {project_id} → Permissions")
 
 # COMMAND ----------
 
 print("=" * 60)
-print("STEP 1: Lakebase Instances")
+print("STEP 1: Lakebase Autoscaling Project")
 print("=" * 60)
 
-for cfg in LAKEBASE_CONFIGS:
-    print(f"\n--- {cfg['instance_name']} ---")
-    get_or_create_instance(cfg["instance_name"])
-    create_database(cfg["instance_name"], cfg["database_name"])
-    run_ddl(cfg["instance_name"], cfg["database_name"], cfg["schema_file"])
-    grant_public_access(cfg["instance_name"], cfg["database_name"])
+# 1. Create project (single LRO)
+print(f"\n--- Project: {LAKEBASE_PROJECT_ID} ---")
+get_or_create_project(LAKEBASE_PROJECT_ID)
 
-print("\nAll Lakebase instances ready.")
+# 2. Ensure endpoint is awake
+endpoint_host = ensure_endpoint_awake(LAKEBASE_ENDPOINT_PATH)
+
+# 3. Create databases, run DDL, grant access
+for cfg in LAKEBASE_DATABASES:
+    print(f"\n--- Database: {cfg['database_name']} ---")
+    create_database(LAKEBASE_PROJECT_ID, cfg["database_name"])
+    run_ddl(LAKEBASE_PROJECT_ID, cfg["database_name"], cfg["schema_file"])
+    grant_public_access(LAKEBASE_PROJECT_ID, cfg["database_name"])
+
+print("\nLakebase Autoscaling project ready.")
 
 # COMMAND ----------
 
@@ -293,7 +415,7 @@ print("=" * 60)
 
 # Command Center — Care Managers
 print("\nSeeding care managers...")
-with get_pg_connection("red-bricks-command-center", "red_bricks_alerts") as conn:
+with get_pg_connection(LAKEBASE_PROJECT_ID, "red_bricks_alerts") as conn:
     with conn.cursor() as cur:
         for email, name, role, dept, caseload in CARE_MANAGERS:
             cur.execute(
@@ -306,7 +428,7 @@ print(f"  {len(CARE_MANAGERS)} care managers seeded.")
 
 # FWA Portal — Fraud Investigators
 print("\nSeeding fraud investigators...")
-with get_pg_connection("fwa-investigations", "fwa_cases") as conn:
+with get_pg_connection(LAKEBASE_PROJECT_ID, "fwa_cases") as conn:
     with conn.cursor() as cur:
         for email, name, role, dept, caseload in FRAUD_INVESTIGATORS:
             cur.execute(
@@ -383,13 +505,17 @@ if not app_sps:
 
 # COMMAND ----------
 
+# Grant SPs project-level access (replaces DAB security labels)
+if app_sps:
+    print("\n--- Lakebase Project Access ---")
+    grant_lakebase_access_to_sps(LAKEBASE_PROJECT_ID, app_sps)
+
 # Apps connect to Lakebase using their SP client_id (UUID) as the PostgreSQL username.
-# The role must exist before the connection succeeds, even with PUBLIC grants.
+# Lakebase OAuth roles are created at the branch level (not per-database).
+# The SDK's create_role registers the SP with LAKEBASE_OAUTH_V1 auth method.
 if app_sps:
     sp_client_ids = [sp["sp_name"] for sp in app_sps]
-    for cfg in LAKEBASE_CONFIGS:
-        print(f"\n--- {cfg['instance_name']} / {cfg['database_name']} ---")
-        create_lakebase_roles_for_sps(cfg["instance_name"], cfg["database_name"], sp_client_ids)
+    create_lakebase_roles_for_sps(LAKEBASE_PROJECT_ID, sp_client_ids)
 
 # COMMAND ----------
 
@@ -408,7 +534,7 @@ if app_sps:
         # USE CATALOG + BROWSE (BROWSE enables catalog/warehouse auto-detection in apps)
         for priv in ["USE CATALOG", "BROWSE"]:
             try:
-                spark.sql(f"GRANT {priv} ON CATALOG {catalog} TO `{sp_name}`")
+                spark.sql(f"GRANT {priv} ON CATALOG {catalog_sql} TO `{sp_name}`")
                 print(f"    {priv} on {catalog}")
             except Exception as e:
                 print(f"    {priv}: {e}")
@@ -416,8 +542,8 @@ if app_sps:
         # USE SCHEMA + SELECT on each domain schema
         for schema in UC_SCHEMAS:
             try:
-                spark.sql(f"GRANT USE SCHEMA ON SCHEMA {catalog}.{schema} TO `{sp_name}`")
-                spark.sql(f"GRANT SELECT ON SCHEMA {catalog}.{schema} TO `{sp_name}`")
+                spark.sql(f"GRANT USE SCHEMA ON SCHEMA {catalog_sql}.{schema} TO `{sp_name}`")
+                spark.sql(f"GRANT SELECT ON SCHEMA {catalog_sql}.{schema} TO `{sp_name}`")
                 print(f"    USE SCHEMA + SELECT on {catalog}.{schema}")
             except Exception as e:
                 print(f"    {catalog}.{schema}: {e}")
@@ -544,7 +670,7 @@ _current_user = w.current_user.me().user_name
 GENIE_SPACE_CONFIGS = [
     {
         "title": "Red Bricks Insurance — Analytics Assistant",
-        "description": "Natural language analytics: claims, HEDIS quality, risk adjustment, enrollment, pharmacy, and AI-generated member risk narratives.",
+        "description": "Natural language analytics: claims, HEDIS quality, risk adjustment, enrollment, pharmacy, clinical conditions, vitals, labs, and AI-generated member risk narratives.",
         "tables": sorted([
             f"{catalog}.analytics.gold_pmpm",
             f"{catalog}.analytics.gold_mlr",
@@ -557,6 +683,11 @@ GENIE_SPACE_CONFIGS = [
             f"{catalog}.analytics.gold_stars_provider",
             f"{catalog}.claims.gold_claims_summary",
             f"{catalog}.claims.gold_pharmacy_summary",
+            f"{catalog}.clinical.condition",
+            f"{catalog}.clinical.patient",
+            f"{catalog}.clinical.gold_vitals_summary",
+            f"{catalog}.clinical.gold_encounter_summary",
+            f"{catalog}.clinical.gold_lab_results_summary",
             f"{catalog}.members.gold_enrollment_summary",
             f"{catalog}.members.gold_member_demographics",
             f"{catalog}.providers.gold_provider_directory",
@@ -655,7 +786,9 @@ def create_or_get_genie_space(title: str, description: str, tables: list[str]) -
     valid_tables = []
     for t in tables:
         try:
-            spark.sql(f"DESCRIBE TABLE {t}")
+            # Backtick-quote each part for catalogs with special chars (e.g. hyphens)
+            quoted = ".".join(f"`{part}`" for part in t.split("."))
+            spark.sql(f"DESCRIBE TABLE {quoted}")
             valid_tables.append(t)
         except Exception:
             print(f"  Skipping missing table: {t}")
@@ -739,9 +872,9 @@ print("=" * 60)
 print("STEP 4: Pre-create ML Predictions Table")
 print("=" * 60)
 
-spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.analytics")
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog_sql}.analytics")
 spark.sql(f"""
-    CREATE TABLE IF NOT EXISTS {catalog}.analytics.fwa_ml_predictions (
+    CREATE TABLE IF NOT EXISTS {catalog_sql}.analytics.fwa_ml_predictions (
         claim_id STRING,
         ml_fraud_probability DOUBLE,
         ml_risk_tier STRING,
@@ -775,7 +908,7 @@ def seed_command_center_alerts() -> int:
     # Clear existing alerts for idempotent re-runs.
     # CASCADE also truncates alert_activity_log (FK dependency), which is
     # correct because activity entries for deleted alerts are meaningless.
-    with get_pg_connection("red-bricks-command-center", "red_bricks_alerts") as conn:
+    with get_pg_connection(LAKEBASE_PROJECT_ID, "red_bricks_alerts") as conn:
         with conn.cursor() as cur:
             cur.execute("TRUNCATE TABLE risk_stratification_alerts CASCADE")
         conn.commit()
@@ -788,7 +921,7 @@ def seed_command_center_alerts() -> int:
         risk_df = spark.sql(f"""
             SELECT member_id, raf_score, hcc_codes, hcc_count,
                    line_of_business, risk_rank, clinical_summary
-            FROM {catalog}.analytics.gold_member_risk_narrative
+            FROM {catalog_sql}.analytics.gold_member_risk_narrative
             WHERE risk_rank <= 100
             ORDER BY risk_rank
         """).collect()
@@ -797,7 +930,7 @@ def seed_command_center_alerts() -> int:
         risk_df = []
 
     if risk_df:
-        with get_pg_connection("red-bricks-command-center", "red_bricks_alerts") as conn:
+        with get_pg_connection(LAKEBASE_PROJECT_ID, "red_bricks_alerts") as conn:
             with conn.cursor() as cur:
                 for row in risk_df:
                     if row.raf_score and row.raf_score > 3.0:
@@ -841,7 +974,7 @@ def seed_command_center_alerts() -> int:
             FROM (
                 SELECT member_id, line_of_business, measure_name,
                        ROW_NUMBER() OVER (PARTITION BY member_id ORDER BY measure_name) as rn
-                FROM {catalog}.analytics.gold_hedis_member
+                FROM {catalog_sql}.analytics.gold_hedis_member
                 WHERE is_compliant = 0
             ) m
             WHERE m.rn = 1
@@ -852,7 +985,7 @@ def seed_command_center_alerts() -> int:
         hedis_df = []
 
     if hedis_df:
-        with get_pg_connection("red-bricks-command-center", "red_bricks_alerts") as conn:
+        with get_pg_connection(LAKEBASE_PROJECT_ID, "red_bricks_alerts") as conn:
             with conn.cursor() as cur:
                 for row in hedis_df:
                     primary = f"HEDIS Care Gap: {row.measure_name} — Non-compliant"
@@ -880,7 +1013,7 @@ def seed_command_center_alerts() -> int:
             SELECT line_of_business, denial_category,
                    SUM(denial_count) as total_denials,
                    ROUND(SUM(total_denied_amount), 2) as total_denied_amt
-            FROM {catalog}.analytics.gold_denial_analysis
+            FROM {catalog_sql}.analytics.gold_denial_analysis
             GROUP BY line_of_business, denial_category
             HAVING SUM(denial_count) > 500
             ORDER BY total_denials DESC
@@ -891,7 +1024,7 @@ def seed_command_center_alerts() -> int:
         denial_df = []
 
     if denial_df:
-        with get_pg_connection("red-bricks-command-center", "red_bricks_alerts") as conn:
+        with get_pg_connection(LAKEBASE_PROJECT_ID, "red_bricks_alerts") as conn:
             with conn.cursor() as cur:
                 for row in denial_df:
                     tier = "High" if row.total_denials > 1000 else "Elevated"
@@ -930,7 +1063,7 @@ def seed_fwa_investigations() -> int:
 
     # Get investigator IDs
     investigators = []
-    with get_pg_connection("fwa-investigations", "fwa_cases") as conn:
+    with get_pg_connection(LAKEBASE_PROJECT_ID, "fwa_cases") as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT investigator_id, display_name FROM fraud_investigators WHERE is_active = TRUE")
             investigators = cur.fetchall()
@@ -946,7 +1079,7 @@ def seed_fwa_investigations() -> int:
                    fraud_types, severity, status, estimated_overpayment, claims_involved_count,
                    investigation_summary, evidence_summary, rules_risk_score, ml_risk_score,
                    created_date
-            FROM {catalog}.fwa.silver_fwa_investigation_cases
+            FROM {catalog_sql}.fwa.silver_fwa_investigation_cases
             ORDER BY rules_risk_score DESC
         """).collect()
     except Exception as e:
@@ -954,7 +1087,7 @@ def seed_fwa_investigations() -> int:
         return 0
 
     count = 0
-    with get_pg_connection("fwa-investigations", "fwa_cases") as conn:
+    with get_pg_connection(LAKEBASE_PROJECT_ID, "fwa_cases") as conn:
         with conn.cursor() as cur:
             for row in cases_df:
                 assigned_id = None
@@ -1028,14 +1161,14 @@ def seed_fwa_investigations() -> int:
     try:
         top_inv = spark.sql(f"""
             SELECT investigation_id, target_id, target_type
-            FROM {catalog}.fwa.silver_fwa_investigation_cases
+            FROM {catalog_sql}.fwa.silver_fwa_investigation_cases
             ORDER BY rules_risk_score DESC LIMIT 20
         """).collect()
     except Exception:
         top_inv = []
 
     evidence_count = 0
-    with get_pg_connection("fwa-investigations", "fwa_cases") as conn:
+    with get_pg_connection(LAKEBASE_PROJECT_ID, "fwa_cases") as conn:
         with conn.cursor() as cur:
             # Clear auto-seeded evidence for idempotent re-runs
             cur.execute("DELETE FROM investigation_evidence WHERE evidence_type = 'claim'")
@@ -1051,7 +1184,7 @@ def seed_fwa_investigations() -> int:
                 claims = spark.sql(f"""
                     SELECT signal_id, claim_id, fraud_type, fraud_score,
                            evidence_summary, estimated_overpayment
-                    FROM {catalog}.fwa.silver_fwa_signals
+                    FROM {catalog_sql}.fwa.silver_fwa_signals
                     WHERE {where} LIMIT 10
                 """).collect()
 
@@ -1121,7 +1254,13 @@ for app_name in APP_NAME_PATTERNS:
             source_path = str(_repo_root / source_dir)
             print(f"  Deploying {app_name} from {source_path}...")
             try:
-                w.apps.deploy(app_name, source_code_path=source_path).result()
+                w.apps.deploy(
+                    app_name=app_name,
+                    app_deployment=AppDeployment(
+                        source_code_path=source_path,
+                        mode=AppDeploymentMode.SNAPSHOT,
+                    ),
+                ).result()
                 print(f"    {app_name}: deployed ✓")
                 deploy_count += 1
             except Exception as deploy_err:
@@ -1157,18 +1296,22 @@ print("BOOTSTRAP COMPLETE")
 print("=" * 60)
 
 # Lakebase status
-for cfg in LAKEBASE_CONFIGS:
-    inst = w.database.get_database_instance(name=cfg["instance_name"])
-    print(f"\n  Lakebase: {cfg['instance_name']} ({inst.state})")
+try:
+    project = w.postgres.get_project(name=f"projects/{LAKEBASE_PROJECT_ID}")
+    print(f"\n  Lakebase project: {LAKEBASE_PROJECT_ID} (uid: {project.uid})")
+except Exception as e:
+    print(f"\n  Lakebase project: {LAKEBASE_PROJECT_ID} (could not check: {e})")
+
+for cfg in LAKEBASE_DATABASES:
     print(f"    Database: {cfg['database_name']}")
     try:
-        with get_pg_connection(cfg["instance_name"], cfg["database_name"]) as conn:
+        with get_pg_connection(LAKEBASE_PROJECT_ID, cfg["database_name"]) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'")
                 table_count = cur.fetchone()[0]
-                print(f"    Tables: {table_count}")
+                print(f"      Tables: {table_count}")
     except Exception as e:
-        print(f"    Connection check: {e}")
+        print(f"      Connection check: {e}")
 
 # App SPs
 print(f"\n  App service principals granted: {len(app_sps)}")
