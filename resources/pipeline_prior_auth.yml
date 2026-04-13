@@ -1,0 +1,18 @@
+resources:
+  pipelines:
+    prior_auth_pipeline:
+      name: "[${bundle.target}] Red Bricks — Prior Auth Pipeline"
+      catalog: ${var.catalog}
+      target: prior_auth
+      configuration:
+        source_volume: ${var.source_volume}
+      libraries:
+        - file:
+            path: ../src/pipelines/prior_auth/bronze.sql
+        - file:
+            path: ../src/pipelines/prior_auth/silver.sql
+        - file:
+            path: ../src/pipelines/prior_auth/gold.sql
+      channel: PREVIEW
+      serverless: true
+      development: true

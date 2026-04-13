@@ -15,6 +15,7 @@ build/
 app/frontend/dist/
 app-group-reporting/frontend/dist/
 app-fwa/frontend/dist/
+app-prior-auth/frontend/dist/
 
 # Build artifacts served by FastAPI (not gitignored — needed for DAB deployment)
 # app/static/

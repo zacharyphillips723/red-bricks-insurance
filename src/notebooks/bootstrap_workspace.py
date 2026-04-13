@@ -39,7 +39,7 @@ print(f"Warehouse ID: {warehouse_id or '(will auto-detect)'}")
 
 # COMMAND ----------
 
-# MAGIC %pip install psycopg[binary] --quiet
+# MAGIC %pip install psycopg[binary] databricks-sdk --upgrade --quiet
 # MAGIC %restart_python
 
 # COMMAND ----------
@@ -116,6 +116,11 @@ LAKEBASE_DATABASES = [
         "schema_file": "src/underwriting_sim_lakebase_schema.sql",
         "app_name": "rb-uw-sim",
     },
+    {
+        "database_name": "pa_reviews",
+        "schema_file": "src/pa_reviews_lakebase_schema.sql",
+        "app_name": "red-bricks-pa-portal-app",
+    },
 ]
 
 # All apps that need UC + warehouse grants
@@ -132,6 +137,7 @@ except Exception as e:
     APP_NAME_PATTERNS = [
         "red-bricks-command-center-app",
         "red-bricks-fwa-portal-app",
+        "red-bricks-pa-portal-app",
         "rb-uw-sim",
     ]
 
@@ -139,7 +145,7 @@ except Exception as e:
 UC_SCHEMAS = [
     "raw", "members", "claims", "providers", "documents",
     "risk_adjustment", "underwriting", "clinical", "benefits",
-    "analytics", "fwa",
+    "analytics", "fwa", "prior_auth",
 ]
 
 # COMMAND ----------
@@ -407,6 +413,18 @@ FRAUD_INVESTIGATORS = [
     ("steven.patel@redbricks.example.com", "Steven Patel", "Recovery Specialist", "Payment Integrity", 35),
 ]
 
+# PA Reviewers — (email, name, role, department, specialty, max_caseload)
+PA_REVIEWERS = [
+    ("nancy.wright@redbricks.example.com", "Nancy Wright", "UM Nurse", "Utilization Management", "Medical/Surgical", 50),
+    ("thomas.lee@redbricks.example.com", "Thomas Lee", "Medical Director", "Utilization Management", "Internal Medicine", 25),
+    ("sandra.martinez@redbricks.example.com", "Sandra Martinez", "UM Nurse", "Utilization Management", "Behavioral Health", 50),
+    ("john.harrison@redbricks.example.com", "John Harrison", "Peer Reviewer", "Clinical Review", "Orthopedics", 30),
+    ("angela.pham@redbricks.example.com", "Angela Pham", "Clinical Pharmacist", "Pharmacy Management", "Specialty Drugs", 40),
+    ("christopher.brown@redbricks.example.com", "Christopher Brown", "Appeals Coordinator", "Member Services", None, 35),
+    ("patricia.jones@redbricks.example.com", "Patricia Jones", "UM Nurse", "Utilization Management", "Oncology", 45),
+    ("david.nguyen@redbricks.example.com", "David Nguyen", "Medical Director", "Utilization Management", "Cardiology", 20),
+]
+
 # COMMAND ----------
 
 print("=" * 60)
@@ -438,6 +456,19 @@ with get_pg_connection(LAKEBASE_PROJECT_ID, "fwa_cases") as conn:
             )
     conn.commit()
 print(f"  {len(FRAUD_INVESTIGATORS)} fraud investigators seeded.")
+
+# PA Reviewers
+print("\nSeeding PA reviewers...")
+with get_pg_connection(LAKEBASE_PROJECT_ID, "pa_reviews") as conn:
+    with conn.cursor() as cur:
+        for email, name, role, dept, specialty, caseload in PA_REVIEWERS:
+            cur.execute(
+                """INSERT INTO pa_reviewers (email, display_name, role, department, specialty, max_caseload)
+                   VALUES (%s, %s, %s::reviewer_role, %s, %s, %s) ON CONFLICT (email) DO NOTHING""",
+                (email, name, role, dept, specialty, caseload),
+            )
+    conn.commit()
+print(f"  {len(PA_REVIEWERS)} PA reviewers seeded.")
 
 # COMMAND ----------
 
@@ -763,6 +794,23 @@ GENIE_SPACE_CONFIGS = [
             f"{catalog}.analytics.gold_group_stop_loss",
             f"{catalog}.benefits.silver_benefits",
             f"{catalog}.underwriting.gold_underwriting_summary",
+        ]),
+    },
+    {
+        "title": "Red Bricks Insurance — PA Analytics",
+        "description": "Prior authorization analytics: request volume, approval/denial rates, turnaround times, CMS-0057-F compliance, auto-adjudication performance, provider patterns, and medical policy utilization.",
+        "tables": sorted([
+            f"{catalog}.prior_auth.gold_pa_requests",
+            f"{catalog}.prior_auth.gold_pa_metrics",
+            f"{catalog}.prior_auth.gold_pa_provider_patterns",
+            f"{catalog}.prior_auth.gold_pa_policy_utilization",
+            f"{catalog}.prior_auth.gold_pa_auto_adjudication_performance",
+            f"{catalog}.prior_auth.gold_pa_denial_analysis",
+            f"{catalog}.prior_auth.gold_pa_tier1_evaluation",
+            f"{catalog}.prior_auth.silver_medical_policies",
+            f"{catalog}.prior_auth.silver_medical_policy_rules",
+            f"{catalog}.prior_auth.parsed_medical_policies",
+            f"{catalog}.prior_auth.policy_summaries",
         ]),
     },
 ]
@@ -1205,6 +1253,252 @@ def seed_fwa_investigations() -> int:
 
     return count
 
+
+def seed_pa_review_queue() -> int:
+    """Seed PA review queue from gold_pa_requests into Lakebase."""
+
+    # Get reviewer IDs
+    reviewers = []
+    with get_pg_connection(LAKEBASE_PROJECT_ID, "pa_reviews") as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT reviewer_id, display_name, role::text FROM pa_reviewers WHERE is_active = TRUE")
+            reviewers = cur.fetchall()
+
+    if not reviewers:
+        print("  WARNING: No PA reviewers found. Seed reviewers first.")
+        return 0
+
+    # Read PA requests from gold table
+    try:
+        pa_df = spark.sql(f"""
+            SELECT
+                r.auth_request_id, r.member_id, r.requesting_provider_npi,
+                r.service_type, r.procedure_code, r.procedure_description,
+                r.diagnosis_codes, r.policy_id, r.urgency, r.line_of_business,
+                r.clinical_summary, r.estimated_cost, r.determination,
+                r.determination_tier, r.determination_reason, r.denial_reason_code,
+                r.reviewer_type, r.turnaround_hours, r.cms_compliant,
+                r.request_date, r.determination_date,
+                r.appeal_filed, r.appeal_outcome,
+                -- Get policy name
+                p.policy_name,
+                -- Get member name from members table
+                COALESCE(CONCAT(m.first_name, ' ', m.last_name), CONCAT('Member ', SUBSTR(r.member_id, 1, 8))) AS member_name,
+                -- Get provider name from providers table
+                COALESCE(CONCAT('Dr. ', prov.provider_name), CONCAT('Dr. Provider ', SUBSTR(r.requesting_provider_npi, 1, 6))) AS provider_name,
+                -- Get ML prediction if available
+                ml.predicted_determination AS ai_recommendation,
+                ml.confidence AS ai_confidence,
+                -- Get Tier 1 evaluation
+                t1.tier1_auto_eligible
+            FROM {catalog_sql}.prior_auth.gold_pa_requests r
+            LEFT JOIN {catalog_sql}.prior_auth.silver_medical_policies p ON r.policy_id = p.policy_id
+            LEFT JOIN {catalog_sql}.prior_auth.pa_ml_predictions ml ON r.auth_request_id = ml.auth_request_id
+            LEFT JOIN {catalog_sql}.prior_auth.gold_pa_tier1_evaluation t1 ON r.auth_request_id = t1.auth_request_id
+            LEFT JOIN {catalog_sql}.members.silver_members m ON r.member_id = m.member_id
+            LEFT JOIN {catalog_sql}.providers.silver_providers prov ON r.requesting_provider_npi = prov.npi
+            ORDER BY r.request_date DESC
+        """).collect()
+    except Exception as e:
+        print(f"  gold_pa_requests not available: {e}")
+        return 0
+
+    # Map determination to review status
+    status_map = {
+        "approved": "Approved",
+        "denied": "Denied",
+        "pended": "In Review",
+        "partially_approved": "Partially Approved",
+    }
+
+    # Build caseload-aware reviewer assignment
+    # Track how many open cases each reviewer has; stop assigning past max_caseload
+    reviewer_caseload = {}  # reviewer_id -> current count
+    reviewer_max = {}       # reviewer_id -> max_caseload
+    for i, (email, name, role, dept, specialty, max_cl) in enumerate(PA_REVIEWERS):
+        # reviewers list from DB has (reviewer_id, display_name, role)
+        if i < len(reviewers):
+            rid = str(reviewers[i][0])
+            reviewer_caseload[rid] = 0
+            reviewer_max[rid] = max_cl
+
+    # For "pended" cases, distribute across open statuses for realism
+    import random as _rng
+    _rng.seed(42)
+    _pended_count = 0
+
+    def _pended_status():
+        """Distribute pended cases: 50% In Review, 30% Pending Review, 20% Additional Info Requested"""
+        nonlocal _pended_count
+        _pended_count += 1
+        r = _rng.random()
+        if r < 0.50:
+            return "In Review"
+        elif r < 0.80:
+            return "Pending Review"
+        else:
+            return "Additional Info Requested"
+
+    count = 0
+    robin_idx = 0
+    with get_pg_connection(LAKEBASE_PROJECT_ID, "pa_reviews") as conn:
+        with conn.cursor() as cur:
+            # Clear existing data for clean re-seed
+            cur.execute("TRUNCATE pa_review_actions, pa_review_queue CASCADE")
+            for row in pa_df:
+                det = row.determination
+                if det == "pended":
+                    status = _pended_status()
+                else:
+                    status = status_map.get(det, "Pending Review")
+
+                # Assign reviewer for non-pending cases (caseload-aware)
+                assigned_id = None
+                if status not in ("Pending Review",):
+                    # Find next reviewer with capacity (round-robin with cap)
+                    for _ in range(len(reviewers)):
+                        rev = reviewers[robin_idx % len(reviewers)]
+                        rid = str(rev[0])
+                        robin_idx += 1
+                        # Only count open statuses toward caseload
+                        if status in ("In Review", "Additional Info Requested", "Peer Review Requested"):
+                            if reviewer_caseload.get(rid, 0) < reviewer_max.get(rid, 50):
+                                assigned_id = rid
+                                reviewer_caseload[rid] = reviewer_caseload.get(rid, 0) + 1
+                                break
+                        else:
+                            # Determined cases (Approved/Denied) — assign freely, don't count toward caseload
+                            assigned_id = rid
+                            break
+                    # If all reviewers at capacity, leave unassigned and set to Pending Review
+                    if assigned_id is None and status in ("In Review", "Additional Info Requested"):
+                        status = "Pending Review"
+
+                # Determine tier
+                tier = row.determination_tier
+                if tier and tier not in ("tier_1_auto", "tier_2_ml", "tier_3_llm"):
+                    tier = "manual"
+
+                cur.execute(
+                    """INSERT INTO pa_review_queue (
+                        auth_request_id, member_id, member_name,
+                        requesting_provider_npi, provider_name,
+                        service_type, procedure_code, procedure_description,
+                        diagnosis_codes, policy_id, policy_name, line_of_business,
+                        clinical_summary, urgency, estimated_cost,
+                        status, determination_tier, assigned_reviewer_id,
+                        ai_recommendation, ai_confidence, tier1_auto_eligible,
+                        determination_reason, denial_reason_code,
+                        request_date, determination_date,
+                        turnaround_hours, cms_compliant,
+                        appeal_filed, appeal_outcome
+                    ) VALUES (
+                        %s, %s, %s,
+                        %s, %s,
+                        %s, %s, %s,
+                        %s, %s, %s, %s,
+                        %s, %s::pa_urgency, %s,
+                        %s::pa_review_status, %s::pa_determination_tier, CAST(%s AS uuid),
+                        %s, %s, %s,
+                        %s, %s,
+                        %s::timestamptz, %s::timestamptz,
+                        %s, %s,
+                        %s, %s
+                    ) ON CONFLICT (auth_request_id) DO NOTHING""",
+                    (
+                        row.auth_request_id, row.member_id, row.member_name,
+                        row.requesting_provider_npi, row.provider_name,
+                        row.service_type, row.procedure_code, row.procedure_description,
+                        row.diagnosis_codes, row.policy_id, row.policy_name, row.line_of_business,
+                        row.clinical_summary, row.urgency, float(row.estimated_cost or 0),
+                        status, tier, assigned_id,
+                        row.ai_recommendation, float(row.ai_confidence) if row.ai_confidence else None,
+                        bool(row.tier1_auto_eligible) if row.tier1_auto_eligible is not None else False,
+                        row.determination_reason, row.denial_reason_code,
+                        str(row.request_date) if row.request_date else None,
+                        str(row.determination_date) if row.determination_date else None,
+                        float(row.turnaround_hours) if row.turnaround_hours else None,
+                        bool(row.cms_compliant) if row.cms_compliant is not None else True,
+                        bool(row.appeal_filed) if row.appeal_filed is not None else False,
+                        row.appeal_outcome,
+                    ),
+                )
+
+                # Audit log entry
+                cur.execute(
+                    """INSERT INTO pa_review_actions (
+                        auth_request_id, action_type, new_status, note
+                    ) VALUES (%s, 'auto_generated', %s::pa_review_status, %s)""",
+                    (row.auth_request_id, status,
+                     f"PA request auto-seeded from pipeline. Tier: {tier or 'unknown'}."),
+                )
+                count += 1
+            conn.commit()
+
+    # --- Shift dates so the demo shows realistic CMS deadline scenarios ---
+    # Pending/In Review requests: requested within the last 0-5 days (some within deadline, some close)
+    # Determined requests (Approved/Denied): requested 3-30 days ago with determination 1-5 days after
+    print("  Adjusting dates for realistic CMS deadlines...")
+    with get_pg_connection(LAKEBASE_PROJECT_ID, "pa_reviews") as conn:
+        with conn.cursor() as cur:
+            # Pending/In Review: spread request_date from now-5d to now, recompute cms_deadline
+            cur.execute("""
+                UPDATE pa_review_queue
+                SET request_date = now() - (random() * INTERVAL '5 days'),
+                    determination_date = NULL,
+                    turnaround_hours = NULL,
+                    cms_deadline = CASE
+                        WHEN urgency = 'expedited'
+                            THEN now() - (random() * INTERVAL '5 days') + INTERVAL '72 hours'
+                        WHEN urgency = 'standard'
+                            THEN now() - (random() * INTERVAL '5 days') + INTERVAL '168 hours'
+                        ELSE now() - (random() * INTERVAL '5 days') + INTERVAL '30 days'
+                    END
+                WHERE status IN ('Pending Review', 'In Review', 'Additional Info Requested')
+            """)
+            # For pending, use a correlated update so cms_deadline matches the shifted request_date
+            cur.execute("""
+                UPDATE pa_review_queue
+                SET cms_deadline = request_date + CASE
+                        WHEN urgency = 'expedited' THEN INTERVAL '72 hours'
+                        WHEN urgency = 'standard'  THEN INTERVAL '168 hours'
+                        ELSE INTERVAL '30 days'
+                    END
+                WHERE status IN ('Pending Review', 'In Review', 'Additional Info Requested')
+            """)
+
+            # Determined: spread request_date from now-30d to now-3d, determination 1-5d after request
+            cur.execute("""
+                WITH shifted AS (
+                    SELECT auth_request_id,
+                           now() - INTERVAL '3 days' - (random() * INTERVAL '27 days') AS new_request
+                    FROM pa_review_queue
+                    WHERE status IN ('Approved', 'Denied', 'Partially Approved')
+                )
+                UPDATE pa_review_queue q
+                SET request_date = s.new_request,
+                    determination_date = s.new_request + (random() * INTERVAL '4 days') + INTERVAL '1 day',
+                    cms_deadline = s.new_request + CASE
+                        WHEN q.urgency = 'expedited' THEN INTERVAL '72 hours'
+                        WHEN q.urgency = 'standard'  THEN INTERVAL '168 hours'
+                        ELSE INTERVAL '30 days'
+                    END
+                FROM shifted s
+                WHERE q.auth_request_id = s.auth_request_id
+            """)
+
+            # Recompute turnaround_hours and cms_compliant for determined requests
+            cur.execute("""
+                UPDATE pa_review_queue
+                SET turnaround_hours = EXTRACT(EPOCH FROM (determination_date - request_date)) / 3600.0,
+                    cms_compliant = determination_date <= cms_deadline
+                WHERE status IN ('Approved', 'Denied', 'Partially Approved')
+                  AND determination_date IS NOT NULL
+            """)
+            conn.commit()
+    print(f"  {count} PA review requests seeded with realistic dates.")
+    return count
+
 # COMMAND ----------
 
 print("=" * 60)
@@ -1216,6 +1510,9 @@ alert_count = seed_command_center_alerts()
 
 print("\n--- FWA Investigations ---")
 inv_count = seed_fwa_investigations()
+
+print("\n--- PA Review Queue ---")
+pa_count = seed_pa_review_queue()
 
 # COMMAND ----------
 
@@ -1237,6 +1534,7 @@ print("=" * 60)
 APP_SOURCE_CODE_MAP = {
     "red-bricks-command-center-app": "app",
     "red-bricks-fwa-portal-app": "app-fwa",
+    "red-bricks-pa-portal-app": "app-prior-auth",
 }
 # Group reporting app name varies by target (rb-grp-rpt-dev, rb-grp-rpt-prod, etc.)
 for _app_name in APP_NAME_PATTERNS:
@@ -1339,6 +1637,7 @@ except Exception:
 # Seeded data
 print(f"\n  Alerts seeded: {alert_count}")
 print(f"  Investigations seeded: {inv_count}")
+print(f"  PA reviews seeded: {pa_count}")
 print(f"  ML predictions table: {catalog}.analytics.fwa_ml_predictions")
 
 print(f"\n  Apps deployed/restarted: {deploy_count}")

@@ -1,0 +1,34 @@
+resources:
+  apps:
+    red_bricks_pa_portal:
+      name: "red-bricks-pa-portal-app"
+      description: "Red Bricks Insurance — Prior Authorization Review Portal"
+      source_code_path: ../app-prior-auth
+      config:
+        command:
+          - uvicorn
+          - main:app
+          - --host=0.0.0.0
+          - --port=8000
+        env:
+          - name: LAKEBASE_PROJECT_ID
+            value: ${var.lakebase_project_id}
+          - name: LAKEBASE_DATABASE_NAME
+            value: pa_reviews
+          - name: LAKEBASE_BRANCH
+            value: production
+          - name: GENIE_SPACE_ID
+            value: auto
+          - name: SQL_WAREHOUSE_ID
+            value: ${var.warehouse_id}
+          - name: LLM_ENDPOINT
+            value: databricks-llama-4-maverick
+          - name: UC_CATALOG
+            value: ${var.catalog}
+          - name: UC_SCHEMA
+            value: prior_auth
+      resources:
+        - name: llm-endpoint
+          serving_endpoint:
+            name: databricks-llama-4-maverick
+            permission: CAN_QUERY

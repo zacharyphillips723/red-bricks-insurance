@@ -88,6 +88,13 @@ resources:
             pipeline_id: ${resources.pipelines.clinical_pipeline.id}
             full_refresh: true
 
+        - task_key: prior_auth_pipeline
+          depends_on:
+            - task_key: data_generation
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.prior_auth_pipeline.id}
+            full_refresh: true
+
         - task_key: fwa_pipeline
           depends_on:
             - task_key: data_generation
@@ -195,6 +202,43 @@ resources:
               catalog: ${var.catalog}
 
           environment_key: agent_env
+
+        - task_key: train_pa_model
+          depends_on:
+            - task_key: prior_auth_pipeline
+          notebook_task:
+            notebook_path: ../src/notebooks/train_pa_model.py
+            base_parameters:
+              catalog: ${var.catalog}
+          environment_key: ml_training_env
+
+        - task_key: deploy_pa_agent
+          depends_on:
+            - task_key: prior_auth_pipeline
+            - task_key: train_pa_model
+          notebook_task:
+            notebook_path: ../src/notebooks/deploy_pa_agent.py
+            base_parameters:
+              catalog: ${var.catalog}
+          environment_key: agent_env
+
+        - task_key: parse_medical_policies
+          depends_on:
+            - task_key: prior_auth_pipeline
+          notebook_task:
+            notebook_path: ../src/notebooks/parse_medical_policies.py
+            base_parameters:
+              catalog: ${var.catalog}
+          environment_key: agent_env
+
+        - task_key: pa_model_governance
+          depends_on:
+            - task_key: train_pa_model
+          notebook_task:
+            notebook_path: ../src/notebooks/pa_model_governance.py
+            base_parameters:
+              catalog: ${var.catalog}
+          environment_key: ml_training_env
 
         - task_key: evaluate_agents
           depends_on:

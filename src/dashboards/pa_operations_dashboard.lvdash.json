@@ -1,0 +1,615 @@
+{
+  "datasets": [
+    {
+      "name": "ds_pa_volume_trend",
+      "displayName": "PA Volume by Month",
+      "queryLines": [
+        "SELECT reporting_month, total_requests, approved_count, denied_count, pended_count, partially_approved_count FROM prior_auth.gold_pa_metrics ORDER BY reporting_month"
+      ]
+    },
+    {
+      "name": "ds_approval_rate",
+      "displayName": "Current Approval Rate",
+      "queryLines": [
+        "SELECT ROUND(AVG(approval_rate) * 100, 1) AS approval_rate_pct FROM prior_auth.gold_pa_metrics WHERE reporting_month >= DATE_TRUNC('month', CURRENT_DATE()) - INTERVAL 3 MONTHS"
+      ]
+    },
+    {
+      "name": "ds_avg_turnaround",
+      "displayName": "Average Turnaround Hours",
+      "queryLines": [
+        "SELECT ROUND(AVG(avg_turnaround_hours), 1) AS avg_turnaround_hours FROM prior_auth.gold_pa_metrics WHERE reporting_month >= DATE_TRUNC('month', CURRENT_DATE()) - INTERVAL 3 MONTHS"
+      ]
+    },
+    {
+      "name": "ds_cms_compliance",
+      "displayName": "CMS Compliance Rate",
+      "queryLines": [
+        "SELECT ROUND(AVG(cms_compliance_rate) * 100, 1) AS compliance_pct FROM prior_auth.gold_pa_metrics WHERE reporting_month >= DATE_TRUNC('month', CURRENT_DATE()) - INTERVAL 3 MONTHS"
+      ]
+    },
+    {
+      "name": "ds_appeal_overturn",
+      "displayName": "Appeal Overturn Rate",
+      "queryLines": [
+        "SELECT ROUND(AVG(appeal_overturn_rate) * 100, 1) AS overturn_pct FROM prior_auth.gold_pa_metrics WHERE reporting_month >= DATE_TRUNC('month', CURRENT_DATE()) - INTERVAL 3 MONTHS AND appeal_overturn_rate IS NOT NULL"
+      ]
+    },
+    {
+      "name": "ds_turnaround_by_urgency",
+      "displayName": "Turnaround by Urgency",
+      "queryLines": [
+        "SELECT reporting_month, avg_expedited_turnaround_hours, avg_standard_turnaround_hours FROM prior_auth.gold_pa_metrics ORDER BY reporting_month"
+      ]
+    },
+    {
+      "name": "ds_turnaround_distribution",
+      "displayName": "Turnaround Distribution vs CMS Thresholds",
+      "queryLines": [
+        "SELECT urgency, ROUND(turnaround_hours, 0) AS turnaround_hours_bucket, COUNT(*) AS request_count FROM prior_auth.gold_pa_requests WHERE turnaround_hours IS NOT NULL GROUP BY urgency, ROUND(turnaround_hours, 0) ORDER BY urgency, turnaround_hours_bucket"
+      ]
+    },
+    {
+      "name": "ds_auto_adjudication_funnel",
+      "displayName": "Auto-Adjudication Funnel",
+      "queryLines": [
+        "SELECT determination_tier, COUNT(*) AS request_count, ROUND(AVG(CASE WHEN determination = 'approved' THEN 1 ELSE 0 END) * 100, 1) AS approval_rate_pct, ROUND(AVG(turnaround_hours), 1) AS avg_turnaround FROM prior_auth.gold_pa_requests GROUP BY determination_tier ORDER BY CASE determination_tier WHEN 'tier_1_auto' THEN 1 WHEN 'tier_2_ml' THEN 2 WHEN 'tier_3_llm' THEN 3 ELSE 4 END"
+      ]
+    },
+    {
+      "name": "ds_denial_reasons",
+      "displayName": "Top Denial Reasons",
+      "queryLines": [
+        "SELECT denial_reason_code, denial_reason_display, total_denials, appeal_rate_pct, overturn_rate_pct FROM prior_auth.gold_pa_denial_analysis WHERE denial_reason_code IS NOT NULL ORDER BY total_denials DESC LIMIT 10"
+      ]
+    },
+    {
+      "name": "ds_service_type_breakdown",
+      "displayName": "Approval/Denial by Service Type",
+      "queryLines": [
+        "SELECT service_type, COUNT(*) AS total, SUM(CASE WHEN determination = 'approved' THEN 1 ELSE 0 END) AS approved, SUM(CASE WHEN determination = 'denied' THEN 1 ELSE 0 END) AS denied, SUM(CASE WHEN determination = 'pended' THEN 1 ELSE 0 END) AS pended, ROUND(AVG(CASE WHEN determination = 'approved' THEN 1 ELSE 0 END) * 100, 1) AS approval_rate_pct FROM prior_auth.gold_pa_requests GROUP BY service_type ORDER BY total DESC"
+      ]
+    },
+    {
+      "name": "ds_provider_leaderboard",
+      "displayName": "Provider PA Patterns",
+      "queryLines": [
+        "SELECT provider_name, provider_specialty, total_requests, approval_rate_pct, denial_rate_pct, avg_turnaround_hours, auto_adjudication_rate_pct FROM prior_auth.gold_pa_provider_patterns ORDER BY total_requests DESC LIMIT 15"
+      ]
+    },
+    {
+      "name": "ds_policy_utilization",
+      "displayName": "Policy Utilization",
+      "queryLines": [
+        "SELECT policy_name, service_category, total_requests, approval_rate_pct, denial_rate_pct, top_denial_reason FROM prior_auth.gold_pa_policy_utilization ORDER BY total_requests DESC"
+      ]
+    },
+    {
+      "name": "ds_total_requests",
+      "displayName": "Total PA Requests",
+      "queryLines": [
+        "SELECT COUNT(*) AS total_requests FROM prior_auth.gold_pa_requests"
+      ]
+    },
+    {
+      "name": "ds_auto_adjudication_rate",
+      "displayName": "Auto-Adjudication Rate",
+      "queryLines": [
+        "SELECT ROUND(SUM(CASE WHEN determination_tier IN ('tier_1_auto', 'tier_2_ml') THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS auto_rate_pct FROM prior_auth.gold_pa_requests"
+      ]
+    },
+    {
+      "name": "ds_cost_by_determination",
+      "displayName": "Cost by Determination",
+      "queryLines": [
+        "SELECT determination, COUNT(*) AS count, ROUND(SUM(estimated_cost), 0) AS total_cost, ROUND(AVG(estimated_cost), 0) AS avg_cost FROM prior_auth.gold_pa_requests GROUP BY determination ORDER BY total_cost DESC"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "pa_overview",
+      "displayName": "PA Operations Overview",
+      "layout": [
+        {
+          "widget": {
+            "name": "title",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Prior Authorization Operations — CMS-0057-F Compliance Dashboard"
+              ]
+            }
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 1 }
+        },
+        {
+          "widget": {
+            "name": "subtitle",
+            "multilineTextboxSpec": {
+              "lines": [
+                "Real-time PA metrics for Red Bricks Insurance. Monitors turnaround compliance, auto-adjudication rates, denial patterns, and appeal outcomes per CMS-0057-F reporting requirements."
+              ]
+            }
+          },
+          "position": { "x": 0, "y": 1, "width": 6, "height": 1 }
+        },
+        {
+          "widget": {
+            "name": "kpi-total-requests",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_total_requests",
+                  "fields": [{ "name": "total_requests", "expression": "`total_requests`" }],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": { "fieldName": "total_requests", "displayName": "Requests" }
+              },
+              "frame": { "showTitle": true, "title": "Total PA Requests" }
+            }
+          },
+          "position": { "x": 0, "y": 2, "width": 1, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "kpi-approval-rate",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_approval_rate",
+                  "fields": [{ "name": "approval_rate_pct", "expression": "`approval_rate_pct`" }],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": { "fieldName": "approval_rate_pct", "displayName": "%" }
+              },
+              "frame": { "showTitle": true, "title": "Approval Rate" }
+            }
+          },
+          "position": { "x": 1, "y": 2, "width": 1, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "kpi-turnaround",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_avg_turnaround",
+                  "fields": [{ "name": "avg_turnaround_hours", "expression": "`avg_turnaround_hours`" }],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": { "fieldName": "avg_turnaround_hours", "displayName": "hours" }
+              },
+              "frame": { "showTitle": true, "title": "Avg Turnaround" }
+            }
+          },
+          "position": { "x": 2, "y": 2, "width": 1, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "kpi-cms-compliance",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_cms_compliance",
+                  "fields": [{ "name": "compliance_pct", "expression": "`compliance_pct`" }],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": { "fieldName": "compliance_pct", "displayName": "%" }
+              },
+              "frame": { "showTitle": true, "title": "CMS Compliance" }
+            }
+          },
+          "position": { "x": 3, "y": 2, "width": 1, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "kpi-appeal-overturn",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_appeal_overturn",
+                  "fields": [{ "name": "overturn_pct", "expression": "`overturn_pct`" }],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": { "fieldName": "overturn_pct", "displayName": "%" }
+              },
+              "frame": { "showTitle": true, "title": "Appeal Overturn Rate" }
+            }
+          },
+          "position": { "x": 4, "y": 2, "width": 1, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "kpi-auto-rate",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_auto_adjudication_rate",
+                  "fields": [{ "name": "auto_rate_pct", "expression": "`auto_rate_pct`" }],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": { "fieldName": "auto_rate_pct", "displayName": "%" }
+              },
+              "frame": { "showTitle": true, "title": "Auto-Adjudication" }
+            }
+          },
+          "position": { "x": 5, "y": 2, "width": 1, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "section-volume",
+            "multilineTextboxSpec": {
+              "lines": ["### PA Volume & Turnaround Trends"]
+            }
+          },
+          "position": { "x": 0, "y": 5, "width": 6, "height": 1 }
+        },
+        {
+          "widget": {
+            "name": "chart-volume-trend",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_pa_volume_trend",
+                  "fields": [
+                    { "name": "reporting_month", "expression": "`reporting_month`" },
+                    { "name": "approved_count", "expression": "`approved_count`" },
+                    { "name": "denied_count", "expression": "`denied_count`" },
+                    { "name": "pended_count", "expression": "`pended_count`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": { "fieldName": "reporting_month", "scale": { "type": "temporal" }, "displayName": "Month" },
+                "y": { "fieldName": "approved_count", "scale": { "type": "quantitative" }, "displayName": "Approved" },
+                "color": {
+                  "fieldName": "reporting_month",
+                  "scale": { "type": "categorical" },
+                  "displayName": ""
+                }
+              },
+              "frame": { "showTitle": true, "title": "PA Volume by Month — Approved" }
+            }
+          },
+          "position": { "x": 0, "y": 6, "width": 3, "height": 6 }
+        },
+        {
+          "widget": {
+            "name": "chart-turnaround-urgency",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_turnaround_by_urgency",
+                  "fields": [
+                    { "name": "reporting_month", "expression": "`reporting_month`" },
+                    { "name": "avg_expedited_turnaround_hours", "expression": "`avg_expedited_turnaround_hours`" },
+                    { "name": "avg_standard_turnaround_hours", "expression": "`avg_standard_turnaround_hours`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": { "fieldName": "reporting_month", "scale": { "type": "temporal" }, "displayName": "Month" },
+                "y": { "fieldName": "avg_expedited_turnaround_hours", "scale": { "type": "quantitative" }, "displayName": "Expedited Avg Hours" }
+              },
+              "frame": { "showTitle": true, "title": "Turnaround Hours — Expedited vs CMS 72h Threshold" }
+            }
+          },
+          "position": { "x": 3, "y": 6, "width": 3, "height": 6 }
+        },
+        {
+          "widget": {
+            "name": "section-auto-adj",
+            "multilineTextboxSpec": {
+              "lines": ["### Auto-Adjudication Funnel & Denial Analysis"]
+            }
+          },
+          "position": { "x": 0, "y": 12, "width": 6, "height": 1 }
+        },
+        {
+          "widget": {
+            "name": "chart-auto-funnel",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_auto_adjudication_funnel",
+                  "fields": [
+                    { "name": "determination_tier", "expression": "`determination_tier`" },
+                    { "name": "request_count", "expression": "`request_count`" },
+                    { "name": "approval_rate_pct", "expression": "`approval_rate_pct`" },
+                    { "name": "avg_turnaround", "expression": "`avg_turnaround`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": { "fieldName": "determination_tier", "scale": { "type": "categorical" }, "displayName": "Decision Tier" },
+                "y": { "fieldName": "request_count", "scale": { "type": "quantitative" }, "displayName": "Request Count" },
+                "color": {
+                  "fieldName": "determination_tier",
+                  "scale": {
+                    "type": "categorical",
+                    "mapping": {
+                      "tier_1_auto": "#00A972",
+                      "tier_2_ml": "#137CBD",
+                      "tier_3_llm": "#DB6D00",
+                      "manual": "#9E4784"
+                    }
+                  },
+                  "displayName": "Tier"
+                }
+              },
+              "frame": { "showTitle": true, "title": "Auto-Adjudication Funnel — Volume by Tier" }
+            }
+          },
+          "position": { "x": 0, "y": 13, "width": 3, "height": 6 }
+        },
+        {
+          "widget": {
+            "name": "chart-denial-reasons",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_denial_reasons",
+                  "fields": [
+                    { "name": "denial_reason_display", "expression": "`denial_reason_display`" },
+                    { "name": "total_denials", "expression": "`total_denials`" },
+                    { "name": "overturn_rate_pct", "expression": "`overturn_rate_pct`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": { "fieldName": "total_denials", "scale": { "type": "quantitative" }, "displayName": "Total Denials" },
+                "y": { "fieldName": "denial_reason_display", "scale": { "type": "categorical" }, "displayName": "Denial Reason" }
+              },
+              "frame": { "showTitle": true, "title": "Top Denial Reasons" }
+            }
+          },
+          "position": { "x": 3, "y": 13, "width": 3, "height": 6 }
+        },
+        {
+          "widget": {
+            "name": "section-service-cost",
+            "multilineTextboxSpec": {
+              "lines": ["### Service Type & Cost Analysis"]
+            }
+          },
+          "position": { "x": 0, "y": 19, "width": 6, "height": 1 }
+        },
+        {
+          "widget": {
+            "name": "chart-service-breakdown",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_service_type_breakdown",
+                  "fields": [
+                    { "name": "service_type", "expression": "`service_type`" },
+                    { "name": "approved", "expression": "`approved`" },
+                    { "name": "denied", "expression": "`denied`" },
+                    { "name": "pended", "expression": "`pended`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": { "fieldName": "service_type", "scale": { "type": "categorical" }, "displayName": "Service Type" },
+                "y": { "fieldName": "approved", "scale": { "type": "quantitative" }, "displayName": "Approved" }
+              },
+              "frame": { "showTitle": true, "title": "PA Volume by Service Type" }
+            }
+          },
+          "position": { "x": 0, "y": 20, "width": 3, "height": 6 }
+        },
+        {
+          "widget": {
+            "name": "chart-cost-by-determination",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_cost_by_determination",
+                  "fields": [
+                    { "name": "determination", "expression": "`determination`" },
+                    { "name": "total_cost", "expression": "`total_cost`" },
+                    { "name": "count", "expression": "`count`" },
+                    { "name": "avg_cost", "expression": "`avg_cost`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": { "fieldName": "determination", "scale": { "type": "categorical" }, "displayName": "Determination" },
+                "y": { "fieldName": "total_cost", "scale": { "type": "quantitative" }, "displayName": "Total Estimated Cost ($)" },
+                "color": {
+                  "fieldName": "determination",
+                  "scale": {
+                    "type": "categorical",
+                    "mapping": {
+                      "approved": "#00A972",
+                      "denied": "#DB3B21",
+                      "pended": "#137CBD",
+                      "partially_approved": "#DB6D00"
+                    }
+                  },
+                  "displayName": "Determination"
+                }
+              },
+              "frame": { "showTitle": true, "title": "Estimated Cost by Determination" }
+            }
+          },
+          "position": { "x": 3, "y": 20, "width": 3, "height": 6 }
+        },
+        {
+          "widget": {
+            "name": "section-providers",
+            "multilineTextboxSpec": {
+              "lines": ["### Provider Leaderboard & Policy Utilization"]
+            }
+          },
+          "position": { "x": 0, "y": 26, "width": 6, "height": 1 }
+        },
+        {
+          "widget": {
+            "name": "table-provider-leaderboard",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_provider_leaderboard",
+                  "fields": [
+                    { "name": "provider_name", "expression": "`provider_name`" },
+                    { "name": "provider_specialty", "expression": "`provider_specialty`" },
+                    { "name": "total_requests", "expression": "`total_requests`" },
+                    { "name": "approval_rate_pct", "expression": "`approval_rate_pct`" },
+                    { "name": "denial_rate_pct", "expression": "`denial_rate_pct`" },
+                    { "name": "avg_turnaround_hours", "expression": "`avg_turnaround_hours`" },
+                    { "name": "auto_adjudication_rate_pct", "expression": "`auto_adjudication_rate_pct`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  { "fieldName": "provider_name", "displayName": "Provider", "type": "string" },
+                  { "fieldName": "provider_specialty", "displayName": "Specialty", "type": "string" },
+                  { "fieldName": "total_requests", "displayName": "PA Requests", "type": "number" },
+                  { "fieldName": "approval_rate_pct", "displayName": "Approval %", "type": "number" },
+                  { "fieldName": "denial_rate_pct", "displayName": "Denial %", "type": "number" },
+                  { "fieldName": "avg_turnaround_hours", "displayName": "Avg Hours", "type": "number" },
+                  { "fieldName": "auto_adjudication_rate_pct", "displayName": "Auto-Adj %", "type": "number" }
+                ]
+              },
+              "frame": { "showTitle": true, "title": "Top Providers by PA Volume" }
+            }
+          },
+          "position": { "x": 0, "y": 27, "width": 6, "height": 7 }
+        },
+        {
+          "widget": {
+            "name": "section-policy",
+            "multilineTextboxSpec": {
+              "lines": ["### Medical Policy Effectiveness"]
+            }
+          },
+          "position": { "x": 0, "y": 34, "width": 6, "height": 1 }
+        },
+        {
+          "widget": {
+            "name": "table-policy-utilization",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_policy_utilization",
+                  "fields": [
+                    { "name": "policy_name", "expression": "`policy_name`" },
+                    { "name": "service_category", "expression": "`service_category`" },
+                    { "name": "total_requests", "expression": "`total_requests`" },
+                    { "name": "approval_rate_pct", "expression": "`approval_rate_pct`" },
+                    { "name": "denial_rate_pct", "expression": "`denial_rate_pct`" },
+                    { "name": "top_denial_reason", "expression": "`top_denial_reason`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  { "fieldName": "policy_name", "displayName": "Policy", "type": "string" },
+                  { "fieldName": "service_category", "displayName": "Category", "type": "string" },
+                  { "fieldName": "total_requests", "displayName": "Requests", "type": "number" },
+                  { "fieldName": "approval_rate_pct", "displayName": "Approval %", "type": "number" },
+                  { "fieldName": "denial_rate_pct", "displayName": "Denial %", "type": "number" },
+                  { "fieldName": "top_denial_reason", "displayName": "Top Denial Reason", "type": "string" }
+                ]
+              },
+              "frame": { "showTitle": true, "title": "Medical Policy Utilization & Denial Patterns" }
+            }
+          },
+          "position": { "x": 0, "y": 35, "width": 6, "height": 7 }
+        }
+      ]
+    }
+  ]
+}

@@ -30,6 +30,7 @@ _ws_root = (
 APP_SOURCE_MAP = {
     "red-bricks-command-center-app": "app",
     "red-bricks-fwa-portal-app": "app-fwa",
+    "red-bricks-pa-portal-app": "app-prior-auth",
 }
 
 # Apps with target-suffix names — detect dynamically

@@ -1,0 +1,22 @@
+command:
+  - uvicorn
+  - main:app
+  - --host=0.0.0.0
+  - --port=8000
+env:
+  - name: LAKEBASE_PROJECT_ID
+    value: red-bricks-insurance
+  - name: LAKEBASE_DATABASE_NAME
+    value: pa_reviews
+  - name: LAKEBASE_BRANCH
+    value: production
+  - name: SQL_WAREHOUSE_ID
+    value: auto
+  - name: LLM_ENDPOINT
+    value: databricks-llama-4-maverick
+  - name: UC_CATALOG
+    value: clinical-data-demo
+  - name: UC_SCHEMA
+    value: prior_auth
+  - name: GENIE_SPACE_ID
+    value: auto

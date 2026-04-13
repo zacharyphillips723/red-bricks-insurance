@@ -76,6 +76,8 @@ from src.data_generation.domains import documents as dom_documents
 from src.data_generation.domains import benefits as dom_benefits
 from src.data_generation.domains import groups as dom_groups
 from src.data_generation.domains import fwa as dom_fwa
+from src.data_generation.domains import medical_policies as dom_medical_policies
+from src.data_generation.domains import prior_auth as dom_prior_auth
 
 # COMMAND ----------
 
@@ -137,6 +139,7 @@ if not _catalog_ready:
 DOMAIN_SCHEMAS = [
     "raw", "members", "claims", "providers", "documents",
     "risk_adjustment", "underwriting", "clinical", "benefits", "analytics", "fwa",
+    "prior_auth",
 ]
 for s in DOMAIN_SCHEMAS:
     spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog_sql}.{s}")
@@ -148,7 +151,8 @@ spark.sql(f"CREATE VOLUME IF NOT EXISTS {catalog_sql}.raw.raw_sources")
 for subdir in ["members", "enrollment", "providers", "claims_medical", "claims_pharmacy",
                "underwriting", "risk_adjustment_member",
                "risk_adjustment_provider", "documents", "benefits", "groups",
-               "fwa_signals", "fwa_provider_profiles", "fwa_investigation_cases"]:
+               "fwa_signals", "fwa_provider_profiles", "fwa_investigation_cases",
+               "medical_policies", "medical_policies_pdfs", "prior_auth_requests", "medical_policy_rules"]:
     path = f"{volume_base}/{subdir}"
     try:
         dbutils.fs.rm(path, recurse=True)
@@ -687,6 +691,103 @@ else:
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ### Medical Policies (PDFs + structured rules for Prior Auth)
+
+# COMMAND ----------
+
+print("Generating medical policy PDFs...")
+policy_pdf_dir = f"/Volumes/{catalog}/raw/raw_sources/medical_policies_pdfs"
+policy_metadata = dom_medical_policies.generate_medical_policy_pdfs(policy_pdf_dir)
+print(f"  Medical policy PDFs: {len(policy_metadata)} policies written to {policy_pdf_dir}")
+
+# Write policy metadata as Parquet (for pipeline ingestion)
+policy_meta_schema = T.StructType([
+    T.StructField("policy_id", T.StringType()),
+    T.StructField("policy_name", T.StringType()),
+    T.StructField("service_category", T.StringType()),
+    T.StructField("effective_date", T.StringType()),
+    T.StructField("last_reviewed", T.StringType()),
+    T.StructField("file_name", T.StringType()),
+    T.StructField("file_path", T.StringType()),
+    T.StructField("num_covered_services", T.IntegerType()),
+    T.StructField("num_criteria", T.IntegerType()),
+    T.StructField("num_step_therapy_steps", T.IntegerType()),
+])
+df_policy_meta = spark.createDataFrame(policy_metadata, schema=policy_meta_schema)
+df_policy_meta.write.mode("overwrite").parquet(f"{volume_base}/medical_policies/")
+print(f"  Policy metadata: {df_policy_meta.count()} records")
+
+# Write structured rules (flattened) for bronze_medical_policy_rules
+policy_rules = dom_medical_policies.get_policy_rules_flat()
+policy_rules_schema = T.StructType([
+    T.StructField("policy_id", T.StringType()),
+    T.StructField("policy_name", T.StringType()),
+    T.StructField("service_category", T.StringType()),
+    T.StructField("rule_id", T.StringType()),
+    T.StructField("rule_type", T.StringType()),
+    T.StructField("rule_text", T.StringType()),
+    T.StructField("procedure_codes", T.StringType()),
+    T.StructField("diagnosis_codes", T.StringType()),
+    T.StructField("effective_date", T.StringType()),
+])
+df_policy_rules = spark.createDataFrame(policy_rules, schema=policy_rules_schema)
+df_policy_rules.write.mode("overwrite").parquet(f"{volume_base}/medical_policy_rules/")
+print(f"  Policy rules (flattened): {df_policy_rules.count()} rules across {len(policy_metadata)} policies")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Prior Authorization Requests
+
+# COMMAND ----------
+
+print("Generating 10K prior authorization requests...")
+import time as _time_pa
+_t_pa = _time_pa.time()
+pa_requests_data = dom_prior_auth.generate_prior_auth_requests(
+    member_ids=member_ids,
+    enrollment_data=enrollment_data,
+    providers_data=providers_data,
+    n_requests=10000,
+)
+print(f"  PA requests generated in {_time_pa.time() - _t_pa:.0f}s")
+
+pa_schema = T.StructType([
+    T.StructField("auth_request_id", T.StringType()),
+    T.StructField("member_id", T.StringType()),
+    T.StructField("requesting_provider_npi", T.StringType()),
+    T.StructField("service_type", T.StringType()),
+    T.StructField("procedure_code", T.StringType()),
+    T.StructField("procedure_description", T.StringType()),
+    T.StructField("policy_id", T.StringType()),
+    T.StructField("diagnosis_codes", T.StringType()),
+    T.StructField("urgency", T.StringType()),
+    T.StructField("line_of_business", T.StringType()),
+    T.StructField("request_date", T.StringType()),
+    T.StructField("determination", T.StringType()),
+    T.StructField("determination_tier", T.StringType()),
+    T.StructField("determination_date", T.StringType()),
+    T.StructField("determination_reason", T.StringType()),
+    T.StructField("denial_reason_code", T.StringType()),
+    T.StructField("reviewer_type", T.StringType()),
+    T.StructField("clinical_summary", T.StringType()),
+    T.StructField("estimated_cost", T.DoubleType()),
+    T.StructField("turnaround_hours", T.IntegerType()),
+    T.StructField("appeal_filed", T.BooleanType()),
+    T.StructField("appeal_outcome", T.StringType()),
+])
+df_pa = spark.createDataFrame(pa_requests_data, schema=pa_schema)
+df_pa.write.mode("overwrite").parquet(f"{volume_base}/prior_auth_requests/")
+print(f"  Prior auth requests: {df_pa.count():,}")
+
+# Verify distribution
+from pyspark.sql.functions import col, count
+print("\n  PA Determination Distribution:")
+df_pa.groupBy("determination").agg(count("*").alias("count")).orderBy("determination").show()
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## Summary
 
 # COMMAND ----------
@@ -713,5 +814,8 @@ print("  benefits/                -> Parquet")
 print("  fwa_signals/             -> Parquet")
 print("  fwa_provider_profiles/   -> Parquet")
 print("  fwa_investigation_cases/ -> Parquet")
+print("  medical_policies/        -> Parquet (metadata) + PDF")
+print("  medical_policy_rules/    -> Parquet (flattened rules)")
+print("  prior_auth_requests/     -> Parquet (10K)")
 print("NOTE: Clinical data (encounters, labs, vitals, FHIR) comes from Synthea via parse_fhir_with_dbignite.")
 print("Data quality: ~2% defects in key fields for SDP expectations.")

@@ -58,6 +58,7 @@ targets:
     workspace:
       profile: clinical-data-demo
     variables:
+      catalog: clinical-data-demo
       warehouse_id: f7b1c2ddb43ad1b0
       node_type_small: m5.xlarge
       node_type_large: m5.4xlarge

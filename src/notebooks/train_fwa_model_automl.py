@@ -162,7 +162,7 @@ print(f"Feature table: {total:,} rows, {fraud_count:,} fraud ({fraud_count/total
 
 # COMMAND ----------
 
-feature_table_name = f"{catalog}.{ANALYTICS_SCHEMA}.fwa_training_features"
+feature_table_name = f"{catalog_sql}.{ANALYTICS_SCHEMA}.fwa_training_features"
 feature_df.write.mode("overwrite").saveAsTable(feature_table_name)
 print(f"Feature table written to: {feature_table_name}")
 
@@ -321,7 +321,7 @@ inference_pd["ml_risk_tier"] = inference_pd["ml_fraud_probability"].apply(
 # --- Predictions table (used by gold MV) ---
 from datetime import datetime
 
-predictions_table_name = f"{catalog}.{ANALYTICS_SCHEMA}.fwa_ml_predictions"
+predictions_table_name = f"{catalog_sql}.{ANALYTICS_SCHEMA}.fwa_ml_predictions"
 predictions_pd = inference_pd[["claim_id", "ml_fraud_probability", "ml_risk_tier"]].copy()
 predictions_pd["model_version"] = str(registered_model.version)
 predictions_pd["scored_at"] = datetime.utcnow().isoformat()
@@ -341,7 +341,7 @@ print(f"  Medium risk (0.4-0.7): {med_risk_pred:,}")
 # --- Full inference table with claim context ---
 inference_result_df = spark.createDataFrame(inference_pd[["claim_id", "ml_fraud_probability", "ml_risk_tier"]])
 
-inference_table_name = f"{catalog}.{ANALYTICS_SCHEMA}.fwa_model_inference"
+inference_table_name = f"{catalog_sql}.{ANALYTICS_SCHEMA}.fwa_model_inference"
 inference_with_context = inference_result_df.join(
     spark.sql(f"""
         SELECT c.claim_id, c.member_id, c.rendering_provider_npi AS provider_npi,
