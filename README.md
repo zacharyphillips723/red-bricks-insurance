@@ -23,6 +23,7 @@ Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB
 - [Project Structure](#project-structure)
 - [Deployment](#deployment)
   - [Prerequisites](#prerequisites)
+  - [Workspace Prerequisites](#workspace-prerequisites)
   - [Compute](#compute)
   - [Targets](#targets)
   - [Variables](#variables)
@@ -489,9 +490,77 @@ red-bricks-insurance/
 
 ### Prerequisites
 
-- Databricks CLI configured with workspace profile
+- Databricks CLI configured with workspace profile (v0.200+)
 - Unity Catalog workspace with an existing catalog (defaults to `red_bricks_insurance`, configurable via `--var="catalog=your_catalog"`)
-- Foundation model endpoint (`databricks-meta-llama-3-3-70b-instruct`) for AI gold tables
+- All workspace features listed in [Workspace Prerequisites](#workspace-prerequisites) below
+
+### Workspace Prerequisites
+
+This bundle exercises a broad surface area of the Databricks platform. The following features must be enabled on the target workspace for the full demo to function. Features are grouped by criticality.
+
+#### Required Platform Features
+
+| Feature | What Uses It | Impact If Missing |
+|---------|-------------|-------------------|
+| **Unity Catalog** | All 12 domain schemas, model registry, volumes, governance | Everything fails |
+| **Serverless Compute** | All 11 SDP/DLT pipelines (`serverless: true`, `channel: PREVIEW`) | All medallion pipelines fail |
+| **SQL Warehouse** | Dashboards, Statement Execution API, agent validation, Genie | Dashboards, apps, and agents fail |
+| **Databricks Apps** | 5 FastAPI + React portal applications | All app UIs unavailable |
+| **Foundation Model API** | `ai_query()` in gold SQL, all 5 agents, medical policy parsing | AI gold tables, all agents, PA portal |
+| **Vector Search** | RAG retrieval for Care Intelligence v1/v2 agents | Member/clinical document search fails |
+| **Model Serving (Serverless)** | FWA fraud scorer real-time endpoint | Real-time FWA scoring unavailable |
+| **Lakebase (Autoscaling)** | 4 PostgreSQL databases for transactional app state | All app operational data fails |
+| **Genie / AI/BI** | Natural language SQL in all 5 apps + 3 Lakeview dashboards | NL query and dashboard features |
+| **MLflow (UC Model Registry)** | 5 agents + 2 ML models registered via Models from Code | All agents and ML models |
+| **UC Volumes** | Raw data storage; `read_files()` ingestion in bronze layers | All data ingestion fails |
+| **Lakeview Dashboards** | 3 AI/BI dashboards (Analytics, Agent Comparison, PA Operations) | Analytics visualization unavailable |
+
+#### Required Foundation Model Endpoints
+
+| Endpoint | Used By |
+|----------|---------|
+| `databricks-meta-llama-3-3-70b-instruct` | `ai_query()` in gold SQL (denial classification, actuarial insights, FWA narratives, PA summaries) |
+| `databricks-llama-4-maverick` | All 5 agents, medical policy PDF parsing |
+| `databricks-bge-large-en` | Vector Search managed embeddings for document RAG |
+
+#### Version Requirements
+
+| Requirement | Minimum | Used By |
+|-------------|---------|---------|
+| `ai_query()` | DBR 15.4+ | Gold analytics AI tables |
+| Metric Views (`WITH METRICS`) | DBR 17.2+ | `create_metric_views.py` |
+| SDP pipelines | `channel: PREVIEW` | All 11 domain pipelines |
+| XGBoost | >= 2.0 | FWA + PA model training |
+| Databricks CLI | v0.200+ | Bundle deploy/run |
+
+#### Required Permissions
+
+The deploying user (or service principal) needs:
+- **Catalog owner** on the target catalog (or `CREATE SCHEMA` + `USE CATALOG`)
+- **Workspace admin** (or equivalent) to create Genie spaces, manage service principals, and create Lakebase projects
+- The `bootstrap_workspace` task auto-discovers app service principals and grants them `USE CATALOG`, `USE SCHEMA`, `SELECT` (all 12 schemas), `CAN_USE` (warehouse), `CAN_QUERY` (all serving endpoints), and `CAN_RUN` (Genie spaces)
+
+#### Optional Features (graceful degradation)
+
+| Feature | What It Enables | Without It |
+|---------|----------------|------------|
+| **Classic Compute** | Synthea FHIR generation (Java JAR) | Use the refresh job instead; pre-load clinical JSON to the volume |
+| **Slack SDK** | Sales Coach account channel context enrichment | Group Reporting app works without enrichment |
+| **Glean API** | Internal knowledge base for Sales Coach | App works without enrichment |
+| **Salesforce API** | CRM account data for Sales Coach | App works without enrichment |
+
+#### Quick Validation Checklist
+
+Before deploying to a new workspace, confirm:
+
+1. A Unity Catalog catalog exists (or you have `CREATE CATALOG` privileges)
+2. Serverless compute is enabled for the workspace
+3. At least one SQL warehouse is running
+4. Foundation Model API endpoints are accessible (`databricks-meta-llama-3-3-70b-instruct`, `databricks-llama-4-maverick`, `databricks-bge-large-en`)
+5. Vector Search is enabled
+6. Lakebase Autoscaling is enabled
+7. Databricks Apps is enabled
+8. Genie / AI/BI is enabled
 
 ### Compute
 
