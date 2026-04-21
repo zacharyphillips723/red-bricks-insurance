@@ -1,0 +1,21 @@
+resources:
+  apps:
+    red_bricks_network_adequacy_portal:
+      name: "rb-network-adequacy-app"
+      description: "Red Bricks Insurance — Network Adequacy Portal"
+      source_code_path: ../app-network-adequacy
+      config:
+        command:
+          - uvicorn
+          - main:app
+          - --host=0.0.0.0
+          - --port=8000
+        env:
+          - name: GENIE_SPACE_ID
+            value: auto
+          - name: SQL_WAREHOUSE_ID
+            value: ${var.warehouse_id}
+          - name: UC_CATALOG
+            value: ${var.catalog}
+          - name: UC_SCHEMA
+            value: network

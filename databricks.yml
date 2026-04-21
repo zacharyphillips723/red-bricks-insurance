@@ -23,6 +23,10 @@ variables:
     description: Lakebase Autoscaling project ID
     default: red-bricks-insurance
 
+sync:
+  exclude:
+    - "**/node_modules/**"
+
 include:
   - resources/*.yml
 

@@ -1,0 +1,18 @@
+resources:
+  pipelines:
+    network_pipeline:
+      name: "[${bundle.target}] Red Bricks — Network Adequacy Pipeline"
+      catalog: ${var.catalog}
+      target: network
+      configuration:
+        source_volume: ${var.source_volume}
+      libraries:
+        - file:
+            path: ../src/pipelines/network/bronze.sql
+        - file:
+            path: ../src/pipelines/network/silver.sql
+        - file:
+            path: ../src/pipelines/network/gold.sql
+      channel: PREVIEW
+      serverless: true
+      development: true

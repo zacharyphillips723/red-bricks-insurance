@@ -1,0 +1,95 @@
+county_fips,county_name,county_type,population,density_per_sq_mi,cbsa_code,cbsa_name
+37183,Wake,Large Metro,1129410,1342,39580,Raleigh-Cary
+37063,Durham,Large Metro,324833,1229,20500,Durham-Chapel Hill
+37119,Mecklenburg,Large Metro,1115482,2074,16740,Charlotte-Concord-Gastonia
+37081,Guilford,Large Metro,541299,836,24660,Greensboro-High Point
+37067,Forsyth,Metro,382590,924,49180,Winston-Salem
+37025,Cabarrus,Metro,228836,627,16740,Charlotte-Concord-Gastonia
+37071,Gaston,Metro,227943,681,16740,Charlotte-Concord-Gastonia
+37179,Union,Metro,239859,362,16740,Charlotte-Concord-Gastonia
+37097,Iredell,Metro,188280,291,16740,Charlotte-Concord-Gastonia
+37101,Johnston,Metro,215999,276,39580,Raleigh-Cary
+37051,Cumberland,Metro,334728,511,22180,Fayetteville
+37147,Pitt,Metro,180742,278,24780,Greenville
+37021,Buncombe,Metro,269452,408,11700,Asheville
+37129,New Hanover,Metro,231448,1139,48900,Wilmington
+37135,Orange,Metro,148696,375,20500,Durham-Chapel Hill
+37001,Alamance,Metro,164521,383,13900,Burlington
+37057,Davidson,Metro,170543,312,24660,Greensboro-High Point
+37159,Rowan,Metro,146875,274,44220,Salisbury
+37127,Nash,Metro,94003,176,40580,Rocky Mount
+37195,Wilson,Metro,81801,227,48980,Wilson
+37049,Craven,Metro,102139,140,35100,New Bern
+37125,Moore,Metro,99727,135,38240,Pinehurst-Southern Pines
+37085,Harnett,Metro,135192,225,22180,Fayetteville
+37035,Catawba,Micro,160610,398,25860,Hickory-Lenoir-Morganton
+37027,Caldwell,Micro,82178,181,25860,Hickory-Lenoir-Morganton
+37023,Burke,Micro,89712,183,25860,Hickory-Lenoir-Morganton
+37111,McDowell,Micro,45629,104,25860,Hickory-Lenoir-Morganton
+37189,Watauga,Micro,56177,176,14380,Boone
+37105,Lee,Micro,63233,235,31300,Lumberton
+37107,Lenoir,Micro,55949,143,28820,Kinston
+37133,Onslow,Micro,197938,256,27340,Jacksonville
+37031,Carteret,Micro,69473,128,33980,Morehead City
+37019,Brunswick,Micro,142820,160,48900,Wilmington
+37087,Haywood,Micro,62089,111,11700,Asheville
+37155,Robeson,Micro,118006,123,31300,Lumberton
+37157,Rockingham,Micro,90324,164,24660,Greensboro-High Point
+37045,Cleveland,Micro,98078,219,44180,Shelby
+37161,Rutherford,Micro,64444,115,22580,Forest City
+37171,Surry,Micro,71783,132,34340,Mount Airy
+37193,Wilkes,Micro,66584,89,48460,North Wilkesboro
+37059,Davie,Micro,42712,163,49180,Winston-Salem
+37151,Randolph,Micro,143667,181,24660,Greensboro-High Point
+37037,Chatham,Rural,76285,107,20500,Durham-Chapel Hill
+37077,Granville,Rural,60292,111,20500,Durham-Chapel Hill
+37069,Franklin,Rural,68573,134,20500,Durham-Chapel Hill
+37145,Person,Rural,39097,101,12260,Roxboro
+37163,Sampson,Rural,63531,66,99999,N/A
+37191,Wayne,Rural,117333,215,24140,Goldsboro
+37013,Beaufort,Rural,46994,55,99999,N/A
+37139,Pasquotank,Rural,39824,156,21260,Elizabeth City
+37041,Chowan,Rural,13943,83,99999,N/A
+37143,Perquimans,Rural,13453,52,99999,N/A
+37187,Washington,Rural,11580,34,99999,N/A
+37141,Pender,Rural,62055,70,48900,Wilmington
+37017,Bladen,Rural,30993,35,22180,Fayetteville
+37153,Richmond,Rural,43639,95,38240,Pinehurst-Southern Pines
+37165,Scotland,Rural,34300,103,31300,Lumberton
+37093,Hoke,Rural,54590,166,22180,Fayetteville
+37007,Anson,Rural,24446,46,16740,Charlotte-Concord-Gastonia
+37083,Halifax,Rural,48622,67,40580,Rocky Mount
+37181,Vance,Rural,43556,167,24660,Greensboro-High Point
+37065,Edgecombe,Rural,48900,102,40580,Rocky Mount
+37117,Martin,Rural,22031,48,99999,N/A
+37091,Hertford,Rural,23577,67,99999,N/A
+37131,Northampton,Rural,18861,35,99999,N/A
+37099,Jackson,Rural,43938,89,99999,N/A
+37175,Transylvania,Rural,33513,89,13900,Brevard
+37149,Polk,Rural,20458,83,99999,N/A
+37113,Macon,Rural,35858,62,99999,N/A
+37039,Cherokee,Rural,28612,61,99999,N/A
+37043,Clay,Rural,11231,50,99999,N/A
+37075,Graham,Rural,8441,31,99999,N/A
+37173,Swain,Rural,14271,26,99999,N/A
+37011,Avery,CEAC,17806,73,99999,N/A
+37199,Yancey,CEAC,18069,54,99999,N/A
+37121,Mitchell,CEAC,14903,63,99999,N/A
+37115,Madison,CEAC,21755,48,11700,Asheville
+37003,Alexander,CEAC,38067,148,25860,Hickory-Lenoir-Morganton
+37197,Yadkin,CEAC,37614,111,49180,Winston-Salem
+37169,Stokes,CEAC,45591,103,49180,Winston-Salem
+37047,Columbus,CEAC,51726,57,99999,N/A
+37015,Bertie,CEAC,18253,26,99999,N/A
+37073,Gates,CEAC,11164,35,47260,Virginia Beach-Norfolk
+37079,Greene,CEAC,20919,78,24780,Greenville
+37103,Jones,CEAC,9172,20,35100,New Bern
+37137,Pamlico,CEAC,12276,36,35100,New Bern
+37177,Tyrrell,CEAC,3447,9,99999,N/A
+37053,Currituck,CEAC,28100,100,47260,Virginia Beach-Norfolk
+37055,Dare,CEAC,37009,95,99999,N/A
+37095,Hyde,CEAC,5071,8,99999,N/A
+37029,Camden,CEAC,10867,40,47260,Virginia Beach-Norfolk
+37185,Warren,CEAC,18528,42,99999,N/A
+37089,Henderson,Metro,117417,316,11700,Asheville
+37167,Stanly,Metro,62806,160,10620,Albemarle

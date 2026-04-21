@@ -78,6 +78,7 @@ from src.data_generation.domains import groups as dom_groups
 from src.data_generation.domains import fwa as dom_fwa
 from src.data_generation.domains import medical_policies as dom_medical_policies
 from src.data_generation.domains import prior_auth as dom_prior_auth
+from src.data_generation.domains import network_adequacy as dom_network
 
 # COMMAND ----------
 
@@ -139,7 +140,7 @@ if not _catalog_ready:
 DOMAIN_SCHEMAS = [
     "raw", "members", "claims", "providers", "documents",
     "risk_adjustment", "underwriting", "clinical", "benefits", "analytics", "fwa",
-    "prior_auth",
+    "prior_auth", "network",
 ]
 for s in DOMAIN_SCHEMAS:
     spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog_sql}.{s}")
@@ -152,7 +153,9 @@ for subdir in ["members", "enrollment", "providers", "claims_medical", "claims_p
                "underwriting", "risk_adjustment_member",
                "risk_adjustment_provider", "documents", "benefits", "groups",
                "fwa_signals", "fwa_provider_profiles", "fwa_investigation_cases",
-               "medical_policies", "medical_policies_pdfs", "prior_auth_requests", "medical_policy_rules"]:
+               "medical_policies", "medical_policies_pdfs", "prior_auth_requests", "medical_policy_rules",
+               "provider_locations", "member_locations", "claims_network",
+               "cms_standards", "county_classification"]:
     path = f"{volume_base}/{subdir}"
     try:
         dbutils.fs.rm(path, recurse=True)
@@ -788,6 +791,126 @@ df_pa.groupBy("determination").agg(count("*").alias("count")).orderBy("determina
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ### Network Adequacy — Geocoding, CMS Reference Tables, Provider Enhancement, Claims Enrichment
+# MAGIC
+# MAGIC Derived domain — geocodes providers and members, enhances provider directory with
+# MAGIC network adequacy fields, enriches claims with in/out-of-network indicators.
+
+# COMMAND ----------
+
+print("Geocoding providers (500) with network adequacy enhancements...")
+provider_locations = dom_network.geocode_providers(providers_data)
+provider_loc_schema = T.StructType([
+    T.StructField("npi", T.StringType()),
+    T.StructField("provider_name", T.StringType()),
+    T.StructField("specialty", T.StringType()),
+    T.StructField("cms_specialty_type", T.StringType()),
+    T.StructField("network_status", T.StringType()),
+    T.StructField("county", T.StringType()),
+    T.StructField("county_fips", T.StringType()),
+    T.StructField("zip_code", T.StringType()),
+    T.StructField("provider_latitude", T.DoubleType()),
+    T.StructField("provider_longitude", T.DoubleType()),
+    T.StructField("accepts_new_patients", T.BooleanType()),
+    T.StructField("telehealth_capable", T.BooleanType()),
+    T.StructField("panel_size", T.IntegerType()),
+    T.StructField("panel_capacity", T.IntegerType()),
+    T.StructField("appointment_wait_days", T.IntegerType()),
+    T.StructField("credentialing_status", T.StringType()),
+    T.StructField("languages_spoken", T.StringType()),
+    T.StructField("last_claims_date", T.StringType()),
+    T.StructField("effective_date", T.StringType()),
+    T.StructField("termination_date", T.StringType()),
+])
+df_provider_locs = spark.createDataFrame(provider_locations, schema=provider_loc_schema)
+df_provider_locs.write.mode("overwrite").parquet(f"{volume_base}/provider_locations/")
+print(f"  Provider locations: {df_provider_locs.count()}")
+
+# COMMAND ----------
+
+print("Geocoding members (5,000)...")
+member_locations = dom_network.geocode_members(members_data)
+member_loc_schema = T.StructType([
+    T.StructField("member_id", T.StringType()),
+    T.StructField("member_latitude", T.DoubleType()),
+    T.StructField("member_longitude", T.DoubleType()),
+    T.StructField("county", T.StringType()),
+    T.StructField("county_fips", T.StringType()),
+    T.StructField("zip_code", T.StringType()),
+])
+df_member_locs = spark.createDataFrame(member_locations, schema=member_loc_schema)
+df_member_locs.write.mode("overwrite").parquet(f"{volume_base}/member_locations/")
+print(f"  Member locations: {df_member_locs.count()}")
+
+# COMMAND ----------
+
+print("Writing CMS reference tables...")
+# CMS time/distance standards
+cms_standards = dom_network.generate_cms_standards()
+cms_schema = T.StructType([
+    T.StructField("specialty_type", T.StringType()),
+    T.StructField("specialty_category", T.StringType()),
+    T.StructField("county_type", T.StringType()),
+    T.StructField("max_distance_miles", T.IntegerType()),
+    T.StructField("max_time_minutes", T.IntegerType()),
+])
+df_cms = spark.createDataFrame(cms_standards, schema=cms_schema)
+df_cms.write.mode("overwrite").parquet(f"{volume_base}/cms_standards/")
+print(f"  CMS time/distance standards: {df_cms.count()}")
+
+# County classification
+county_class = dom_network.generate_county_classification()
+county_schema = T.StructType([
+    T.StructField("county_fips", T.StringType()),
+    T.StructField("county_name", T.StringType()),
+    T.StructField("county_type", T.StringType()),
+    T.StructField("population", T.IntegerType()),
+    T.StructField("density_per_sq_mi", T.DoubleType()),
+    T.StructField("cbsa_code", T.StringType()),
+    T.StructField("cbsa_name", T.StringType()),
+])
+df_county = spark.createDataFrame(county_class, schema=county_schema)
+df_county.write.mode("overwrite").parquet(f"{volume_base}/county_classification/")
+print(f"  County classification: {df_county.count()}")
+
+# COMMAND ----------
+
+print("Enriching claims with network indicators...")
+import time as _time_net
+_t_net = _time_net.time()
+claims_network = dom_network.enrich_claims_network(
+    medical_claims=medical_claims_data,
+    providers_data=providers_data,
+    geocoded_providers=provider_locations,
+    geocoded_members=member_locations,
+)
+print(f"  Claims network enrichment completed in {_time_net.time() - _t_net:.0f}s")
+
+claims_network_schema = T.StructType([
+    T.StructField("claim_id", T.StringType()),
+    T.StructField("member_id", T.StringType()),
+    T.StructField("rendering_provider_npi", T.StringType()),
+    T.StructField("network_indicator", T.StringType()),
+    T.StructField("member_to_provider_distance_mi", T.DoubleType()),
+    T.StructField("oon_cost_differential", T.DoubleType()),
+    T.StructField("nearest_inn_npi", T.StringType()),
+    T.StructField("nearest_inn_distance_mi", T.DoubleType()),
+    T.StructField("leakage_reason", T.StringType()),
+    T.StructField("paid_amount", T.DoubleType()),
+    T.StructField("service_date", T.StringType()),
+])
+df_claims_net = spark.createDataFrame(claims_network, schema=claims_network_schema)
+df_claims_net.write.mode("overwrite").parquet(f"{volume_base}/claims_network/")
+print(f"  Claims network records: {df_claims_net.count():,}")
+
+# Show OON distribution
+from pyspark.sql.functions import col, count
+print("\n  Network Indicator Distribution:")
+df_claims_net.groupBy("network_indicator").agg(count("*").alias("count")).show()
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## Summary
 
 # COMMAND ----------
@@ -817,5 +940,10 @@ print("  fwa_investigation_cases/ -> Parquet")
 print("  medical_policies/        -> Parquet (metadata) + PDF")
 print("  medical_policy_rules/    -> Parquet (flattened rules)")
 print("  prior_auth_requests/     -> Parquet (10K)")
+print("  provider_locations/      -> Parquet (geocoded + enhanced)")
+print("  member_locations/        -> Parquet (geocoded)")
+print("  cms_standards/           -> Parquet (CMS HSD thresholds)")
+print("  county_classification/   -> Parquet (NC county types)")
+print("  claims_network/          -> Parquet (in/OON enrichment)")
 print("NOTE: Clinical data (encounters, labs, vitals, FHIR) comes from Synthea via parse_fhir_with_dbignite.")
 print("Data quality: ~2% defects in key fields for SDP expectations.")

@@ -138,6 +138,7 @@ except Exception as e:
         "red-bricks-command-center-app",
         "red-bricks-fwa-portal-app",
         "red-bricks-pa-portal-app",
+        "rb-network-adequacy-app",
         "rb-uw-sim",
     ]
 
@@ -145,7 +146,7 @@ except Exception as e:
 UC_SCHEMAS = [
     "raw", "members", "claims", "providers", "documents",
     "risk_adjustment", "underwriting", "clinical", "benefits",
-    "analytics", "fwa", "prior_auth",
+    "analytics", "fwa", "prior_auth", "network",
 ]
 
 # COMMAND ----------
@@ -811,6 +812,23 @@ GENIE_SPACE_CONFIGS = [
             f"{catalog}.prior_auth.silver_medical_policy_rules",
             f"{catalog}.prior_auth.parsed_medical_policies",
             f"{catalog}.prior_auth.policy_summaries",
+        ]),
+    },
+    {
+        "title": "Red Bricks Insurance — Network Analytics",
+        "description": "Network adequacy analytics: CMS compliance by county and specialty, ghost network detection, out-of-network leakage, provider recruitment targets, and network gap analysis. Ask questions like 'Which counties are non-compliant for behavioral health?' or 'Show top OON leakage specialties by cost.'",
+        "tables": sorted([
+            f"{catalog}.network.gold_network_adequacy_compliance",
+            f"{catalog}.network.gold_ghost_network_flags",
+            f"{catalog}.network.gold_network_leakage",
+            f"{catalog}.network.gold_leakage_summary",
+            f"{catalog}.network.gold_provider_recruitment_targets",
+            f"{catalog}.network.gold_network_gaps",
+            f"{catalog}.network.silver_provider_geo",
+            f"{catalog}.network.silver_member_geo",
+            f"{catalog}.network.silver_claims_network",
+            f"{catalog}.network.silver_county_classification",
+            f"{catalog}.network.silver_cms_standards",
         ]),
     },
 ]
@@ -1535,6 +1553,7 @@ APP_SOURCE_CODE_MAP = {
     "red-bricks-command-center-app": "app",
     "red-bricks-fwa-portal-app": "app-fwa",
     "red-bricks-pa-portal-app": "app-prior-auth",
+    "rb-network-adequacy-app": "app-network-adequacy",
 }
 # Group reporting app name varies by target (rb-grp-rpt-dev, rb-grp-rpt-prod, etc.)
 for _app_name in APP_NAME_PATTERNS:

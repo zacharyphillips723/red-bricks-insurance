@@ -1,6 +1,6 @@
 # Red Bricks Insurance
 
-Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB). One deployable bundle that runs end-to-end: Synthea clinical generation → synthetic insurance data → bronze/silver/gold SDP pipelines → cross-domain analytics with AI classification → ML model training → intelligent agents → five purpose-built applications.
+Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB). One deployable bundle that runs end-to-end: Synthea clinical generation → synthetic insurance data → bronze/silver/gold SDP pipelines → cross-domain analytics with AI classification → ML model training → intelligent agents → six purpose-built applications.
 
 ## Table of Contents
 
@@ -19,6 +19,7 @@ Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB
   - [FWA Investigation Portal](#fwa-investigation-portal-app-fwa)
   - [Underwriting Simulation Portal](#underwriting-simulation-portal-app-underwriting-sim)
   - [Prior Authorization Portal](#prior-authorization-portal-app-prior-auth)
+  - [Network Adequacy Portal](#network-adequacy-portal-app-network-adequacy)
 - [Dashboards](#dashboards)
 - [Project Structure](#project-structure)
 - [Deployment](#deployment)
@@ -47,11 +48,11 @@ Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB
             ▼
 ┌─────────────────────────┐
 │  Insurance Data Gen     │  Reads Synthea demographics → generates insurance domains
-│  (run_data_generation)  │  Members, Enrollment, Groups, Claims, Providers,
-│                         │  Benefits, Documents, Underwriting, Risk Adjustment, FWA, Prior Auth
+│  (run_data_generation)  │  Members, Enrollment, Groups, Claims, Providers, Benefits,
+│                         │  Documents, Underwriting, Risk Adjustment, FWA, Prior Auth, Network
 └───────────┬─────────────┘
             │
-     ┌──────┴───────┐  (11 domain pipelines run in parallel)
+     ┌──────┴───────┐  (12 domain pipelines run in parallel)
      ▼              ▼
 ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐ ┌───────────────┐
 │ Members  │ │Providers │ │ Claims   │ │ Clinical │ │ Underwriting │ │Risk Adjustment│
@@ -59,12 +60,13 @@ Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB
 │ B → S → G│ │ B → S → G│ │ B → S → G│ │ B → S → G│ │ B → S → G   │ │ B → S → G    │
 └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘ └──────┬──────┘ └──────┬────────┘
      │            │            │            │               │               │
-     │  ┌──────────┐ ┌──────────┐ ┌─────────────┐          │               │
-     │  │Documents │ │Benefits  │ │Member Months│          │               │
-     │  │ B → S    │ │ B → S → G│ │ (notebook)  │          │               │
-     │  └────┬─────┘ └────┬─────┘ └──────┬──────┘          │               │
-     │       │            │              │                  │               │
-     └───────┴────────────┴──────────────┴──────────────────┴───────────────┘
+     │  ┌──────────┐ ┌──────────┐ ┌─────────────┐ ┌──────────────────┐     │
+     │  │Documents │ │Benefits  │ │Member Months│ │Network Adequacy  │     │
+     │  │ B → S    │ │ B → S → G│ │ (notebook)  │ │H3 Geo, CMS 422  │     │
+     │  └────┬─────┘ └────┬─────┘ └──────┬──────┘ │ B → S → G       │     │
+     │       │            │              │         └───────┬──────────┘     │
+     │       │            │              │                 │                │
+     └───────┴────────────┴──────────────┴─────────────────┴────────────────┘
                                     │
                          ┌──────────▼──────────┐
                          │  Gold Analytics     │  Cross-domain metrics
@@ -83,36 +85,37 @@ Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB
                                                   │ PA Review    │
                                                   └──────┬───────┘
                                                          │
-          ┌──────────────────┬──────────────────────────┼────────────────────┐
-          ▼                  ▼                          ▼                    ▼
-   ┌──────────────┐   ┌──────────────┐          ┌──────────────────┐ ┌──────────────────┐
-   │  Command     │   │  PA Portal   │          │  Group Reporting │ │  FWA Portal      │
-   │  Center App  │   │  App         │          │  Portal App      │ │  App             │
-   │  (React+API) │   │  (React+API) │          │  (React+API)     │ │  (React+API)     │
-   │  Clinical    │   │  Auto-Adjud. │          │  Sales Enablement│ │  Investigations  │
-   └──────────────┘   └──────────────┘          └──────────────────┘ └──────────────────┘
-                                          ┌──────────────────┐
-                                          │  UW Simulation   │
-                                          │  Portal App      │
-                                          │  (React+API)     │
-                                          │  What-If Analysis│
-                                          └──────────────────┘
+     ┌──────────────┬──────────────┬─────────────────────┼─────────────────────┐
+     ▼              ▼              ▼                      ▼                     ▼
+┌──────────────┐┌──────────────┐┌──────────────────┐┌──────────────────┐┌──────────────────┐
+│  Command     ││  PA Portal   ││  Group Reporting ││  FWA Portal      ││  Network         │
+│  Center App  ││  App         ││  Portal App      ││  App             ││  Adequacy Portal │
+│  (React+API) ││  (React+API) ││  (React+API)     ││  (React+API)     ││  (React+API)     │
+│  Clinical    ││  Auto-Adjud. ││  Sales Enablement││  Investigations  ││  CMS Compliance  │
+└──────────────┘└──────────────┘└──────────────────┘└──────────────────┘└──────────────────┘
+                                     ┌──────────────────┐
+                                     │  UW Simulation   │
+                                     │  Portal App      │
+                                     │  (React+API)     │
+                                     │  What-If Analysis│
+                                     └──────────────────┘
 ```
 
 ## Pipeline DAG
 
-The full demo job (`red_bricks_full_demo`) orchestrates 32 tasks:
+The full demo job (`red_bricks_full_demo`) orchestrates 33 tasks:
 
 ```
 synthea_generation (ROOT — generates FHIR bundles + extracts demographics + assigns MBR IDs)
   → data_generation (reads Synthea demographics, generates insurance domains + FWA + PA signals)
       → [members, providers, claims, enrollment, benefits, underwriting,
          documents, risk_adjustment, fwa, prior_auth pipelines]
+      → network_adequacy_pipeline (depends on data_generation + providers + members + claims)
       → parse_fhir_with_dbignite (reads raw synthea_raw/fhir/, writes crosswalk Delta tables)
           → clinical_pipeline (bronze.sql JOINs crosswalk for MBR IDs + NPIs)
   → build_member_months (depends on members_pipeline)
   → fwa_pipeline (depends on data_generation — bronze/silver/gold FWA signals + provider profiles)
-  → gold_analytics_pipeline (depends on all domain pipelines + member months + fwa_pipeline)
+  → gold_analytics_pipeline (depends on all domain pipelines + member months + fwa_pipeline + network_adequacy_pipeline)
       → create_metric_views (governed semantic layer + FWA risk metrics)
   → train_fwa_model (depends on fwa_pipeline + gold_analytics — XGBoost fraud scorer)
   → train_pa_model (depends on prior_auth_pipeline — XGBoost 3-tier auto-adjudication model)
@@ -125,10 +128,10 @@ synthea_generation (ROOT — generates FHIR bundles + extracts demographics + as
       → deploy_fwa_agent (FWA Investigation agent with tool-calling)
       → deploy_pa_agent (PA Review agent with clinical review tool-calling)
           → evaluate_agents (v1 vs v2 vs sales coach comparison)
-  → bootstrap_workspace (depends on gold_analytics + fwa_pipeline + train_fwa_model + train_pa_model)
+  → bootstrap_workspace (depends on gold_analytics + fwa_pipeline + network_adequacy_pipeline + train_fwa_model + train_pa_model)
       — Creates Lakebase instances, applies UC/warehouse grants for app SPs, seeds operational data,
-        seeds PA reviewer staff and review queue
-      → deploy_app_source (deploys source code + starts compute for all 5 apps)
+        seeds PA reviewer staff and review queue, creates Genie spaces (including Network Analytics)
+      → deploy_app_source (deploys source code + starts compute for all 6 apps)
 ```
 
 A **refresh job** (`red_bricks_refresh`) runs the same DAG minus Synthea/FHIR/clinical — useful when only insurance data generation or downstream logic has changed. Both jobs include the `bootstrap_workspace` task, which automatically provisions Lakebase, discovers app service principals, grants UC + warehouse permissions, seeds alerts/investigations from gold tables, and seeds the PA review queue with reviewer assignments.
@@ -152,12 +155,13 @@ A **refresh job** (`red_bricks_refresh`) runs the same DAG minus Synthea/FHIR/cl
 | **FWA Signals** | ~10K signals + 500 profiles + 75 cases | Parquet | Fraud signals (9 types), provider risk profiles, investigation cases |
 | **Prior Authorization** | ~10K PA requests | Parquet | PA requests with service types, determination status, turnaround times, clinical summaries |
 | **Medical Policies** | ~10 policies | PDF + Parquet | Prior auth policy PDFs with clinical criteria, CPT/ICD-10 codes, coverage rules |
+| **Network Adequacy** | 500 providers + 5K members + 100 counties | Parquet + CSV | H3-geocoded provider/member locations, CMS time/distance standards, county classifications, enriched claims with OON leakage analysis |
 
 **Data quality**: ~2% intentional defects (nulls, invalid codes, out-of-range dates) caught by SDP expectations at the silver layer.
 
 ## Schema Architecture
 
-Tables are organized into **12 domain schemas** within the catalog, each owned by its domain pipeline:
+Tables are organized into **13 domain schemas** within the catalog, each owned by its domain pipeline:
 
 | Schema | Contents | Example Tables |
 |--------|----------|----------------|
@@ -172,9 +176,10 @@ Tables are organized into **12 domain schemas** within the catalog, each owned b
 | `risk_adjustment` | RAF scores, HCC codes | `silver_risk_adjustment_member`, `gold_risk_adjustment_summary` |
 | `fwa` | Fraud, Waste & Abuse detection | `silver_fwa_signals`, `gold_fwa_provider_risk`, `gold_fwa_claim_flags`, `gold_fwa_summary` |
 | `prior_auth` | Prior authorization requests & policies | `silver_pa_requests`, `gold_pa_summary`, `gold_pa_turnaround`, `parsed_medical_policies` |
+| `network` | Network adequacy, ghost networks, OON leakage | `silver_provider_geo`, `silver_member_geo`, `gold_network_adequacy_compliance`, `gold_ghost_network_flags`, `gold_network_leakage`, `gold_provider_recruitment_targets`, `gold_network_gaps` |
 | `analytics` | Cross-domain gold tables & metric views | `gold_pmpm`, `gold_mlr`, `gold_hedis_member`, `gold_member_360`, `gold_fwa_member_risk`, `fwa_model_inference`, `mv_financial_overview` |
 
-**Key design principle**: Each domain pipeline writes bronze/silver/gold tables to its own schema. Only cross-domain gold analytics (tables that JOIN across multiple domains) land in the `analytics` schema.
+**Key design principle**: Each domain pipeline writes bronze/silver/gold tables to its own schema. Only cross-domain gold analytics (tables that JOIN across multiple domains) land in the `analytics` schema. The `network` schema is unique in that it cross-references providers, members, and claims data enriched with H3 geospatial indexing for CMS distance/time compliance calculations.
 
 ## SDP Pipelines (Medallion Architecture)
 
@@ -329,6 +334,25 @@ Prior authorization review and auto-adjudication portal for UM nurses and PA rev
 - **Data Architecture**: Hybrid — Lakebase for transactional review state (assignments, status changes, reviewer notes, audit trail) + Statement Execution API for analytics (PA gold tables, medical policy lookups)
 - **Config**: `app-prior-auth/app.yml`, DAB resource: `resources/app_prior_auth.yml`
 
+### Network Adequacy Portal (`app-network-adequacy/`)
+
+CMS network adequacy compliance monitoring for network operations teams:
+
+- **Backend**: FastAPI (Python), reads network gold tables via Statement Execution API (no Lakebase — read-only analytics)
+- **Frontend**: React + Vite + Tailwind (Databricks-branded dark theme)
+- **Regulatory Framework**: CMS 42 CFR 422.116 — 29 provider specialties, 13 facility types, 5 county types (Large Metro/Metro/Micro/Rural/CEAC), 90% member compliance threshold
+- **Geospatial Engine**: Haversine great-circle distance calculations in pure SQL for member-to-provider distance measurement. Pre-filters by 60-mile radius to keep cross-join complexity manageable (~2.5M calculations for 500 providers x 5K members). Location-agnostic — works for any state or geography.
+- **Pages**:
+  - **Dashboard** — 6 KPI cards (overall compliance %, ghost providers flagged, OON leakage cost, gap members, telehealth credits, ghost impact members), top recruitment targets table
+  - **Geographic View** — Interactive Leaflet map with proportional circle markers at county centroids (computed from provider coordinates). 5 metric overlays (CMS Compliance, OON Leakage Cost, Gap Members, Ghost Network Flags, Provider Count) with diverging color scales, county type filters, click-to-inspect popups with full metric detail, auto-fit bounds (location-agnostic)
+  - **CMS Compliance** — Filterable compliance table by county, CMS specialty type, and compliance status; shows distance thresholds, member counts, and gap analysis
+  - **Ghost Network Detection** — Provider cards with multi-signal ghost detection (no claims 12m, not accepting patients, extreme wait times, expired credentials, panel at capacity), severity badges, impact member counts
+  - **OON Leakage Analysis** — Leakage cost breakdowns by specialty, county, and reason with horizontal bar charts; detailed specialty table with OON provider counts
+  - **Gaps & Recruitment** — Network gaps table with priority filtering (P1–P4) and gap status classification (Critical/Non-Compliant/At Risk/Marginal); OON provider recruitment targets ranked by priority score
+  - **Network Analytics** — Genie-powered natural language SQL exploration over network gold tables
+- **Data Architecture**: Read-only — Statement Execution API for all analytics queries against `network` schema gold tables
+- **Config**: `app-network-adequacy/app.yml`, DAB resource: `resources/app_network_adequacy.yml`
+
 ## Dashboards
 
 | Dashboard | Description |
@@ -336,6 +360,7 @@ Prior authorization review and auto-adjudication portal for UM nurses and PA rev
 | **Red Bricks Analytics** | Financial, quality, and risk metrics across all domains |
 | **Agent Comparison** | Side-by-side v1 vs v2 agent evaluation results |
 | **PA Operations** | Prior authorization turnaround times, approval/denial rates, reviewer workload, SLA compliance |
+| **Network Adequacy** | CMS compliance overview, ghost network monitoring, OON leakage intelligence, network gaps & recruitment targets (4 pages, 17 datasets) |
 
 All dashboards are deployed as AI/BI Lakeview dashboards with `CAN_READ` permissions for the users group.
 
@@ -397,6 +422,16 @@ red-bricks-insurance/
 │   │   └── env_config.py             #   Runtime auto-detection (warehouse, catalog, Genie)
 │   ├── frontend/                     #   React + Vite + Tailwind source
 │   └── static/                       #   Built frontend output
+├── app-network-adequacy/                # Network Adequacy Portal Databricks App
+│   ├── app.yml                       #   App config (SQL warehouse, catalog, Genie)
+│   ├── main.py                       #   FastAPI backend (read-only, no Lakebase)
+│   ├── backend/
+│   │   ├── router.py                 #   API routes (compliance, ghost network, leakage, gaps, map, genie)
+│   │   ├── models.py                 #   Pydantic models (compliance, ghost, leakage, recruitment, map)
+│   │   ├── genie.py                  #   Genie space integration (Network Analytics)
+│   │   └── env_config.py             #   Runtime auto-detection (warehouse, catalog, Genie)
+│   ├── frontend/                     #   React + Vite + Tailwind source
+│   └── static/                       #   Built frontend output
 ├── resources/
 │   ├── full_demo_job.yml             # End-to-end orchestration (32 tasks)
 │   ├── refresh_demo_job.yml          # Refresh without Synthea (data gen → all downstream)
@@ -404,12 +439,14 @@ red-bricks-insurance/
 │   ├── dashboard.yml                 # Analytics dashboard
 │   ├── agent_comparison_dashboard.yml# Agent eval dashboard
 │   ├── dashboard_pa_operations.yml   # PA operations dashboard
+│   ├── dashboard_network_adequacy.yml # Network adequacy dashboard (4 pages)
 │   ├── lakebase_instances.yml        # Lakebase instance definitions
 │   ├── app.yml                       # Command Center app resource
 │   ├── app_prior_auth.yml            # Prior Auth Portal app resource
 │   ├── app_group_reporting.yml       # Group Reporting Portal app resource
 │   ├── app_fwa.yml                   # FWA Investigation Portal app resource
 │   ├── app_underwriting_sim.yml      # Underwriting Simulation Portal app resource
+│   ├── app_network_adequacy.yml     # Network Adequacy Portal app resource
 │   ├── pipeline_members.yml          # Members & Enrollment SDP
 │   ├── pipeline_providers.yml        # Providers SDP
 │   ├── pipeline_claims.yml           # Claims SDP
@@ -420,6 +457,7 @@ red-bricks-insurance/
 │   ├── pipeline_risk_adjustment.yml  # Risk Adjustment SDP
 │   ├── pipeline_fwa.yml              # FWA domain SDP (signals, profiles, investigations)
 │   ├── pipeline_prior_auth.yml       # Prior Auth domain SDP (PA requests, policies)
+│   ├── pipeline_network.yml          # Network adequacy SDP (H3 geo, CMS compliance, ghost, leakage)
 │   └── pipeline_gold_analytics.yml   # Cross-domain analytics (10 SQL files, 25+ gold views)
 ├── src/
 │   ├── data_generation/              # Modular synthetic data generators
@@ -438,7 +476,8 @@ red-bricks-insurance/
 │   │       ├── risk_adjustment.py    #     RAF scores, HCC codes
 │   │       ├── fwa.py               #     FWA signals, provider profiles, investigation cases
 │   │       ├── prior_auth.py        #     PA requests with determinations + turnaround times
-│   │       └── medical_policies.py  #     Medical policy PDFs with clinical criteria
+│   │       ├── medical_policies.py  #     Medical policy PDFs with clinical criteria
+│   │       └── network_adequacy.py  #     H3-geocoded providers/members, CMS standards, OON claims enrichment
 │   ├── notebooks/
 │   │   ├── run_synthea_generation.py #   Synthea JAR → FHIR bundles → demographic crosswalk
 │   │   ├── run_data_generation.py    #   Insurance domain generation (reads Synthea demographics)
@@ -473,10 +512,11 @@ red-bricks-insurance/
 │   │   ├── risk_adjustment/
 │   │   ├── fwa/                      #   bronze.sql, silver.sql, gold.sql (FWA signals + provider risk)
 │   │   ├── prior_auth/              #   bronze.sql, silver.sql, gold.sql (PA requests + policies)
+│   │   ├── network/                 #   bronze.sql, silver.sql, gold.sql (H3 geo, CMS compliance, ghost, leakage)
 │   │   ├── gold_analytics/           #   financial, quality, risk, ai, actuarial, groups,
 │   │   │                             #   cost_of_care, member_360, group_report_card, fwa_analytics
 │   │   └── python/                   #   Python alternatives for all pipelines
-│   ├── dashboards/                   #   Lakeview dashboard JSON definitions (3 dashboards)
+│   ├── dashboards/                   #   Lakeview dashboard JSON definitions (4 dashboards)
 │   ├── lakebase_schema.sql           #   Command Center Lakebase DDL (alerts, care managers)
 │   ├── fwa_lakebase_schema.sql       #   FWA Lakebase DDL (investigations, audit log, evidence)
 │   ├── pa_reviews_lakebase_schema.sql#   PA Lakebase DDL (review queue, reviewers, audit trail)
@@ -502,10 +542,10 @@ This bundle exercises a broad surface area of the Databricks platform. The follo
 
 | Feature | What Uses It | Impact If Missing |
 |---------|-------------|-------------------|
-| **Unity Catalog** | All 12 domain schemas, model registry, volumes, governance | Everything fails |
-| **Serverless Compute** | All 11 SDP/DLT pipelines (`serverless: true`, `channel: PREVIEW`) | All medallion pipelines fail |
+| **Unity Catalog** | All 13 domain schemas, model registry, volumes, governance | Everything fails |
+| **Serverless Compute** | All 12 SDP/DLT pipelines (`serverless: true`, `channel: PREVIEW`) | All medallion pipelines fail |
 | **SQL Warehouse** | Dashboards, Statement Execution API, agent validation, Genie | Dashboards, apps, and agents fail |
-| **Databricks Apps** | 5 FastAPI + React portal applications | All app UIs unavailable |
+| **Databricks Apps** | 6 FastAPI + React portal applications | All app UIs unavailable |
 | **Foundation Model API** | `ai_query()` in gold SQL, all 5 agents, medical policy parsing | AI gold tables, all agents, PA portal |
 | **Vector Search** | RAG retrieval for Care Intelligence v1/v2 agents | Member/clinical document search fails |
 | **Model Serving (Serverless)** | FWA fraud scorer real-time endpoint | Real-time FWA scoring unavailable |
@@ -513,7 +553,7 @@ This bundle exercises a broad surface area of the Databricks platform. The follo
 | **Genie / AI/BI** | Natural language SQL in all 5 apps + 3 Lakeview dashboards | NL query and dashboard features |
 | **MLflow (UC Model Registry)** | 5 agents + 2 ML models registered via Models from Code | All agents and ML models |
 | **UC Volumes** | Raw data storage; `read_files()` ingestion in bronze layers | All data ingestion fails |
-| **Lakeview Dashboards** | 3 AI/BI dashboards (Analytics, Agent Comparison, PA Operations) | Analytics visualization unavailable |
+| **Lakeview Dashboards** | 4 AI/BI dashboards (Analytics, Agent Comparison, PA Operations, Network Adequacy) | Analytics visualization unavailable |
 
 #### Required Foundation Model Endpoints
 
@@ -529,7 +569,7 @@ This bundle exercises a broad surface area of the Databricks platform. The follo
 |-------------|---------|---------|
 | `ai_query()` | DBR 15.4+ | Gold analytics AI tables |
 | Metric Views (`WITH METRICS`) | DBR 17.2+ | `create_metric_views.py` |
-| SDP pipelines | `channel: PREVIEW` | All 11 domain pipelines |
+| SDP pipelines | `channel: PREVIEW` | All 12 domain pipelines |
 | XGBoost | >= 2.0 | FWA + PA model training |
 | Databricks CLI | v0.200+ | Bundle deploy/run |
 
@@ -538,7 +578,7 @@ This bundle exercises a broad surface area of the Databricks platform. The follo
 The deploying user (or service principal) needs:
 - **Catalog owner** on the target catalog (or `CREATE SCHEMA` + `USE CATALOG`)
 - **Workspace admin** (or equivalent) to create Genie spaces, manage service principals, and create Lakebase projects
-- The `bootstrap_workspace` task auto-discovers app service principals and grants them `USE CATALOG`, `USE SCHEMA`, `SELECT` (all 12 schemas), `CAN_USE` (warehouse), `CAN_QUERY` (all serving endpoints), and `CAN_RUN` (Genie spaces)
+- The `bootstrap_workspace` task auto-discovers app service principals and grants them `USE CATALOG`, `USE SCHEMA`, `SELECT` (all 13 schemas), `CAN_USE` (warehouse), `CAN_QUERY` (all serving endpoints), and `CAN_RUN` (Genie spaces)
 
 #### Optional Features (graceful degradation)
 
@@ -576,7 +616,7 @@ All tasks run on **serverless** compute except `synthea_generation` which requir
 | `clinical-data-demo` | `clinical-data-demo` | Clinical data demo workspace (AWS) |
 | `prod` | `fe-vm-red-bricks-insurance` | Production |
 
-> **Catalog:** Defaults to `red_bricks_insurance`. Override with `--var="catalog=your_catalog_name"` at deploy/run time, or set it per-target in `databricks.yml`. The catalog must already exist on the workspace — the pipelines create the 12 domain schemas automatically.
+> **Catalog:** Defaults to `red_bricks_insurance`. Override with `--var="catalog=your_catalog_name"` at deploy/run time, or set it per-target in `databricks.yml`. The catalog must already exist on the workspace — the pipelines create the 13 domain schemas automatically.
 
 ### Variables
 
@@ -649,7 +689,7 @@ databricks bundle deploy --target my-workspace --var="catalog=my_catalog_name"
 - Creates Genie spaces, grants UC permissions, seeds operational data (`bootstrap_workspace`)
 - Deploys app source code and starts compute (`deploy_app_source`)
 
-Once the pipeline completes, all five apps are fully functional with no manual configuration.
+Once the pipeline completes, all six apps are fully functional with no manual configuration.
 
 **4. Runtime auto-detection** — apps self-configure at startup:
 
@@ -723,11 +763,12 @@ databricks bundle run risk_adjustment_pipeline     # Just risk adjustment
 databricks bundle run gold_analytics_pipeline      # Just cross-domain analytics
 databricks bundle run fwa_pipeline                 # Just FWA domain (signals, profiles, investigations)
 databricks bundle run prior_auth_pipeline          # Just prior auth domain (PA requests, policies)
+databricks bundle run network_pipeline             # Just network adequacy (H3 geo, CMS compliance, ghost, leakage)
 ```
 
 ## Apps — Frontend Build
 
-All five apps (`app/` Command Center, `app-group-reporting/` Group Reporting Portal, `app-fwa/` FWA Investigation Portal, `app-underwriting-sim/` Underwriting Simulation Portal, `app-prior-auth/` PA Portal) use React + Vite + Tailwind. **Frontends must be built before deploying the bundle** — the DAB deploys the pre-built `static/` directory, not the source.
+All six apps (`app/` Command Center, `app-group-reporting/` Group Reporting Portal, `app-fwa/` FWA Investigation Portal, `app-underwriting-sim/` Underwriting Simulation Portal, `app-prior-auth/` PA Portal, `app-network-adequacy/` Network Adequacy Portal) use React + Vite + Tailwind. **Frontends must be built before deploying the bundle** — the DAB deploys the pre-built `static/` directory, not the source.
 
 ```bash
 # Command Center
@@ -744,6 +785,9 @@ cd app-underwriting-sim/frontend && npm install && npm run build   # → outputs
 
 # Prior Authorization Portal
 cd app-prior-auth/frontend && npm install && npm run build   # → outputs to app-prior-auth/static/
+
+# Network Adequacy Portal
+cd app-network-adequacy/frontend && npm install && npm run build   # → outputs to app-network-adequacy/static/
 ```
 
 The `.bundleignore` excludes `node_modules/`, `src/`, and other frontend build artifacts from the bundle upload. Only the `static/` directories are deployed.
@@ -757,14 +801,14 @@ The `bootstrap_workspace` task runs automatically at the end of both the full de
 1. **Lakebase instances** — Creates `red-bricks-command-center`, `fwa-investigations`, `uw-simulations`, and `pa-reviews` instances, databases, and DDL schemas (skips if already exist)
 2. **Staff seeding** — Inserts care managers, fraud investigators, and PA reviewers (`ON CONFLICT DO NOTHING`)
 3. **App service principal discovery** — Auto-discovers SPs for all deployed apps matching `red-bricks-*` or `rb-*` name patterns, resolving each SP's `service_principal_client_id` (UUID) for use in all subsequent grants
-4. **Unity Catalog grants** — `USE CATALOG`, `BROWSE`, `USE SCHEMA`, `SELECT` on all 12 domain schemas for each app SP (using UUID)
+4. **Unity Catalog grants** — `USE CATALOG`, `BROWSE`, `USE SCHEMA`, `SELECT` on all 13 domain schemas for each app SP (using UUID)
 5. **SQL Warehouse grants** — `CAN_USE` on the auto-detected (or configured) warehouse for each app SP
 6. **Serving endpoint grants** — `CAN_QUERY` on all model serving endpoints (LLM, embedding, FWA scorer) for each app SP
 7. **Vector search endpoint grants** — `CAN_USE` on the vector search endpoint (resolves endpoint UUID dynamically for Azure compatibility)
-8. **Genie spaces** — Creates 4 Genie spaces (Analytics Assistant, FWA Analytics, Group Reporting, Financial Analytics) with `red_bricks_insurance` table references. Validates tables exist before adding. Grants `CAN_RUN` to all app SPs. Skips spaces that already exist (matched by title).
+8. **Genie spaces** — Creates 5 Genie spaces (Analytics Assistant, FWA Analytics, Group Reporting, Financial Analytics, Network Analytics) with catalog table references. Validates tables exist before adding. Grants `CAN_RUN` to all app SPs. Skips spaces that already exist (matched by title).
 9. **ML predictions table** — Pre-creates `analytics.fwa_ml_predictions` for gold MV compatibility
 10. **Operational data seeding** — Populates Lakebase with risk alerts (from gold tables), FWA investigation cases (from silver/gold FWA tables), and PA review queue entries (from PA gold tables with reviewer assignments)
-11. **App source code deployment** — Deploys source code to each of the 5 apps and restarts them so they pick up all grants and Lakebase connectivity
+11. **App source code deployment** — Deploys source code to each of the 6 apps and restarts them so they pick up all grants and Lakebase connectivity
 
 To run manually (e.g., after a fresh deploy without running the full job):
 

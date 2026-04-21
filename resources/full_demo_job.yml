@@ -129,7 +129,18 @@ resources:
             pipeline_id: ${resources.pipelines.clinical_pipeline.id}
             full_refresh: true
 
-        # Step 2e: FWA pipeline (derived domain — needs members + claims for cross-schema gold joins)
+        # Step 2e: Network Adequacy pipeline (derived domain — geocoded providers/members + claims network)
+        - task_key: network_adequacy_pipeline
+          depends_on:
+            - task_key: data_generation
+            - task_key: providers_pipeline
+            - task_key: members_pipeline
+            - task_key: claims_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.network_pipeline.id}
+            full_refresh: true
+
+        # Step 2f: FWA pipeline (derived domain — needs members + claims for cross-schema gold joins)
         - task_key: fwa_pipeline
           depends_on:
             - task_key: data_generation
@@ -139,7 +150,7 @@ resources:
             pipeline_id: ${resources.pipelines.fwa_pipeline.id}
             full_refresh: true
 
-        # Step 3: Gold analytics (depends on ALL domain pipelines + member months + FWA)
+        # Step 3: Gold analytics (depends on ALL domain pipelines + member months + FWA + network)
         - task_key: gold_analytics_pipeline
           depends_on:
             - task_key: members_pipeline
@@ -150,6 +161,7 @@ resources:
             - task_key: risk_adjustment_pipeline
             - task_key: build_member_months
             - task_key: fwa_pipeline
+            - task_key: network_adequacy_pipeline
           pipeline_task:
             pipeline_id: ${resources.pipelines.gold_analytics_pipeline.id}
             full_refresh: true
@@ -256,6 +268,7 @@ resources:
             - task_key: fwa_pipeline
             - task_key: train_fwa_model
             - task_key: setup_vector_search
+            - task_key: network_adequacy_pipeline
           notebook_task:
             notebook_path: ../src/notebooks/bootstrap_workspace.py
             base_parameters:

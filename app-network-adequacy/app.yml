@@ -1,0 +1,18 @@
+command:
+  - uvicorn
+  - main:app
+  - --host=0.0.0.0
+  - --port=8000
+
+# SQL_WAREHOUSE_ID and UC_CATALOG default to "auto" (runtime auto-detection).
+# When deployed via `databricks bundle deploy`, the DAB resource config
+# (resources/app_network_adequacy.yml) overrides with resolved values.
+env:
+  - name: GENIE_SPACE_ID
+    value: auto
+  - name: SQL_WAREHOUSE_ID
+    value: auto
+  - name: UC_CATALOG
+    value: auto
+  - name: UC_SCHEMA
+    value: network

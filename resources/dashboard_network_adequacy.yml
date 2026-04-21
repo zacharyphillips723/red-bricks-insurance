@@ -1,0 +1,9 @@
+resources:
+  dashboards:
+    network_adequacy_dashboard:
+      display_name: "[${bundle.target}] Red Bricks Insurance — Network Adequacy"
+      warehouse_id: ${var.warehouse_id}
+      file_path: ../src/dashboards/network_adequacy_dashboard.lvdash.json
+      permissions:
+        - level: CAN_READ
+          group_name: users

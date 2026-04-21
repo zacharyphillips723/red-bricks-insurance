@@ -263,6 +263,101 @@ FWA_INVESTIGATION_STATUSES = [
     ("Closed — Insufficient Evidence", 3),
 ]
 
+# ---------------------------------------------------------------------------
+# Network Adequacy reference data
+# ---------------------------------------------------------------------------
+
+# Map existing Red Bricks specialties to CMS HSD specialty types
+# Our 11 specialties → CMS 29 specialty types (many-to-one mapping for matching)
+SPECIALTY_TO_CMS = {
+    "Internal Medicine": "Primary Care",
+    "Family Medicine": "Primary Care",
+    "Pediatrics": "Primary Care",
+    "Cardiology": "Cardiology",
+    "Orthopedic Surgery": "Orthopedic Surgery",
+    "General Surgery": "General Surgery",
+    "Obstetrics/Gynecology": "Gynecology/OB-GYN",
+    "Psychiatry": "Psychiatry",
+    "Emergency Medicine": "Primary Care",  # EM maps to PCP for access
+    "Gastroenterology": "Gastroenterology",
+    "Oncology": "Oncology - Medical",
+}
+
+# Provider panel sizes by specialty (min, max)
+PANEL_SIZE_BY_SPECIALTY = {
+    "Internal Medicine": (800, 2500),
+    "Family Medicine": (800, 2500),
+    "Pediatrics": (600, 2000),
+    "Cardiology": (300, 1200),
+    "Orthopedic Surgery": (200, 800),
+    "General Surgery": (200, 900),
+    "Obstetrics/Gynecology": (400, 1500),
+    "Psychiatry": (150, 600),
+    "Emergency Medicine": (0, 0),  # EM doesn't have panels
+    "Gastroenterology": (250, 1000),
+    "Oncology": (150, 600),
+}
+
+# Telehealth capability rates by specialty
+TELEHEALTH_RATE_BY_SPECIALTY = {
+    "Internal Medicine": 0.55,
+    "Family Medicine": 0.55,
+    "Pediatrics": 0.45,
+    "Cardiology": 0.30,
+    "Orthopedic Surgery": 0.15,
+    "General Surgery": 0.10,
+    "Obstetrics/Gynecology": 0.35,
+    "Psychiatry": 0.80,
+    "Emergency Medicine": 0.05,
+    "Gastroenterology": 0.25,
+    "Oncology": 0.30,
+}
+
+# Appointment wait time ranges by specialty (min_days, max_days)
+WAIT_TIME_BY_SPECIALTY = {
+    "Internal Medicine": (3, 21),
+    "Family Medicine": (3, 21),
+    "Pediatrics": (2, 14),
+    "Cardiology": (7, 45),
+    "Orthopedic Surgery": (7, 42),
+    "General Surgery": (7, 35),
+    "Obstetrics/Gynecology": (5, 28),
+    "Psychiatry": (14, 60),
+    "Emergency Medicine": (0, 0),
+    "Gastroenterology": (10, 45),
+    "Oncology": (5, 30),
+}
+
+# Credentialing statuses with weights
+CREDENTIALING_STATUSES = [
+    ("Active", 85),
+    ("Provisional", 8),
+    ("Expired", 5),
+    ("Suspended", 2),
+]
+
+# Languages spoken by providers in NC (language, probability of speaking)
+PROVIDER_LANGUAGES = [
+    ("English", 1.0),
+    ("Spanish", 0.25),
+    ("Mandarin", 0.05),
+    ("Hindi", 0.04),
+    ("Vietnamese", 0.03),
+    ("Arabic", 0.03),
+    ("French", 0.02),
+    ("Korean", 0.02),
+    ("Tagalog", 0.02),
+]
+
+# OON leakage reasons with weights
+LEAKAGE_REASONS = [
+    ("no_inn_available", 25),
+    ("inn_wait_time", 20),
+    ("member_choice", 25),
+    ("referral", 15),
+    ("emergency", 15),
+]
+
 # HCC codes for risk adjustment (simplified; code, description, typical factor)
 HCC_CODES = [
     ("HCC18", "Diabetes with chronic complications", 0.4),

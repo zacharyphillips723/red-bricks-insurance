@@ -1,0 +1,211 @@
+specialty_type,specialty_category,county_type,max_distance_miles,max_time_minutes
+Primary Care,Provider,Large Metro,10,15
+Primary Care,Provider,Metro,15,20
+Primary Care,Provider,Micro,30,40
+Primary Care,Provider,Rural,45,60
+Primary Care,Provider,CEAC,60,75
+Allergy/Immunology,Provider,Large Metro,20,30
+Allergy/Immunology,Provider,Metro,30,40
+Allergy/Immunology,Provider,Micro,55,70
+Allergy/Immunology,Provider,Rural,80,95
+Allergy/Immunology,Provider,CEAC,110,120
+Cardiology,Provider,Large Metro,20,30
+Cardiology,Provider,Metro,30,40
+Cardiology,Provider,Micro,50,60
+Cardiology,Provider,Rural,75,85
+Cardiology,Provider,CEAC,100,110
+Chiropractor,Provider,Large Metro,15,20
+Chiropractor,Provider,Metro,25,30
+Chiropractor,Provider,Micro,40,50
+Chiropractor,Provider,Rural,60,70
+Chiropractor,Provider,CEAC,80,90
+Dermatology,Provider,Large Metro,20,30
+Dermatology,Provider,Metro,30,40
+Dermatology,Provider,Micro,50,60
+Dermatology,Provider,Rural,75,85
+Dermatology,Provider,CEAC,100,110
+Endocrinology,Provider,Large Metro,25,35
+Endocrinology,Provider,Metro,40,50
+Endocrinology,Provider,Micro,70,80
+Endocrinology,Provider,Rural,100,110
+Endocrinology,Provider,CEAC,130,140
+ENT/Otolaryngology,Provider,Large Metro,20,30
+ENT/Otolaryngology,Provider,Metro,30,40
+ENT/Otolaryngology,Provider,Micro,55,65
+ENT/Otolaryngology,Provider,Rural,80,90
+ENT/Otolaryngology,Provider,CEAC,110,120
+Gastroenterology,Provider,Large Metro,20,30
+Gastroenterology,Provider,Metro,30,40
+Gastroenterology,Provider,Micro,50,60
+Gastroenterology,Provider,Rural,75,85
+Gastroenterology,Provider,CEAC,100,110
+General Surgery,Provider,Large Metro,15,25
+General Surgery,Provider,Metro,25,35
+General Surgery,Provider,Micro,45,55
+General Surgery,Provider,Rural,65,75
+General Surgery,Provider,CEAC,85,95
+Gynecology/OB-GYN,Provider,Large Metro,15,20
+Gynecology/OB-GYN,Provider,Metro,25,30
+Gynecology/OB-GYN,Provider,Micro,45,55
+Gynecology/OB-GYN,Provider,Rural,65,75
+Gynecology/OB-GYN,Provider,CEAC,85,95
+Infectious Diseases,Provider,Large Metro,25,35
+Infectious Diseases,Provider,Metro,40,50
+Infectious Diseases,Provider,Micro,70,80
+Infectious Diseases,Provider,Rural,100,110
+Infectious Diseases,Provider,CEAC,130,140
+Nephrology,Provider,Large Metro,25,35
+Nephrology,Provider,Metro,35,45
+Nephrology,Provider,Micro,60,70
+Nephrology,Provider,Rural,90,100
+Nephrology,Provider,CEAC,120,130
+Neurology,Provider,Large Metro,20,30
+Neurology,Provider,Metro,30,40
+Neurology,Provider,Micro,55,65
+Neurology,Provider,Rural,80,90
+Neurology,Provider,CEAC,110,120
+Neurosurgery,Provider,Large Metro,25,35
+Neurosurgery,Provider,Metro,40,50
+Neurosurgery,Provider,Micro,70,80
+Neurosurgery,Provider,Rural,100,110
+Neurosurgery,Provider,CEAC,130,140
+Oncology - Medical,Provider,Large Metro,20,30
+Oncology - Medical,Provider,Metro,30,40
+Oncology - Medical,Provider,Micro,55,65
+Oncology - Medical,Provider,Rural,80,90
+Oncology - Medical,Provider,CEAC,110,120
+Oncology - Radiation,Provider,Large Metro,25,35
+Oncology - Radiation,Provider,Metro,35,45
+Oncology - Radiation,Provider,Micro,60,70
+Oncology - Radiation,Provider,Rural,90,100
+Oncology - Radiation,Provider,CEAC,120,130
+Oncology - Surgical,Provider,Large Metro,25,35
+Oncology - Surgical,Provider,Metro,35,45
+Oncology - Surgical,Provider,Micro,60,70
+Oncology - Surgical,Provider,Rural,90,100
+Oncology - Surgical,Provider,CEAC,120,130
+Ophthalmology,Provider,Large Metro,15,20
+Ophthalmology,Provider,Metro,25,30
+Ophthalmology,Provider,Micro,45,55
+Ophthalmology,Provider,Rural,65,75
+Ophthalmology,Provider,CEAC,85,95
+Orthopedic Surgery,Provider,Large Metro,15,25
+Orthopedic Surgery,Provider,Metro,25,35
+Orthopedic Surgery,Provider,Micro,45,55
+Orthopedic Surgery,Provider,Rural,65,75
+Orthopedic Surgery,Provider,CEAC,85,95
+Physical Medicine,Provider,Large Metro,20,30
+Physical Medicine,Provider,Metro,30,40
+Physical Medicine,Provider,Micro,55,65
+Physical Medicine,Provider,Rural,80,90
+Physical Medicine,Provider,CEAC,110,120
+Plastic Surgery,Provider,Large Metro,25,35
+Plastic Surgery,Provider,Metro,40,50
+Plastic Surgery,Provider,Micro,70,80
+Plastic Surgery,Provider,Rural,100,110
+Plastic Surgery,Provider,CEAC,130,140
+Podiatry,Provider,Large Metro,15,20
+Podiatry,Provider,Metro,25,30
+Podiatry,Provider,Micro,45,55
+Podiatry,Provider,Rural,65,75
+Podiatry,Provider,CEAC,85,95
+Psychiatry,Provider,Large Metro,10,20
+Psychiatry,Provider,Metro,20,30
+Psychiatry,Provider,Micro,40,50
+Psychiatry,Provider,Rural,60,70
+Psychiatry,Provider,CEAC,80,90
+Pulmonology,Provider,Large Metro,20,30
+Pulmonology,Provider,Metro,30,40
+Pulmonology,Provider,Micro,55,65
+Pulmonology,Provider,Rural,80,90
+Pulmonology,Provider,CEAC,110,120
+Rheumatology,Provider,Large Metro,25,35
+Rheumatology,Provider,Metro,40,50
+Rheumatology,Provider,Micro,65,75
+Rheumatology,Provider,Rural,95,105
+Rheumatology,Provider,CEAC,125,135
+Urology,Provider,Large Metro,20,30
+Urology,Provider,Metro,30,40
+Urology,Provider,Micro,50,60
+Urology,Provider,Rural,75,85
+Urology,Provider,CEAC,100,110
+Vascular Surgery,Provider,Large Metro,25,35
+Vascular Surgery,Provider,Metro,40,50
+Vascular Surgery,Provider,Micro,70,80
+Vascular Surgery,Provider,Rural,100,110
+Vascular Surgery,Provider,CEAC,130,140
+Clinical Psychology,Provider,Large Metro,10,20
+Clinical Psychology,Provider,Metro,20,30
+Clinical Psychology,Provider,Micro,40,50
+Clinical Psychology,Provider,Rural,60,70
+Clinical Psychology,Provider,CEAC,80,90
+Clinical Social Work,Provider,Large Metro,10,20
+Clinical Social Work,Provider,Metro,20,30
+Clinical Social Work,Provider,Micro,40,50
+Clinical Social Work,Provider,Rural,60,70
+Clinical Social Work,Provider,CEAC,80,90
+Acute Inpatient Hospitals,Facility,Large Metro,15,20
+Acute Inpatient Hospitals,Facility,Metro,20,30
+Acute Inpatient Hospitals,Facility,Micro,30,40
+Acute Inpatient Hospitals,Facility,Rural,45,60
+Acute Inpatient Hospitals,Facility,CEAC,60,75
+Cardiac Surgery Programs,Facility,Large Metro,30,40
+Cardiac Surgery Programs,Facility,Metro,45,55
+Cardiac Surgery Programs,Facility,Micro,80,90
+Cardiac Surgery Programs,Facility,Rural,110,120
+Cardiac Surgery Programs,Facility,CEAC,140,150
+Cardiac Catheterization,Facility,Large Metro,25,35
+Cardiac Catheterization,Facility,Metro,35,45
+Cardiac Catheterization,Facility,Micro,65,75
+Cardiac Catheterization,Facility,Rural,95,105
+Cardiac Catheterization,Facility,CEAC,125,135
+Critical Care (ICU),Facility,Large Metro,15,20
+Critical Care (ICU),Facility,Metro,25,30
+Critical Care (ICU),Facility,Micro,40,50
+Critical Care (ICU),Facility,Rural,60,70
+Critical Care (ICU),Facility,CEAC,80,90
+Comprehensive Outpatient Rehab,Facility,Large Metro,15,20
+Comprehensive Outpatient Rehab,Facility,Metro,25,30
+Comprehensive Outpatient Rehab,Facility,Micro,45,55
+Comprehensive Outpatient Rehab,Facility,Rural,65,75
+Comprehensive Outpatient Rehab,Facility,CEAC,85,95
+Dialysis,Facility,Large Metro,10,15
+Dialysis,Facility,Metro,20,25
+Dialysis,Facility,Micro,35,45
+Dialysis,Facility,Rural,55,65
+Dialysis,Facility,CEAC,75,85
+DME,Facility,Large Metro,20,30
+DME,Facility,Metro,30,40
+DME,Facility,Micro,55,65
+DME,Facility,Rural,80,90
+DME,Facility,CEAC,110,120
+Home Health,Facility,Large Metro,20,30
+Home Health,Facility,Metro,30,40
+Home Health,Facility,Micro,50,60
+Home Health,Facility,Rural,75,85
+Home Health,Facility,CEAC,100,110
+Hospice,Facility,Large Metro,20,30
+Hospice,Facility,Metro,30,40
+Hospice,Facility,Micro,50,60
+Hospice,Facility,Rural,75,85
+Hospice,Facility,CEAC,100,110
+Outpatient Behavioral Health,Facility,Large Metro,10,20
+Outpatient Behavioral Health,Facility,Metro,20,30
+Outpatient Behavioral Health,Facility,Micro,40,50
+Outpatient Behavioral Health,Facility,Rural,60,70
+Outpatient Behavioral Health,Facility,CEAC,80,90
+Skilled Nursing Facilities,Facility,Large Metro,15,20
+Skilled Nursing Facilities,Facility,Metro,25,30
+Skilled Nursing Facilities,Facility,Micro,40,50
+Skilled Nursing Facilities,Facility,Rural,60,70
+Skilled Nursing Facilities,Facility,CEAC,80,90
+Ambulatory Surgical Centers,Facility,Large Metro,15,20
+Ambulatory Surgical Centers,Facility,Metro,25,30
+Ambulatory Surgical Centers,Facility,Micro,40,50
+Ambulatory Surgical Centers,Facility,Rural,60,70
+Ambulatory Surgical Centers,Facility,CEAC,80,90
+Diagnostic Radiology/Imaging,Facility,Large Metro,15,20
+Diagnostic Radiology/Imaging,Facility,Metro,25,30
+Diagnostic Radiology/Imaging,Facility,Micro,40,50
+Diagnostic Radiology/Imaging,Facility,Rural,60,70
+Diagnostic Radiology/Imaging,Facility,CEAC,80,90
