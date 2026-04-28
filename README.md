@@ -282,7 +282,7 @@ Sales enablement application for account executives preparing employer group ren
 
 SIU-focused application for fraud, waste, and abuse investigation:
 
-- **Backend**: FastAPI (Python), connects to Lakebase (`fwa-investigations` instance), SQL warehouse (Statement Execution API for gold table queries), and Foundation Model API (Llama 4 Maverick)
+- **Backend**: FastAPI (Python), connects to Lakebase Autoscaling (`fwa_cases` database), SQL warehouse (Statement Execution API for gold table queries), and Foundation Model API (Llama 4 Maverick)
 - **Frontend**: React + Vite + Tailwind (Databricks-branded dark theme)
 - **Pages**:
   - **Dashboard** — KPIs (total/open/critical/closed investigations), financial metrics (estimated overpayment, recovered, recovery rate), breakdowns by status/severity/type
@@ -549,7 +549,7 @@ This bundle exercises a broad surface area of the Databricks platform. The follo
 | **Foundation Model API** | `ai_query()` in gold SQL, all 5 agents, medical policy parsing | AI gold tables, all agents, PA portal |
 | **Vector Search** | RAG retrieval for Care Intelligence v1/v2 agents | Member/clinical document search fails |
 | **Model Serving (Serverless)** | FWA fraud scorer real-time endpoint | Real-time FWA scoring unavailable |
-| **Lakebase (Autoscaling)** | 4 PostgreSQL databases for transactional app state | All app operational data fails |
+| **Lakebase (Autoscaling)** | 3 PostgreSQL databases (4 planned) for transactional app state | All app operational data fails |
 | **Genie / AI/BI** | Natural language SQL in all 5 apps + 3 Lakeview dashboards | NL query and dashboard features |
 | **MLflow (UC Model Registry)** | 5 agents + 2 ML models registered via Models from Code | All agents and ML models |
 | **UC Volumes** | Raw data storage; `read_files()` ingestion in bronze layers | All data ingestion fails |
@@ -727,8 +727,8 @@ The `app.yml` files use `auto` as a sentinel value for `SQL_WAREHOUSE_ID`, `UC_C
 | `UC_CATALOG` | All apps | Set from `${var.catalog}`; auto-detected at runtime as fallback |
 | `GENIE_SPACE_ID` | Command Center | Yes — first visible Genie space |
 | `LLM_ENDPOINT` | All apps | No — defaults to `databricks-llama-4-maverick` |
-| `LAKEBASE_INSTANCE_NAME` | Command Center, FWA app | No — set in `app.yml` (instance names are fixed) |
-| `LAKEBASE_DATABASE_NAME` | Command Center, FWA app | No — set in `app.yml` (database names are fixed) |
+| `LAKEBASE_PROJECT_ID` | Command Center, FWA, UW Sim apps | No — defaults to `red-bricks-insurance` |
+| `LAKEBASE_DATABASE_NAME` | Command Center, FWA, UW Sim apps | No — set in `app.yml` per app |
 | `FWA_MODEL_ENDPOINT` | FWA app | No — defaults to `fwa-fraud-scorer` |
 
 ### Commands
@@ -798,7 +798,7 @@ After building, deploy the bundle normally with `databricks bundle deploy`.
 
 The `bootstrap_workspace` task runs automatically at the end of both the full demo and refresh jobs. It handles all post-deploy provisioning and is fully **idempotent** — safe to re-run at any time.
 
-1. **Lakebase instances** — Creates `red-bricks-command-center`, `fwa-investigations`, `uw-simulations`, and `pa-reviews` instances, databases, and DDL schemas (skips if already exist)
+1. **Lakebase setup** — Creates the `red-bricks-insurance` Autoscaling project with 3 databases: `red_bricks_alerts` (Command Center), `fwa_cases` (FWA Portal), and `uw_sim` (Underwriting Sim). Runs DDL schemas and grants PUBLIC access (skips if already exist)
 2. **Staff seeding** — Inserts care managers, fraud investigators, and PA reviewers (`ON CONFLICT DO NOTHING`)
 3. **App service principal discovery** — Auto-discovers SPs for all deployed apps matching `red-bricks-*` or `rb-*` name patterns, resolving each SP's `service_principal_client_id` (UUID) for use in all subsequent grants
 4. **Unity Catalog grants** — `USE CATALOG`, `BROWSE`, `USE SCHEMA`, `SELECT` on all 13 domain schemas for each app SP (using UUID)
@@ -851,7 +851,7 @@ Set in `resources/app_fwa.yml`:
 
 | Variable | Description |
 |----------|-------------|
-| `LAKEBASE_INSTANCE_NAME` | `fwa-investigations` |
+| `LAKEBASE_PROJECT_ID` | `red-bricks-insurance` |
 | `LAKEBASE_DATABASE_NAME` | `fwa_cases` |
 | `SQL_WAREHOUSE_ID` | Serverless SQL warehouse ID for Statement Execution API |
 | `LLM_ENDPOINT` | Foundation Model API endpoint (e.g., `databricks-llama-4-maverick`) |
@@ -861,16 +861,16 @@ Set in `resources/app_fwa.yml`:
 
 ## Lakebase & App Authentication
 
-Four Lakebase Provisioned instances are managed as **DAB resources** (`resources/lakebase_instances.yml`):
+A single **Lakebase Autoscaling** project (`red-bricks-insurance`) hosts all app databases. The project is managed by the `setup_lakebase` notebook (not DAB resources) because DAB does not yet support native Autoscaling project resources. The `resources/lakebase_instances.yml` file documents this.
 
-| Instance | Database | Used By |
-|----------|----------|---------|
-| `red-bricks-command-center` | `red_bricks_alerts` | Command Center app |
-| `fwa-investigations` | `fwa_cases` | FWA Portal app |
-| `uw-simulations` | `uw_sim` | Underwriting Sim app |
-| `pa-reviews` | `pa_reviews` | PA Portal app |
+| Database | Used By | Status |
+|----------|---------|--------|
+| `red_bricks_alerts` | Command Center app | Active |
+| `fwa_cases` | FWA Investigation Portal | Active |
+| `uw_sim` | Underwriting Simulation Portal | Active |
+| `pa_reviews` | Prior Authorization Portal | Planned — schema exists, not yet wired into setup_lakebase |
 
-Terraform creates/destroys these instances with `bundle deploy`/`bundle destroy`. The **databases inside** the instances (tables, DDL, grants) are created by the `setup_lakebase` job task, which runs as Step 0 in both pipelines.
+The Autoscaling project scales to zero when idle and wakes automatically on connection. The `setup_lakebase` job task creates databases, runs DDL, and grants PUBLIC access. It runs as part of both the full demo and refresh jobs.
 
 ### How Security Labels Work
 
@@ -889,7 +889,7 @@ This requires a **two-phase deploy** — see [Deploying to a New Workspace](#dep
 
 ### Token Refresh
 
-OAuth tokens expire after 1 hour. All four Lakebase-connected apps implement a background refresh loop (every 50 minutes) using SQLAlchemy's `do_connect` event to inject fresh tokens. See `app/backend/database.py`, `app-fwa/backend/database.py`, `app-underwriting-sim/backend/database.py`, and `app-prior-auth/backend/database.py`.
+OAuth tokens expire after 1 hour. All Lakebase-connected apps implement a background refresh loop (every 50 minutes) using SQLAlchemy's `do_connect` event to inject fresh tokens. See `app/backend/database.py`, `app-fwa/backend/database.py`, and `app-underwriting-sim/backend/database.py`. The PA app (`app-prior-auth/backend/database.py`) is also coded for Autoscaling but its database is not yet provisioned by `setup_lakebase`.
 
 ## Deployment Notes & Known Issues
 
