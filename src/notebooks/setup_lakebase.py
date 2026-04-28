@@ -47,7 +47,7 @@ except NameError:
 print(f"Repo root: {_repo_root}")
 
 # ---------------------------------------------------------------------------
-# Lakebase Autoscaling config — single project with 3 databases
+# Lakebase Autoscaling config — single project with 4 databases
 # ---------------------------------------------------------------------------
 LAKEBASE_PROJECT_ID = "red-bricks-insurance"
 LAKEBASE_BRANCH = "production"
@@ -65,6 +65,10 @@ LAKEBASE_DATABASES = [
     {
         "database_name": "uw_sim",
         "schema_file": "src/underwriting_sim_lakebase_schema.sql",
+    },
+    {
+        "database_name": "pa_reviews",
+        "schema_file": "src/pa_reviews_lakebase_schema.sql",
     },
 ]
 

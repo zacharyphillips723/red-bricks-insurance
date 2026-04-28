@@ -549,7 +549,7 @@ This bundle exercises a broad surface area of the Databricks platform. The follo
 | **Foundation Model API** | `ai_query()` in gold SQL, all 5 agents, medical policy parsing | AI gold tables, all agents, PA portal |
 | **Vector Search** | RAG retrieval for Care Intelligence v1/v2 agents | Member/clinical document search fails |
 | **Model Serving (Serverless)** | FWA fraud scorer real-time endpoint | Real-time FWA scoring unavailable |
-| **Lakebase (Autoscaling)** | 3 PostgreSQL databases (4 planned) for transactional app state | All app operational data fails |
+| **Lakebase (Autoscaling)** | 4 PostgreSQL databases for transactional app state | All app operational data fails |
 | **Genie / AI/BI** | Natural language SQL in all 5 apps + 3 Lakeview dashboards | NL query and dashboard features |
 | **MLflow (UC Model Registry)** | 5 agents + 2 ML models registered via Models from Code | All agents and ML models |
 | **UC Volumes** | Raw data storage; `read_files()` ingestion in bronze layers | All data ingestion fails |
@@ -868,7 +868,7 @@ A single **Lakebase Autoscaling** project (`red-bricks-insurance`) hosts all app
 | `red_bricks_alerts` | Command Center app | Active |
 | `fwa_cases` | FWA Investigation Portal | Active |
 | `uw_sim` | Underwriting Simulation Portal | Active |
-| `pa_reviews` | Prior Authorization Portal | Planned — schema exists, not yet wired into setup_lakebase |
+| `pa_reviews` | Prior Authorization Portal | Active |
 
 The Autoscaling project scales to zero when idle and wakes automatically on connection. The `setup_lakebase` job task creates databases, runs DDL, and grants PUBLIC access. It runs as part of both the full demo and refresh jobs.
 
@@ -889,7 +889,7 @@ This requires a **two-phase deploy** — see [Deploying to a New Workspace](#dep
 
 ### Token Refresh
 
-OAuth tokens expire after 1 hour. All Lakebase-connected apps implement a background refresh loop (every 50 minutes) using SQLAlchemy's `do_connect` event to inject fresh tokens. See `app/backend/database.py`, `app-fwa/backend/database.py`, and `app-underwriting-sim/backend/database.py`. The PA app (`app-prior-auth/backend/database.py`) is also coded for Autoscaling but its database is not yet provisioned by `setup_lakebase`.
+OAuth tokens expire after 1 hour. All Lakebase-connected apps implement a background refresh loop (every 50 minutes) using SQLAlchemy's `do_connect` event to inject fresh tokens. See `app/backend/database.py`, `app-fwa/backend/database.py`, and `app-underwriting-sim/backend/database.py`. The PA app (`app-prior-auth/backend/database.py`) uses the same Autoscaling pattern.
 
 ## Deployment Notes & Known Issues
 
