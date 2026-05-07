@@ -1,0 +1,5 @@
+# False positives in minified JS build artifacts (CSS parser tokens match vault-service-token pattern)
+app-network-adequacy/static/assets/*
+app-fwa/static/assets/*
+app-group-reporting/static/assets/*
+app/static/assets/*

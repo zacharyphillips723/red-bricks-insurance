@@ -2,20 +2,6 @@ resources:
   jobs:
     red_bricks_full_demo:
       name: "[${bundle.target}] Red Bricks Insurance — Full Demo Pipeline"
-      # job_clusters requires classic compute — commented out for serverless-only workspaces
-      # Uncomment for workspaces with classic compute support:
-      # job_clusters:
-      #   - job_cluster_key: synthea_cluster
-      #     new_cluster:
-      #       spark_version: "16.2.x-scala2.12"
-      #       node_type_id: ${var.node_type_small}
-      #       num_workers: 0
-      #       data_security_mode: SINGLE_USER
-      #       spark_conf:
-      #         spark.master: "local[*, 4]"
-      #         spark.databricks.cluster.profile: singleNode
-      #       custom_tags:
-      #         ResourceClass: SingleNode
 
       tasks:
         # Step 0: Set up Lakebase databases + DDL (runs immediately, no dependencies)
@@ -27,14 +13,15 @@ resources:
               catalog: ${var.catalog}
           environment_key: lakebase_env
 
-        # Step 1a: Run Synthea patient generation (requires classic cluster for Java JAR)
-        # On serverless-only workspaces, use the refresh job instead (skips Synthea)
+        # Step 1a: Run Synthea patient generation (serverless — requires Java 17+)
+        # Serverless environment v5+ ships Java 17. The notebook auto-detects and
+        # fails with a clear message if the Java version is too old.
         - task_key: synthea_generation
-          # job_cluster_key: synthea_cluster  # uncomment for classic compute workspaces
           notebook_task:
             notebook_path: ../src/notebooks/run_synthea_generation.py
             base_parameters:
               catalog: ${var.catalog}
+              num_patients: ${var.num_patients}
 
         # Step 1b: Generate synthetic insurance data (reads Synthea demographics)
         - task_key: data_generation
@@ -129,7 +116,15 @@ resources:
             pipeline_id: ${resources.pipelines.clinical_pipeline.id}
             full_refresh: true
 
-        # Step 2e: Network Adequacy pipeline (derived domain — geocoded providers/members + claims network)
+        # Step 2e: Prior Auth pipeline (depends on data generation)
+        - task_key: prior_auth_pipeline
+          depends_on:
+            - task_key: data_generation
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.prior_auth_pipeline.id}
+            full_refresh: true
+
+        # Step 2f: Network Adequacy pipeline (derived domain — geocoded providers/members + claims network)
         - task_key: network_adequacy_pipeline
           depends_on:
             - task_key: data_generation
@@ -140,7 +135,7 @@ resources:
             pipeline_id: ${resources.pipelines.network_pipeline.id}
             full_refresh: true
 
-        # Step 2f: FWA pipeline (derived domain — needs members + claims for cross-schema gold joins)
+        # Step 2g: FWA pipeline (derived domain — needs members + claims for cross-schema gold joins)
         - task_key: fwa_pipeline
           depends_on:
             - task_key: data_generation
@@ -248,6 +243,47 @@ resources:
 
           environment_key: agent_env
 
+        # Step 6e: Train Prior Auth ML model
+        - task_key: train_pa_model
+          depends_on:
+            - task_key: prior_auth_pipeline
+          notebook_task:
+            notebook_path: ../src/notebooks/train_pa_model.py
+            base_parameters:
+              catalog: ${var.catalog}
+          environment_key: ml_training_env
+
+        # Step 6f: Deploy Prior Auth Agent
+        - task_key: deploy_pa_agent
+          depends_on:
+            - task_key: prior_auth_pipeline
+            - task_key: train_pa_model
+          notebook_task:
+            notebook_path: ../src/notebooks/deploy_pa_agent.py
+            base_parameters:
+              catalog: ${var.catalog}
+          environment_key: agent_env
+
+        # Step 6g: Parse medical policy documents for PA agent RAG
+        - task_key: parse_medical_policies
+          depends_on:
+            - task_key: prior_auth_pipeline
+          notebook_task:
+            notebook_path: ../src/notebooks/parse_medical_policies.py
+            base_parameters:
+              catalog: ${var.catalog}
+          environment_key: agent_env
+
+        # Step 6h: PA model governance (monitoring, drift detection)
+        - task_key: pa_model_governance
+          depends_on:
+            - task_key: train_pa_model
+          notebook_task:
+            notebook_path: ../src/notebooks/pa_model_governance.py
+            base_parameters:
+              catalog: ${var.catalog}
+          environment_key: ml_training_env
+
         # Step 7: Evaluate v1 vs v2 agents (depends on both being registered)
         - task_key: evaluate_agents
           depends_on:
@@ -269,6 +305,7 @@ resources:
             - task_key: train_fwa_model
             - task_key: setup_vector_search
             - task_key: network_adequacy_pipeline
+            - task_key: prior_auth_pipeline
           notebook_task:
             notebook_path: ../src/notebooks/bootstrap_workspace.py
             base_parameters:

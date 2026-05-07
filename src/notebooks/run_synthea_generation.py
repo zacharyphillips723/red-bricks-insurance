@@ -9,14 +9,20 @@
 # MAGIC
 # MAGIC **Output:** `{volume_base}/synthea_raw/fhir/` — one JSON Bundle per patient
 # MAGIC
-# MAGIC **Requirements:** Java 11+ (DBR 16.x+ recommended — DBR 15.x ships with Java 8 which is too old)
+# MAGIC **Requirements:** Java 11+ (serverless environment v5+ recommended — ships with Java 17)
 
 # COMMAND ----------
 
 dbutils.widgets.text("catalog", "red_bricks_insurance", "Catalog")
+dbutils.widgets.text("num_patients", "5000", "Number of patients")
 
 catalog = dbutils.widgets.get("catalog")
 volume_base = f"/Volumes/{catalog}/raw/raw_sources"
+
+# Ensure schema and volume exist before any file operations
+# (catalog is expected to already exist — created by workspace admin or FEVM)
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS `{catalog}`.raw")
+spark.sql(f"CREATE VOLUME IF NOT EXISTS `{catalog}`.raw.raw_sources")
 
 print(f"Catalog: {catalog}")
 print(f"Volume base: {volume_base}")
@@ -44,11 +50,12 @@ LOCAL_WORK_DIR = "/tmp/synthea_workdir"
 LOCAL_JAR_PATH = f"{LOCAL_WORK_DIR}/{SYNTHEA_JAR_NAME}"
 LOCAL_OUTPUT_DIR = f"{LOCAL_WORK_DIR}/output"
 
-# Volume output path
+# Volume paths
 VOLUME_SYNTHEA_RAW = f"{volume_base}/synthea_raw/fhir"
+VOLUME_JAR_CACHE = f"{volume_base}/synthea_raw"  # cache JAR in volume across runs
 
 # Generation parameters
-NUM_PATIENTS = 5000
+NUM_PATIENTS = int(dbutils.widgets.get("num_patients"))
 STATE = "North Carolina"
 CITY = None  # None = all cities in the state
 SEED = 42
@@ -69,8 +76,20 @@ print(f"Output: {VOLUME_SYNTHEA_RAW}")
 
 os.makedirs(LOCAL_WORK_DIR, exist_ok=True)
 
+# Volume cache path — may not exist on first run if schema/volume haven't been created yet
+volume_jar_path = f"{VOLUME_JAR_CACHE}/{SYNTHEA_JAR_NAME}"
+_volume_available = os.path.isdir(VOLUME_JAR_CACHE)
+if not _volume_available:
+    print(f"Volume path {VOLUME_JAR_CACHE} not yet available — will download JAR directly")
+
 if os.path.exists(LOCAL_JAR_PATH):
     print(f"Synthea JAR already present at {LOCAL_JAR_PATH}, skipping download.")
+elif _volume_available and os.path.exists(volume_jar_path) and os.path.getsize(volume_jar_path) > 50 * 1024 * 1024:
+    # Copy cached JAR from UC Volume to local /tmp (much faster than GitHub download)
+    print(f"Copying cached JAR from volume ({volume_jar_path})...")
+    import time as _t; _cp_start = _t.time()
+    shutil.copy2(volume_jar_path, LOCAL_JAR_PATH)
+    print(f"Copied in {_t.time() - _cp_start:.1f}s")
 else:
     print(f"Downloading Synthea {SYNTHEA_VERSION} from GitHub releases...")
     result = subprocess.run(
@@ -81,6 +100,10 @@ else:
         raise RuntimeError(f"Failed to download Synthea JAR: {result.stderr}")
     size_mb = os.path.getsize(LOCAL_JAR_PATH) / (1024 * 1024)
     print(f"Downloaded {LOCAL_JAR_PATH} ({size_mb:.1f} MB)")
+    # Cache in UC Volume for future runs (if volume exists)
+    if _volume_available:
+        shutil.copy2(LOCAL_JAR_PATH, volume_jar_path)
+        print(f"Cached JAR to {volume_jar_path} for future runs")
 
 # Verify the JAR was downloaded (check file size — should be ~300+ MB)
 jar_size_mb = os.path.getsize(LOCAL_JAR_PATH) / (1024 * 1024)
@@ -91,26 +114,45 @@ print(f"Synthea JAR size: {jar_size_mb:.1f} MB")
 # Check Java version — Synthea 3.3.0 requires Java 11+
 java_ver = subprocess.run(["java", "-version"], capture_output=True, text=True, timeout=30)
 java_ver_str = (java_ver.stderr or java_ver.stdout or "").strip()
-print(f"Java version: {java_ver_str.split(chr(10))[0]}")
+java_ver_line = java_ver_str.split(chr(10))[0]
+print(f"Java version: {java_ver_line}")
 
-# Quick smoke test — run with 0 patients to verify Java + JAR work
-result = subprocess.run(
-    ["java", "-jar", LOCAL_JAR_PATH, "-p", "0"],
-    capture_output=True, text=True, timeout=120,
-)
-print(f"Smoke test stdout (last 5 lines):")
-for line in (result.stdout or "").strip().split("\n")[-5:]:
-    print(f"  {line}")
-if result.returncode != 0:
-    print(f"Smoke test stderr: {(result.stderr or '')[:1000]}")
-    print(f"Smoke test stdout: {(result.stdout or '')[:1000]}")
-    # If Java version is too old, fail with a clear message
-    if "UnsupportedClassVersionError" in (result.stderr or ""):
-        raise RuntimeError(
-            "Synthea 3.3.0 requires Java 11+ but this cluster has Java 8. "
-            "Use DBR 16.x+ or specify a cluster with Java 11+."
-        )
-    print("WARNING: Smoke test returned non-zero — continuing anyway")
+# Parse major version number (works for both "1.8.x" and "11.x"/"17.x" formats)
+import re
+ver_match = re.search(r'"(\d+)[\._]', java_ver_line)
+java_major = int(ver_match.group(1)) if ver_match else 0
+if java_major == 1:
+    # Java 8 and earlier use "1.8.x" format
+    inner = re.search(r'"1\.(\d+)', java_ver_line)
+    java_major = int(inner.group(1)) if inner else 0
+if java_major < 11:
+    raise RuntimeError(
+        f"Synthea 3.3.0 requires Java 11+ but this environment has Java {java_major}. "
+        "Use serverless environment v5+ (Java 17) or a classic cluster with DBR 16.x+."
+    )
+print(f"Java major version: {java_major} ✓")
+
+# Smoke test — skip if JAR was loaded from cache (already validated on a prior run)
+_jar_was_cached = _volume_available and os.path.exists(volume_jar_path) and os.path.getsize(volume_jar_path) > 50 * 1024 * 1024
+if _jar_was_cached:
+    print("JAR loaded from cache — skipping smoke test")
+else:
+    result = subprocess.run(
+        ["java", "-jar", LOCAL_JAR_PATH, "-p", "0"],
+        capture_output=True, text=True, timeout=120,
+    )
+    print(f"Smoke test stdout (last 5 lines):")
+    for line in (result.stdout or "").strip().split("\n")[-5:]:
+        print(f"  {line}")
+    if result.returncode != 0:
+        print(f"Smoke test stderr: {(result.stderr or '')[:1000]}")
+        print(f"Smoke test stdout: {(result.stdout or '')[:1000]}")
+        if "UnsupportedClassVersionError" in (result.stderr or ""):
+            raise RuntimeError(
+                f"Synthea 3.3.0 requires Java 11+ but the JVM reports Java {java_major}. "
+                "Use serverless environment v5+ (Java 17) or a classic cluster with DBR 16.x+."
+            )
+        print("WARNING: Smoke test returned non-zero — continuing anyway")
 
 # COMMAND ----------
 
@@ -118,13 +160,14 @@ if result.returncode != 0:
 # MAGIC ## Step 2 — Configure and Run Synthea
 # MAGIC
 # MAGIC Key configuration:
-# MAGIC - **FHIR R4 JSON only** — disable C-CDA, CSV, CCDA exports
+# MAGIC - **FHIR R4 JSON + CSV observations** — FHIR bundles for clinical pipeline, CSV for flat lab queries
 # MAGIC - **Transaction bundles** — each patient gets a full Bundle with all resources
 # MAGIC - **Seed 42** — reproducible output across runs
 # MAGIC - **North Carolina** — matches existing Red Bricks member geography
-# MAGIC - **Disease modules** — Synthea's built-in modules automatically generate diabetes,
-# MAGIC   hypertension, CHF, COPD, CKD, depression, and other conditions based on
-# MAGIC   epidemiological data. No custom module configuration needed.
+# MAGIC - **Forced lab modules** — Metabolic Panel, Lipid Panel, and CBC run for ALL patients
+# MAGIC   (not just epidemiologically selected ones), ensuring rich lab data for demos
+# MAGIC - **DiagnosticReport grouping** — related lab observations are grouped into reports
+# MAGIC - **10-year history** — balanced for clinical richness vs. generation speed on serverless
 
 # COMMAND ----------
 
@@ -139,18 +182,27 @@ synthea_props = f"""\
 # === Export Settings ===
 exporter.fhir.export = true
 exporter.fhir.transaction_bundle = true
+exporter.csv.export = true
+exporter.csv.folder_per_run = true
 exporter.ccda.export = false
-exporter.csv.export = false
 exporter.cpcds.export = false
 exporter.hospital.fhir.export = false
 exporter.practitioner.fhir.export = false
+
+# === DiagnosticReport grouping — groups related lab Observations into reports ===
+exporter.groups.fhir.export = true
 
 # === Output Location ===
 exporter.baseDirectory = {LOCAL_OUTPUT_DIR}
 
 # === Generation Settings ===
 generate.payers.insurance_companies.default_file = payers/insurance_companies.csv
-exporter.years_of_history = 25
+exporter.years_of_history = 10
+
+# === Force comprehensive lab panels for ALL patients ===
+generate.keep_module.Metabolic Panel = true
+generate.keep_module.Lipid Panel = true
+generate.keep_module.CBC = true
 
 # === Seed for Reproducibility ===
 generate.seed = {SEED}
@@ -169,7 +221,9 @@ print(synthea_props)
 # Synthea CLI: java -jar synthea.jar [-s seed] [-p population] [-c config] [state [city]]
 synthea_cmd = [
     "java",
-    "-Xms512m", "-Xmx4g",         # memory settings for 5K patients
+    "-Xms2g", "-Xmx4g",           # pre-allocate 2GB heap to reduce GC resizing
+    "-XX:+UseG1GC",                # G1 collector — better throughput for large heaps
+    "-XX:+ParallelRefProcEnabled", # parallelize reference processing
     "-jar", LOCAL_JAR_PATH,
     "-s", str(SEED),               # random seed
     "-p", str(NUM_PATIENTS),       # population size
@@ -179,13 +233,14 @@ synthea_cmd = [
 ]
 
 print(f"Running: {' '.join(synthea_cmd)}")
-print(f"Generating {NUM_PATIENTS} patients — this takes ~5-10 minutes...")
+est_min = max(5, NUM_PATIENTS // 200)  # ~200 patients/min on 4 serverless CPUs
+print(f"Generating {NUM_PATIENTS} patients — estimated ~{est_min} minutes on {SYNTHEA_THREADS} CPUs")
 print(f"Working directory: {LOCAL_WORK_DIR}")
 
 result = subprocess.run(
     synthea_cmd,
     capture_output=True, text=True,
-    timeout=1800,  # 30-minute timeout
+    timeout=3600,  # 60-minute timeout (serverless 4-CPU nodes need ~40-50 min for 5K patients)
     cwd=LOCAL_WORK_DIR,            # run from workdir so relative paths resolve
 )
 
@@ -333,6 +388,26 @@ for f in bundle_files:
         shutil.copy2(f, os.path.join(VOLUME_SYNTHEA_RAW, basename))
         print(f"  Copied reference file: {basename}")
 
+# Copy CSV observations to volume for flat lab queries
+csv_output_dir = os.path.join(LOCAL_OUTPUT_DIR, "csv")
+VOLUME_SYNTHEA_CSV = f"{volume_base}/synthea_raw/csv"
+if os.path.isdir(csv_output_dir):
+    os.makedirs(VOLUME_SYNTHEA_CSV, exist_ok=True)
+    # CSV output uses folder_per_run — find the timestamped subdirectory
+    csv_subdirs = [d for d in os.listdir(csv_output_dir) if os.path.isdir(os.path.join(csv_output_dir, d))]
+    csv_src = os.path.join(csv_output_dir, csv_subdirs[0]) if csv_subdirs else csv_output_dir
+    csv_files = glob.glob(os.path.join(csv_src, "*.csv"))
+    for cf in csv_files:
+        shutil.copy2(cf, os.path.join(VOLUME_SYNTHEA_CSV, os.path.basename(cf)))
+    print(f"Copied {len(csv_files)} CSV files to {VOLUME_SYNTHEA_CSV}")
+    # Show observations file size (labs data)
+    obs_file = os.path.join(VOLUME_SYNTHEA_CSV, "observations.csv")
+    if os.path.exists(obs_file):
+        obs_mb = os.path.getsize(obs_file) / (1024 * 1024)
+        print(f"  observations.csv: {obs_mb:.1f} MB (lab results)")
+else:
+    print("No CSV output directory found — skipping CSV copy")
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -458,5 +533,14 @@ if relevant:
     print("Key HLS conditions found:")
     for c in sorted(relevant)[:15]:
         print(f"  {c}")
+
+# Lab data summary
+obs_count = all_resource_types.get("Observation", 0)
+diag_count = all_resource_types.get("DiagnosticReport", 0)
+print(f"\nLab data (sampled from {len(sample_files)} bundles):")
+print(f"  Observations (individual labs): {obs_count:,}")
+print(f"  DiagnosticReports (grouped panels): {diag_count:,}")
+if obs_count > 0:
+    print(f"  Avg observations per patient: {obs_count / len(sample_files):.0f}")
 
 print(f"\nNext step: run_data_generation reads crosswalk for member demographics")

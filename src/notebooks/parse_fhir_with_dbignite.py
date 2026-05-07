@@ -64,6 +64,22 @@ from dbignite.readers import read_from_directory
 from dbignite.fhir_mapping_model import FhirSchemaModel
 import time
 
+# Patch dbignite bug: line 62 of fhir_resource.py concatenates str + int
+# https://github.com/databrickslabs/dbignite/issues — "Found " + count + " rows..."
+import dbignite.fhir_resource as _fr
+import warnings as _w
+from pyspark.sql.functions import col, get_json_object
+
+def _patched_from_raw_bundle(data):
+    resources_df = data.select(col("resource"), get_json_object("resource", "$.resourceType").alias("resourceType"))
+    non_bundle = resources_df.filter("upper(resourceType) != 'BUNDLE'").count()
+    if non_bundle > 0:
+        _w.warn(f"Found {non_bundle} rows of non-Bundle resource types. Only proceeding reading Fhir bundle types")
+    return _fr.BundleFhirResource(resources_df.filter("upper(resourceType) == 'BUNDLE'"))
+
+_fr.FhirResource.from_raw_bundle_resource = staticmethod(_patched_from_raw_bundle)
+print("Patched dbignite str+int concatenation bug in FhirResource.from_raw_bundle_resource")
+
 # Read all FHIR R4 JSON bundles from the volume
 fhir_data = read_from_directory(fhir_path)
 

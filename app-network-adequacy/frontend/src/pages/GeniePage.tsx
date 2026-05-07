@@ -1,6 +1,27 @@
 import { useState, useRef } from "react";
 import { Search, Sparkles, Code2, Table2, Send, Loader2 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import type { Components } from "react-markdown";
 import { api, type GenieResponse } from "@/lib/api";
+
+const mdComponents: Components = {
+  h2: ({ children }) => (
+    <h2 className="text-base font-bold text-databricks-dark mt-6 mb-2 pb-1 border-b border-gray-200 first:mt-0">
+      {children}
+    </h2>
+  ),
+  h3: ({ children }) => (
+    <h3 className="text-sm font-semibold text-databricks-dark mt-4 mb-1">{children}</h3>
+  ),
+  p: ({ children }) => <p className="my-2 leading-relaxed">{children}</p>,
+  ol: ({ children }) => <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>,
+  ul: ({ children }) => <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>,
+  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+  strong: ({ children }) => <strong className="font-semibold text-gray-900">{children}</strong>,
+  code: ({ children }) => (
+    <code className="bg-gray-100 text-databricks-red px-1 py-0.5 rounded text-xs font-mono">{children}</code>
+  ),
+};
 
 const SUGGESTED_QUESTIONS = [
   "Which counties have the lowest CMS compliance rates?",
@@ -86,7 +107,9 @@ export function GeniePage() {
 
             <div className="card p-5">
               {entry.response.description && (
-                <p className="text-sm text-gray-700 mb-4">{entry.response.description}</p>
+                <div className="text-sm text-gray-700 mb-4">
+                  <ReactMarkdown components={mdComponents}>{entry.response.description}</ReactMarkdown>
+                </div>
               )}
 
               {entry.response.row_count > 0 && (

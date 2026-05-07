@@ -1,6 +1,27 @@
 import { useState, useRef, useEffect } from "react";
 import { Send, Loader2, Sparkles, Slack, Globe, Database } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import type { Components } from "react-markdown";
 import { api } from "@/lib/api";
+
+const mdComponents: Components = {
+  h2: ({ children }) => (
+    <h2 className="text-base font-bold text-databricks-dark mt-6 mb-2 pb-1 border-b border-gray-200 first:mt-0">
+      {children}
+    </h2>
+  ),
+  h3: ({ children }) => (
+    <h3 className="text-sm font-semibold text-databricks-dark mt-4 mb-1">{children}</h3>
+  ),
+  p: ({ children }) => <p className="my-2 leading-relaxed">{children}</p>,
+  ol: ({ children }) => <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>,
+  ul: ({ children }) => <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>,
+  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+  strong: ({ children }) => <strong className="font-semibold text-gray-900">{children}</strong>,
+  code: ({ children }) => (
+    <code className="bg-gray-100 text-databricks-red px-1 py-0.5 rounded text-xs font-mono">{children}</code>
+  ),
+};
 
 const SUGGESTED_QUESTIONS = [
   "Prepare me for the renewal meeting",
@@ -109,15 +130,15 @@ export function ChatPanel({ groupId }: ChatPanelProps) {
             className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
           >
             <div className="max-w-[90%]">
-              <div
-                className={`rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap ${
-                  msg.role === "user"
-                    ? "bg-databricks-dark text-white rounded-tr-sm"
-                    : "bg-gray-100 text-gray-800 rounded-tl-sm"
-                }`}
-              >
-                {msg.text}
-              </div>
+              {msg.role === "user" ? (
+                <div className="rounded-2xl rounded-tr-sm px-3 py-2 text-sm bg-databricks-dark text-white">
+                  {msg.text}
+                </div>
+              ) : (
+                <div className="rounded-2xl rounded-tl-sm px-3 py-2 text-sm bg-gray-100 text-gray-800">
+                  <ReactMarkdown components={mdComponents}>{msg.text}</ReactMarkdown>
+                </div>
+              )}
               {msg.enrichmentSources && msg.enrichmentSources.length > 0 && (
                 <div className="flex items-center gap-1.5 mt-1 ml-1">
                   <span className="text-[10px] text-gray-400">Enriched from:</span>

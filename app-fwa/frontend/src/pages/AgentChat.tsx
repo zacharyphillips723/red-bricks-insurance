@@ -1,6 +1,27 @@
 import { useState, useRef } from "react";
 import { Bot, Send, Loader2, Sparkles } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import type { Components } from "react-markdown";
 import { api } from "@/lib/api";
+
+const mdComponents: Components = {
+  h2: ({ children }) => (
+    <h2 className="text-base font-bold text-databricks-dark mt-6 mb-2 pb-1 border-b border-gray-200 first:mt-0">
+      {children}
+    </h2>
+  ),
+  h3: ({ children }) => (
+    <h3 className="text-sm font-semibold text-databricks-dark mt-4 mb-1">{children}</h3>
+  ),
+  p: ({ children }) => <p className="my-2 leading-relaxed">{children}</p>,
+  ol: ({ children }) => <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>,
+  ul: ({ children }) => <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>,
+  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+  strong: ({ children }) => <strong className="font-semibold text-gray-900">{children}</strong>,
+  code: ({ children }) => (
+    <code className="bg-gray-100 text-databricks-red px-1 py-0.5 rounded text-xs font-mono">{children}</code>
+  ),
+};
 
 const SUGGESTED = [
   "[INV-0001] Give me a full investigation briefing",
@@ -120,8 +141,8 @@ export function AgentChat() {
               </div>
             </div>
             <div className="card p-5">
-              <div className="prose prose-sm max-w-none text-gray-700 whitespace-pre-wrap">
-                {entry.answer}
+              <div className="text-sm text-gray-700">
+                <ReactMarkdown components={mdComponents}>{entry.answer}</ReactMarkdown>
               </div>
               {entry.sources.length > 0 && (
                 <div className="mt-3 pt-3 border-t border-gray-100 text-xs text-gray-400">

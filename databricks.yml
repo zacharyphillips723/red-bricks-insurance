@@ -11,14 +11,18 @@ variables:
     description: Volume path for raw generated source files
     default: /Volumes/${var.catalog}/raw/raw_sources
   warehouse_id:
-    description: SQL warehouse for jobs (optional)
-    default: ""
+    description: SQL warehouse for dashboards — auto-resolves by name if not overridden
+    lookup:
+      warehouse: "Serverless Starter Warehouse"
   node_type_small:
     description: Small node type (4 vCPU, 14GB) — Azure DS3_v2 or AWS m5.xlarge
     default: Standard_DS3_v2
   node_type_large:
     description: Large node type (16 vCPU, 56GB) — Azure DS5_v2 or AWS m5.4xlarge
     default: Standard_DS5_v2
+  num_patients:
+    description: Number of Synthea patients to generate (1000 for quick demos, 5000 for full)
+    default: "5000"
   lakebase_project_id:
     description: Lakebase Autoscaling project ID
     default: red-bricks-insurance
@@ -34,6 +38,15 @@ targets:
   dev:
     mode: development
     default: true
+    workspace:
+      profile: fe-vm-red-bricks-aws
+    variables:
+      catalog: red_bricks_insurance_catalog
+      node_type_small: m5.xlarge
+      node_type_large: m5.4xlarge
+
+  dev-azure:
+    mode: development
     workspace:
       profile: fe-vm-red-bricks-insurance
     variables:

@@ -103,7 +103,7 @@ Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB
 
 ## Pipeline DAG
 
-The full demo job (`red_bricks_full_demo`) orchestrates 33 tasks:
+The full demo job (`red_bricks_full_demo`) orchestrates 31 tasks:
 
 ```
 synthea_generation (ROOT — generates FHIR bundles + extracts demographics + assigns MBR IDs)
@@ -128,7 +128,7 @@ synthea_generation (ROOT — generates FHIR bundles + extracts demographics + as
       → deploy_fwa_agent (FWA Investigation agent with tool-calling)
       → deploy_pa_agent (PA Review agent with clinical review tool-calling)
           → evaluate_agents (v1 vs v2 vs sales coach comparison)
-  → bootstrap_workspace (depends on gold_analytics + fwa_pipeline + network_adequacy_pipeline + train_fwa_model + train_pa_model)
+  → bootstrap_workspace (depends on gold_analytics + fwa_pipeline + network_adequacy_pipeline + prior_auth_pipeline + train_fwa_model)
       — Creates Lakebase instances, applies UC/warehouse grants for app SPs, seeds operational data,
         seeds PA reviewer staff and review queue, creates Genie spaces (including Network Analytics)
       → deploy_app_source (deploys source code + starts compute for all 6 apps)
@@ -604,19 +604,22 @@ Before deploying to a new workspace, confirm:
 
 ### Compute
 
-All tasks run on **serverless** compute except `synthea_generation` which requires a classic cluster (Java 17 for the Synthea JAR, DBR 16.x+). DLT pipelines are serverless SDP. Notebook tasks auto-provision and auto-scale — no cluster configuration needed.
+All tasks run on **serverless** compute. DLT pipelines are serverless SDP. Notebook tasks auto-provision and auto-scale — no cluster configuration needed.
+
+> **Synthea on Serverless:** The `synthea_generation` task runs the Synthea JAR via `subprocess` and requires Java 11+. Serverless environment v5+ ships OpenJDK 17, which satisfies this requirement. The notebook auto-detects the Java version at runtime and fails with a clear error if the version is too old. The 300MB Synthea JAR is cached in a Unity Catalog Volume (`/Volumes/{catalog}/raw/raw_sources/synthea_cache/`) so subsequent runs skip the GitHub download.
 
 ### Targets
 
-| Target | Profile | Use Case |
-|--------|---------|----------|
-| `dev` (default) | `fe-vm-red-bricks-insurance` | Development |
-| `e2-field-eng` | `fe-demo-field-eng` | Field engineering demos (AWS) |
-| `hls-financial` | `hls-financial-foundation` | HLS Financial Foundation workspace (AWS) |
-| `clinical-data-demo` | `clinical-data-demo` | Clinical data demo workspace (AWS) |
-| `prod` | `fe-vm-red-bricks-insurance` | Production |
+| Target | Profile | Cloud | Use Case |
+|--------|---------|-------|----------|
+| `dev` (default) | `fe-vm-red-bricks-aws` | AWS | Primary development (FEVM Stable Serverless) |
+| `dev-azure` | `fe-vm-red-bricks-insurance` | Azure | Azure development |
+| `e2-field-eng` | `fe-demo-field-eng` | AWS | Field engineering demos |
+| `hls-financial` | `hls-financial-foundation` | AWS | HLS Financial Foundation workspace |
+| `clinical-data-demo` | `clinical-data-demo` | AWS | Clinical data demo workspace |
+| `prod` | `fe-vm-red-bricks-insurance` | Azure | Production |
 
-> **Catalog:** Defaults to `red_bricks_insurance`. Override with `--var="catalog=your_catalog_name"` at deploy/run time, or set it per-target in `databricks.yml`. The catalog must already exist on the workspace — the pipelines create the 13 domain schemas automatically.
+> **Catalog:** Defaults to `red_bricks_insurance`. Override with `--var="catalog=your_catalog_name"` at deploy/run time, or set it per-target in `databricks.yml`. The `dev` target overrides to `red_bricks_insurance_catalog`. The catalog must already exist on the workspace — the pipelines create the 13 domain schemas automatically.
 
 ### Variables
 
@@ -624,9 +627,11 @@ All tasks run on **serverless** compute except `synthea_generation` which requir
 |----------|---------|-------------|
 | `catalog` | `red_bricks_insurance` | Unity Catalog name — all pipelines, jobs, and apps use this |
 | `source_volume` | `/Volumes/${var.catalog}/raw/raw_sources` | Raw data volume path (auto-derived from catalog) |
-| `warehouse_id` | `""` | SQL warehouse (optional — auto-detected if omitted) |
-| `node_type_small` | `Standard_DS3_v2` | Small compute (4 vCPU, 14GB) |
-| `node_type_large` | `Standard_DS5_v2` | Large compute (16 vCPU, 56GB) |
+| `warehouse_id` | Lookup: `Serverless Starter Warehouse` | SQL warehouse for dashboards — auto-resolves by name; override with a specific ID |
+| `num_patients` | `5000` | Number of Synthea patients to generate (1000 for quick demos, 5000 for full) |
+| `node_type_small` | `Standard_DS3_v2` | Small compute (4 vCPU, 14GB) — AWS: `m5.xlarge` |
+| `node_type_large` | `Standard_DS5_v2` | Large compute (16 vCPU, 56GB) — AWS: `m5.4xlarge` |
+| `lakebase_project_id` | `red-bricks-insurance` | Lakebase Autoscaling project ID |
 
 ### Deploying to a New Workspace
 
@@ -642,10 +647,12 @@ This bundle is fully portable — deploy to any workspace with any catalog name 
     workspace:
       profile: my-workspace-profile    # Databricks CLI profile name
     variables:
-      warehouse_id: abc123def456       # SQL warehouse ID
+      catalog: my_catalog_name         # Must already exist on the workspace
       node_type_small: m5.xlarge       # AWS — or Standard_DS3_v2 for Azure
       node_type_large: m5.4xlarge      # AWS — or Standard_DS5_v2 for Azure
 ```
+
+> **Warehouse auto-detection:** The `warehouse_id` variable uses a `lookup` block that resolves by warehouse name (`Serverless Starter Warehouse`). If your workspace uses a different warehouse name, override with `--var="warehouse_id=your_id"` or change the lookup name in `databricks.yml`.
 
 **3. Two-phase deploy** (required for fresh workspaces):
 
@@ -898,13 +905,18 @@ OAuth tokens expire after 1 hour. All Lakebase-connected apps implement a backgr
 The `gold_analytics_pipeline` depends on `clinical.silver_lab_results` and other clinical tables. These are created by `parse_fhir_with_dbignite` → `clinical_pipeline`, which are part of the **Full Demo Pipeline** but not the Refresh job.
 
 On a fresh workspace (or after `bundle destroy`), you must run these clinical tasks before the Refresh job will succeed:
-1. Copy Synthea FHIR data to the volume (or run `synthea_generation` on a classic-compute workspace)
-2. Run `parse_fhir_with_dbignite` and `clinical_pipeline` as a one-time job
+1. Run the **Full Demo Pipeline** (which includes Synthea generation + FHIR parsing), or
+2. Copy existing Synthea FHIR data to the volume and run `parse_fhir_with_dbignite` + `clinical_pipeline` manually
 3. Then the Refresh job will work for all subsequent runs
 
-### Serverless-Only Workspaces
+### Serverless Synthea Generation
 
-The Full Demo Pipeline includes a `synthea_generation` task that requires classic compute (Java JAR execution). On serverless-only workspaces, this job definition is created but the synthea task will fail at runtime. Use the **Refresh (no Synthea)** job instead, after ensuring clinical data exists (see above).
+Synthea now runs fully on serverless compute (environment v5+, Java 17). The notebook includes:
+- **UC Volume JAR caching** — downloads the 300MB JAR from GitHub once, caches in `/Volumes/{catalog}/raw/raw_sources/synthea_cache/`. Subsequent runs copy from cache (~2s vs ~60s download).
+- **Robust Java version detection** — handles both legacy `1.8.x` and modern `17.x` version formats.
+- **JVM tuning** — `-Xms2g -Xmx4g -XX:+UseG1GC` for optimal serverless performance.
+- **Lab enrichment** — forces Metabolic Panel, Lipid Panel, and CBC modules for richer lab data with 10-year patient history.
+- **dbignite patch** — `parse_fhir_with_dbignite.py` monkey-patches a bug in dbignite where `warnings.warn("Found " + count + ...)` concatenates `str` + `int`.
 
 ### `bundle destroy` Creates New Service Principals
 
@@ -934,7 +946,7 @@ This demo is designed to be modular for customer-specific showings:
 - **Add a gold metric**: Add a new `CREATE OR REFRESH MATERIALIZED VIEW` to the appropriate SQL file in `gold_analytics/`
 - **Switch to Python**: Update library paths in `resources/pipeline_*.yml` to point to `python/` files
 - **Change AI model**: Update the model name in `ai_classification.sql`
-- **Scale data**: Adjust `NUM_PATIENTS` in `run_synthea_generation.py` and record counts in `run_data_generation.py`
+- **Scale data**: Set `--var="num_patients=1000"` (or any count) at run time, or change the default in `databricks.yml`. Also adjust record counts in `run_data_generation.py` if needed
 - **Different geography**: Change `STATE` in `run_synthea_generation.py` (Synthea supports all US states)
 - **Different catalog name**: Pass `--var="catalog=your_catalog"` at deploy and run time. Run `./prepare.sh your_catalog` first to update dashboard JSONs
 
