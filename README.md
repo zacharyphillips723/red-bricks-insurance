@@ -1,6 +1,6 @@
 # Red Bricks Insurance
 
-Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB). One deployable bundle that runs end-to-end: Synthea clinical generation → synthetic insurance data → bronze/silver/gold SDP pipelines → cross-domain analytics with AI classification → ML model training → intelligent agents → six purpose-built applications.
+Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB). One deployable bundle that runs end-to-end: Synthea clinical generation → synthetic insurance data → bronze/silver/gold SDP pipelines → cross-domain analytics with AI classification → ML model training → intelligent agents → six purpose-built applications — all with MLflow 3 tracing and OpenTelemetry observability.
 
 ## Table of Contents
 
@@ -34,6 +34,7 @@ Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB
 - [Workspace Bootstrap — Post-Deploy Setup](#workspace-bootstrap--post-deploy-setup)
 - [Lakebase & App Authentication](#lakebase--app-authentication)
 - [Deployment Notes & Known Issues](#deployment-notes--known-issues)
+- [Observability & Tracing](#observability--tracing)
 - [Customization](#customization)
 - [Required Packages](#required-packages)
 
@@ -49,10 +50,11 @@ Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB
 ┌─────────────────────────┐
 │  Insurance Data Gen     │  Reads Synthea demographics → generates insurance domains
 │  (run_data_generation)  │  Members, Enrollment, Groups, Claims, Providers, Benefits,
-│                         │  Documents, Underwriting, Risk Adjustment, FWA, Prior Auth, Network
+│                         │  Documents, Underwriting, Risk Adjustment, FWA, Prior Auth,
+│                         │  Network, ADT Events, Care Management
 └───────────┬─────────────┘
             │
-     ┌──────┴───────┐  (12 domain pipelines run in parallel)
+     ┌──────┴───────┐  (14 domain pipelines run in parallel)
      ▼              ▼
 ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐ ┌───────────────┐
 │ Members  │ │Providers │ │ Claims   │ │ Clinical │ │ Underwriting │ │Risk Adjustment│
@@ -103,14 +105,15 @@ Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB
 
 ## Pipeline DAG
 
-The full demo job (`red_bricks_full_demo`) orchestrates 31 tasks:
+The full demo job (`red_bricks_full_demo`) orchestrates 36 tasks:
 
 ```
 synthea_generation (ROOT — generates FHIR bundles + extracts demographics + assigns MBR IDs)
   → data_generation (reads Synthea demographics, generates insurance domains + FWA + PA signals)
       → [members, providers, claims, enrollment, benefits, underwriting,
-         documents, risk_adjustment, fwa, prior_auth pipelines]
+         documents, risk_adjustment, fwa, prior_auth, care_management pipelines]
       → network_adequacy_pipeline (depends on data_generation + providers + members + claims)
+      → seed_adt_feed → adt_pipeline (ADT event stream via Autoloader)
       → parse_fhir_with_dbignite (reads raw synthea_raw/fhir/, writes crosswalk Delta tables)
           → clinical_pipeline (bronze.sql JOINs crosswalk for MBR IDs + NPIs)
   → build_member_months (depends on members_pipeline)
@@ -128,6 +131,7 @@ synthea_generation (ROOT — generates FHIR bundles + extracts demographics + as
       → deploy_fwa_agent (FWA Investigation agent with tool-calling)
       → deploy_pa_agent (PA Review agent with clinical review tool-calling)
           → evaluate_agents (v1 vs v2 vs sales coach comparison)
+          → evaluate_care_agent (MLflow GenAI evaluation: groundedness, relevance, safety, clinical completeness, actionability, HIPAA compliance)
   → bootstrap_workspace (depends on gold_analytics + fwa_pipeline + network_adequacy_pipeline + prior_auth_pipeline + train_fwa_model)
       — Creates Lakebase instances, applies UC/warehouse grants for app SPs, seeds operational data,
         seeds PA reviewer staff and review queue, creates Genie spaces (including Network Analytics)
@@ -156,12 +160,14 @@ A **refresh job** (`red_bricks_refresh`) runs the same DAG minus Synthea/FHIR/cl
 | **Prior Authorization** | ~10K PA requests | Parquet | PA requests with service types, determination status, turnaround times, clinical summaries |
 | **Medical Policies** | ~10 policies | PDF + Parquet | Prior auth policy PDFs with clinical criteria, CPT/ICD-10 codes, coverage rules |
 | **Network Adequacy** | 500 providers + 5K members + 100 counties | Parquet + CSV | H3-geocoded provider/member locations, CMS time/distance standards, county classifications, enriched claims with OON leakage analysis |
+| **ADT Events** | ~50 events/batch | JSON (Autoloader) | Admit/Discharge/Transfer hospital events streamed via Autoloader; triggers care management alerts for readmissions, high-acuity ED visits |
+| **Care Management** | ~500 episodes + 6 programs + SDOH data | Parquet | Disease management programs, case episodes, care activities, SDOH screening, care gap tracking, transitions of care |
 
 **Data quality**: ~2% intentional defects (nulls, invalid codes, out-of-range dates) caught by SDP expectations at the silver layer.
 
 ## Schema Architecture
 
-Tables are organized into **13 domain schemas** within the catalog, each owned by its domain pipeline:
+Tables are organized into **15 domain schemas** within the catalog, each owned by its domain pipeline:
 
 | Schema | Contents | Example Tables |
 |--------|----------|----------------|
@@ -177,6 +183,8 @@ Tables are organized into **13 domain schemas** within the catalog, each owned b
 | `fwa` | Fraud, Waste & Abuse detection | `silver_fwa_signals`, `gold_fwa_provider_risk`, `gold_fwa_claim_flags`, `gold_fwa_summary` |
 | `prior_auth` | Prior authorization requests & policies | `silver_pa_requests`, `gold_pa_summary`, `gold_pa_turnaround`, `parsed_medical_policies` |
 | `network` | Network adequacy, ghost networks, OON leakage | `silver_provider_geo`, `silver_member_geo`, `gold_network_adequacy_compliance`, `gold_ghost_network_flags`, `gold_network_leakage`, `gold_provider_recruitment_targets`, `gold_network_gaps` |
+| `adt` | ADT hospital event stream | `bronze_adt_events`, `silver_adt_events`, `gold_adt_alerts`, `gold_adt_readmission_risk` |
+| `care_management` | Disease management & care coordination | `silver_care_programs`, `silver_program_enrollment`, `silver_case_episodes`, `silver_member_sdoh`, `gold_program_performance`, `gold_care_gap_closure` |
 | `analytics` | Cross-domain gold tables & metric views | `gold_pmpm`, `gold_mlr`, `gold_hedis_member`, `gold_member_360`, `gold_fwa_member_risk`, `fwa_model_inference`, `mv_financial_overview` |
 
 **Key design principle**: Each domain pipeline writes bronze/silver/gold tables to its own schema. Only cross-domain gold analytics (tables that JOIN across multiple domains) land in the `analytics` schema. The `network` schema is unique in that it cross-references providers, members, and claims data enriched with H3 geospatial indexing for CMS distance/time compliance calculations.
@@ -261,7 +269,18 @@ Clinical-focused application for care management teams:
 
 - **Backend**: FastAPI (Python), connects to Lakebase, SQL warehouse, and serving endpoints
 - **Frontend**: React + Vite + Tailwind (Databricks-branded dark theme)
-- **Features**: Member search, claims analysis, Genie-powered natural language queries, Care Intelligence agent chat
+- **Observability**: MLflow 3 tracing (`@mlflow.trace`) on agent calls, Genie queries, and tool invocations; OpenTelemetry FastAPI auto-instrumentation
+- **Pages**:
+  - **Dashboard** — Real-time KPIs (active alerts, critical count, open cases, avg risk score), alert queue with filters
+  - **Alert Queue** — Filterable/sortable alerts with risk tier, status, assignment tracking
+  - **Alert Detail** — Full alert view with care manager assignment, status workflow, clinical context
+  - **Member 360** — Unified member view (demographics, clinical summary, claims, care gaps, risk factors, agent chat)
+  - **Care Plan** — AI-generated care plans with goals, interventions, milestones, timeline visualization
+  - **Outreach Draft** — AI-generated personalized outreach scripts (phone, SMS, email) based on member profile and preferred communication
+  - **Cohort Builder** — Population cohort definition with demographic, clinical, and utilization filters; cohort analytics
+  - **Patient Search (Genie)** — Natural language SQL exploration via Genie space integration
+  - **Caseload** — Care manager workload dashboard with assignment tracking
+- **Agent Architecture**: LangGraph state machine skeleton (`agent_graph.py`) with specialist agents (Clinical, Financial, Care Management) and UC function tool-calling (`agent_tools.py`)
 - **Config**: `app/app.yml`
 
 ### Group Reporting Portal (`app-group-reporting/`)
@@ -361,6 +380,8 @@ CMS network adequacy compliance monitoring for network operations teams:
 | **Agent Comparison** | Side-by-side v1 vs v2 agent evaluation results |
 | **PA Operations** | Prior authorization turnaround times, approval/denial rates, reviewer workload, SLA compliance |
 | **Network Adequacy** | CMS compliance overview, ghost network monitoring, OON leakage intelligence, network gaps & recruitment targets (4 pages, 17 datasets) |
+| **Care Management Operations** | Program enrollment, case episode tracking, SDOH prevalence, care gap closure rates, care manager productivity |
+| **Agent Observability** | Agent query volume, P50/P95 latencies, token costs, Genie usage, error rates (sourced from MLflow trace tables) |
 
 All dashboards are deployed as AI/BI Lakeview dashboards with `CAN_READ` permissions for the users group.
 
@@ -371,7 +392,19 @@ red-bricks-insurance/
 ├── databricks.yml                    # Bundle config, variables, targets (dev/e2-field-eng/prod)
 ├── app/                              # Command Center Databricks App
 │   ├── app.yml                       #   App configuration (env vars, command)
-│   ├── main.py                       #   FastAPI backend
+│   ├── main.py                       #   FastAPI backend (MLflow tracing + OpenTelemetry)
+│   ├── backend/
+│   │   ├── router.py                 #   API routes (alerts, members, caseload, care plans, outreach)
+│   │   ├── agent.py                  #   RAG agent (member lookup + Vector Search + LLM)
+│   │   ├── agent_graph.py            #   LangGraph StateGraph skeleton with @mlflow.trace
+│   │   ├── agent_tools.py            #   UC function tool-calling with tracing
+│   │   ├── agents/                   #   Specialist agents (Clinical, Financial, CareManagement)
+│   │   ├── genie.py                  #   Genie space integration with tracing
+│   │   ├── models.py                 #   Pydantic models
+│   │   ├── database.py               #   Lakebase connection with OAuth refresh
+│   │   ├── conversation_store.py     #   LangGraph conversation persistence
+│   │   ├── identity.py               #   User identity resolution
+│   │   └── websocket.py              #   WebSocket notification support
 │   ├── frontend/                     #   React + Vite + Tailwind source
 │   └── static/                       #   Built frontend output
 ├── app-group-reporting/              # Group Reporting Portal Databricks App
@@ -433,8 +466,9 @@ red-bricks-insurance/
 │   ├── frontend/                     #   React + Vite + Tailwind source
 │   └── static/                       #   Built frontend output
 ├── resources/
-│   ├── full_demo_job.yml             # End-to-end orchestration (32 tasks)
+│   ├── full_demo_job.yml             # End-to-end orchestration (36 tasks)
 │   ├── refresh_demo_job.yml          # Refresh without Synthea (data gen → all downstream)
+│   ├── adt_feed_job.yml              # Scheduled ADT event generation (every 3 hours)
 │   ├── data_generation_job.yml       # Standalone data generation
 │   ├── dashboard.yml                 # Analytics dashboard
 │   ├── agent_comparison_dashboard.yml# Agent eval dashboard
@@ -458,6 +492,10 @@ red-bricks-insurance/
 │   ├── pipeline_fwa.yml              # FWA domain SDP (signals, profiles, investigations)
 │   ├── pipeline_prior_auth.yml       # Prior Auth domain SDP (PA requests, policies)
 │   ├── pipeline_network.yml          # Network adequacy SDP (H3 geo, CMS compliance, ghost, leakage)
+│   ├── pipeline_adt.yml              # ADT event stream SDP (Autoloader → bronze → silver → gold alerts)
+│   ├── pipeline_care_management.yml  # Care management SDP (programs, episodes, SDOH, care gaps)
+│   ├── dashboard_care_management.yml # Care management operations dashboard
+│   ├── dashboard_observability.yml   # Agent observability dashboard (traces, latency, token costs)
 │   └── pipeline_gold_analytics.yml   # Cross-domain analytics (10 SQL files, 25+ gold views)
 ├── src/
 │   ├── data_generation/              # Modular synthetic data generators
@@ -477,7 +515,9 @@ red-bricks-insurance/
 │   │       ├── fwa.py               #     FWA signals, provider profiles, investigation cases
 │   │       ├── prior_auth.py        #     PA requests with determinations + turnaround times
 │   │       ├── medical_policies.py  #     Medical policy PDFs with clinical criteria
-│   │       └── network_adequacy.py  #     H3-geocoded providers/members, CMS standards, OON claims enrichment
+│   │       ├── network_adequacy.py  #     H3-geocoded providers/members, CMS standards, OON claims enrichment
+│   │       ├── adt.py              #     ADT events (admit/discharge/transfer) for Autoloader
+│   │       └── care_management.py  #     Disease management programs, case episodes, SDOH, care gaps
 │   ├── notebooks/
 │   │   ├── run_synthea_generation.py #   Synthea JAR → FHIR bundles → demographic crosswalk
 │   │   ├── run_data_generation.py    #   Insurance domain generation (reads Synthea demographics)
@@ -495,7 +535,10 @@ red-bricks-insurance/
 │   │   ├── deploy_pa_agent.py       #   PA Review agent registration (tool-calling)
 │   │   ├── parse_medical_policies.py#   LLM-based policy PDF extraction to structured rules
 │   │   ├── pa_model_governance.py   #   PA model bias monitoring, drift detection, audit trail
-│   │   ├── deploy_app_source.py     #   Deploy source code + start compute for all 5 apps
+│   │   ├── generate_adt_feed.py     #   ADT event batch generation + Lakebase alert seeding
+│   │   ├── evaluate_care_agent.py  #   MLflow GenAI evaluation (6 scorers, 4 question types)
+│   │   ├── create_uc_tools.py      #   Register UC tool functions for agent tool-calling
+│   │   ├── deploy_app_source.py     #   Deploy source code + start compute for all 6 apps
 │   │   ├── setup_lakebase.py        #   Lakebase DDL initialization (all instances)
 │   │   ├── seed_lakebase_alerts.py  #   Seed risk alerts into Command Center Lakebase
 │   │   ├── seed_fwa_lakebase.py     #   Seed FWA investigations into Lakebase (legacy, use bootstrap)
@@ -513,10 +556,12 @@ red-bricks-insurance/
 │   │   ├── fwa/                      #   bronze.sql, silver.sql, gold.sql (FWA signals + provider risk)
 │   │   ├── prior_auth/              #   bronze.sql, silver.sql, gold.sql (PA requests + policies)
 │   │   ├── network/                 #   bronze.sql, silver.sql, gold.sql (H3 geo, CMS compliance, ghost, leakage)
+│   │   ├── adt/                     #   bronze.sql, silver.sql, gold.sql (ADT events, alerts, readmission risk)
+│   │   ├── care_management/         #   bronze.sql, silver.sql, gold.sql (programs, episodes, SDOH, care gaps)
 │   │   ├── gold_analytics/           #   financial, quality, risk, ai, actuarial, groups,
 │   │   │                             #   cost_of_care, member_360, group_report_card, fwa_analytics
 │   │   └── python/                   #   Python alternatives for all pipelines
-│   ├── dashboards/                   #   Lakeview dashboard JSON definitions (4 dashboards)
+│   ├── dashboards/                   #   Lakeview dashboard JSON definitions (6 dashboards)
 │   ├── lakebase_schema.sql           #   Command Center Lakebase DDL (alerts, care managers)
 │   ├── fwa_lakebase_schema.sql       #   FWA Lakebase DDL (investigations, audit log, evidence)
 │   ├── pa_reviews_lakebase_schema.sql#   PA Lakebase DDL (review queue, reviewers, audit trail)
@@ -872,7 +917,7 @@ A single **Lakebase Autoscaling** project (`red-bricks-insurance`) hosts all app
 
 | Database | Used By | Status |
 |----------|---------|--------|
-| `red_bricks_alerts` | Command Center app | Active |
+| `red_bricks_alerts` | Command Center app (alerts, care managers, care management data) | Active |
 | `fwa_cases` | FWA Investigation Portal | Active |
 | `uw_sim` | Underwriting Simulation Portal | Active |
 | `pa_reviews` | Prior Authorization Portal | Active |
@@ -938,6 +983,45 @@ The `AutoCaptureConfigInput` parameter for serving endpoint creation (legacy inf
 
 After `mlflow.register_model()`, the model version may be in `PENDING_REGISTRATION` state. `train_fwa_model.py` polls for up to 5 minutes for the version to reach `READY` before creating the serving endpoint.
 
+## Observability & Tracing
+
+The Command Center app is instrumented with **MLflow 3 tracing** (OpenTelemetry-native) and **FastAPI auto-instrumentation** for production-grade observability.
+
+### MLflow 3 Tracing
+
+All agent interactions, Genie queries, and tool invocations are traced with `@mlflow.trace` decorators:
+
+| Component | Traced Operations | Experiment |
+|-----------|-------------------|------------|
+| **Care Intelligence Agent** | End-to-end agent calls, SQL queries, Vector Search retrieval, LLM calls | `/Shared/red-bricks-insurance/agent-traces` |
+| **Genie Integration** | Question submission, SQL generation, result retrieval, conversation flow | Same experiment |
+| **UC Tool Calls** | Function invocations, SDK API requests, parameter/response logging | Same experiment |
+| **LangGraph Nodes** | Route, dispatch, merge, and specialist agent nodes | Same experiment |
+
+Traces are written to Unity Catalog Delta tables via MLflow's OpenTelemetry backend. View traces in the MLflow Experiment UI at `/Shared/red-bricks-insurance/agent-traces`.
+
+### FastAPI OpenTelemetry
+
+The FastAPI app is auto-instrumented with `opentelemetry-instrumentation-fastapi`, which captures:
+- Request/response metadata for every API endpoint
+- HTTP method, status code, route, and latency
+- Correlation with MLflow trace spans for end-to-end visibility
+
+### Agent Evaluation
+
+The `evaluate_care_agent.py` notebook runs **MLflow GenAI evaluation** (`mlflow.genai.evaluate()`) with 6 scorers:
+
+| Scorer | Type | What It Measures |
+|--------|------|-----------------|
+| `RetrievalGroundedness` | Built-in | Are claims supported by retrieved context? |
+| `RelevanceToQuery` | Built-in | Does the response address the care manager's question? |
+| `Safety` | Built-in | No harmful, biased, or inappropriate content? |
+| `clinical_completeness` | Custom `Guidelines` | Covers diagnoses, risk factors, medications, care gaps, follow-up actions? |
+| `actionability` | Custom `Guidelines` | At least 3 concrete, specific actions for a care manager? |
+| `hipaa_compliance` | Custom `Guidelines` | PHI handled professionally in a need-to-know format? |
+
+Results are persisted to `{catalog}.analytics.care_agent_eval_results` for dashboard consumption and tracked in the MLflow experiment for version comparison.
+
 ## Customization
 
 This demo is designed to be modular for customer-specific showings:
@@ -961,7 +1045,9 @@ This demo is designed to be modular for customer-specific showings:
 | `databricks-sdk` | Agent deployment, API calls |
 | `databricks-automl-runtime` | FWA fraud scorer model training (AutoML) |
 | `xgboost` / `scikit-learn` | FWA fraud scorer + PA auto-adjudication model training |
-| `fastapi` / `uvicorn` | App backends (Command Center, Group Reporting, FWA Portal, PA Portal, UW Sim) |
+| `fastapi` / `uvicorn` | App backends (Command Center, Group Reporting, FWA Portal, PA Portal, UW Sim, Network Adequacy) |
 | `psycopg` | Lakebase PostgreSQL connections (Command Center, FWA Portal, PA Portal, UW Sim) |
+| `opentelemetry-instrumentation-fastapi` | FastAPI auto-instrumentation for request tracing |
+| `langgraph` | LangGraph state machine agent framework (Command Center) |
 | `slack_sdk` | (Optional) Sales Coach Slack enrichment |
 | `simple_salesforce` | (Optional) Sales Coach Salesforce enrichment |

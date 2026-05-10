@@ -1,0 +1,19 @@
+resources:
+  jobs:
+    adt_feed_generator:
+      name: "[${bundle.target}] Red Bricks — ADT Feed (every 3 hours)"
+      schedule:
+        quartz_cron_expression: "0 0 */3 * * ?"
+        timezone_id: America/New_York
+      tasks:
+        - task_key: generate_adt_batch
+          notebook_task:
+            notebook_path: ../src/notebooks/generate_adt_feed.py
+            base_parameters:
+              catalog: ${var.catalog}
+              events_per_batch: "15"
+              lakebase_project_id: ${var.lakebase_project_id}
+
+      tags:
+        project: red-bricks-insurance
+        domain: adt-feed

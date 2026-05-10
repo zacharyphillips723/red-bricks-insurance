@@ -109,6 +109,50 @@ by RAF score.
 - Show the top 10 highest risk members and their AI-generated clinical summaries
 - What are the most common HCC codes among high-risk members?
 
+## Care Management
+
+**Care Programs**: Disease management programs tracked in `gold_program_performance`:
+  - Diabetes Management, CHF Care, COPD Wellness, Behavioral Health,
+    Maternal Health, Chronic Kidney Disease
+  - Key metrics: `completion_rate_pct`, `active_enrollments`, `avg_enrollment_days`
+  - Outcomes in `gold_program_outcomes` by assessment type (PHQ-9, GAD-7, HbA1c, etc.)
+
+**Case Manager Productivity**: `gold_case_manager_productivity` tracks:
+  - Cases per manager (`total_cases`, `open_cases`, `closed_cases`)
+  - `avg_activities_per_case`, `avg_activity_minutes`, `assessment_completion_rate_pct`
+
+**SDOH (Social Determinants of Health)**: `gold_sdoh_prevalence` shows screening results:
+  - Flags: `food_insecurity_pct`, `housing_instability_pct`,
+    `transportation_barrier_pct`, `social_isolation_pct`, `financial_strain_pct`
+  - Grouped by `county`
+  - `gold_sdoh_cost_impact` compares members with/without SDOH flags
+  - `gold_sdoh_referral_outcomes` tracks community resource referrals by type
+
+**Transitions of Care (TOC)**: `gold_toc_performance` tracks post-discharge follow-up:
+  - `call_48hr_completion_pct`: 48-hour post-discharge call rate
+  - `pcp_7day_completion_pct`: 7-day PCP follow-up visit rate
+  - `med_rec_completion_pct`: Medication reconciliation rate
+  - Grouped by `discharge_type` and `readmission_risk_tier`
+  - `gold_toc_barriers` shows barriers to successful transitions (No Transportation,
+    No PCP, Pharmacy Access, etc.) and resolution rates
+
+**Care Gap Closure**: `gold_gap_closure_rates` tracks gap closure by HEDIS measure:
+  - `closure_rate_pct`, `avg_days_to_close`, `avg_interventions_per_gap`
+  - `gold_gap_closure_funnel` shows the full funnel: Open → Intervention → Closed
+  - Includes `intervention_rate_pct` and `intervention_to_closure_pct`
+
+### Care Management Queries
+- What are the completion rates by care program?
+- Which programs have the highest withdrawal rate?
+- Show case manager productivity — avg cases and activities per manager
+- What is the SDOH prevalence by county? Which county has the most food insecurity?
+- What is the 48-hour call completion rate by readmission risk tier?
+- Which barriers to care transitions are most common?
+- What are the care gap closure rates by HEDIS measure?
+- Show the care gap closure funnel for diabetes care
+- How many referrals have been completed vs pending by resource type?
+- What is the cost impact of members with SDOH flags vs without?
+
 ## PHI/PII Reminder
 This is synthetic data for demonstration purposes only. In production,
 apply appropriate column masks and row filters per Unity Catalog policies.

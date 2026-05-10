@@ -290,9 +290,139 @@ class CaseNoteOut(BaseModel):
 class AgentQueryIn(BaseModel):
     """Input for querying the Member RAG Agent."""
     question: str
+    conversation_id: Optional[str] = None
 
 
 class AgentQueryOut(BaseModel):
     """Response from the Member RAG Agent."""
     answer: str
     sources: list[dict] = []
+    conversation_id: Optional[str] = None
+    specialists_consulted: list[str] = []
+    message_id: Optional[str] = None
+    category: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Conversations & Feedback
+# ---------------------------------------------------------------------------
+
+class ConversationListOut(BaseModel):
+    """Summary for conversation list."""
+    conversation_id: str
+    member_id: str
+    title: Optional[str] = None
+    message_count: int = 0
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ConversationMessageOut(BaseModel):
+    """Single message in a conversation."""
+    role: str
+    content: str
+    metadata: dict = {}
+    created_at: Optional[str] = None
+
+
+class FeedbackIn(BaseModel):
+    """Input for submitting agent feedback."""
+    message_id: str
+    conversation_id: str
+    rating: str = Field(..., pattern="^(positive|negative)$")
+    comment: Optional[str] = None
+
+
+class FeedbackOut(BaseModel):
+    """Response after submitting feedback."""
+    feedback_id: str
+    status: str = "saved"
+
+
+class MemberSdohOut(BaseModel):
+    """SDOH screening profile for a member."""
+    member_id: str
+    screening_date: Optional[str] = None
+    county: Optional[str] = None
+    food_insecurity_flag: bool = False
+    housing_instability_flag: bool = False
+    transportation_barrier_flag: bool = False
+    social_isolation_flag: bool = False
+    financial_strain_flag: bool = False
+    total_sdoh_flags: int = 0
+    composite_sdoh_risk_score: Optional[float] = None
+
+
+class NextBestActionOut(BaseModel):
+    """AI-generated next best action recommendation."""
+    actions: list[dict] = Field(default_factory=list)
+    rationale: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Outreach Drafting
+# ---------------------------------------------------------------------------
+
+class OutreachDraftIn(BaseModel):
+    """Request to generate an outreach draft."""
+    channel: str = "phone"  # phone, email, sms
+    context: Optional[str] = None  # optional additional context
+
+
+class OutreachDraftOut(BaseModel):
+    """AI-generated outreach script."""
+    channel: str
+    subject: Optional[str] = None  # for email
+    script: str
+    key_talking_points: list[str] = Field(default_factory=list)
+    member_name: str = ""
+    generated_at: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Cohort Builder
+# ---------------------------------------------------------------------------
+
+class CohortSearchIn(BaseModel):
+    """Cohort search criteria."""
+    risk_tiers: list[str] = Field(default_factory=list)
+    counties: list[str] = Field(default_factory=list)
+    lines_of_business: list[str] = Field(default_factory=list)
+    min_age: Optional[int] = None
+    max_age: Optional[int] = None
+    gender: Optional[str] = None
+    min_raf_score: Optional[float] = None
+    has_hedis_gaps: Optional[bool] = None
+    diagnoses_contain: Optional[str] = None
+    min_ed_visits: Optional[int] = None
+    limit: int = 100
+
+
+class CohortMemberOut(BaseModel):
+    """Member in a cohort result."""
+    member_id: str
+    member_name: Optional[str] = None
+    age: Optional[str] = None
+    gender: Optional[str] = None
+    county: Optional[str] = None
+    risk_tier: Optional[str] = None
+    raf_score: Optional[str] = None
+    line_of_business: Optional[str] = None
+    hedis_gap_count: Optional[str] = None
+    top_diagnoses: Optional[str] = None
+    total_paid_ytd: Optional[str] = None
+
+
+class CohortAnalyticsOut(BaseModel):
+    """Aggregate analytics for a cohort."""
+    total_members: int = 0
+    risk_distribution: dict = Field(default_factory=dict)
+    avg_raf_score: Optional[float] = None
+    avg_age: Optional[float] = None
+    total_cost_ytd: Optional[float] = None
+    avg_cost_per_member: Optional[float] = None
+    total_hedis_gaps: int = 0
+    gender_distribution: dict = Field(default_factory=dict)
+    lob_distribution: dict = Field(default_factory=dict)
+    top_counties: dict = Field(default_factory=dict)
+    members: list[CohortMemberOut] = Field(default_factory=list)

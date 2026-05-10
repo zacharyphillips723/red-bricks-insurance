@@ -3,7 +3,6 @@ import {
   Search,
   UserCircle,
   ShieldAlert,
-  Activity,
   FileText,
   Send,
   Loader2,
@@ -17,6 +16,12 @@ import {
   DollarSign,
   Sparkles,
   TestTubes,
+  ThumbsUp,
+  ThumbsDown,
+  MessageSquare,
+  Plus,
+  Clock,
+  Home,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
@@ -25,7 +30,8 @@ import {
   type MemberListItem,
   type Member360Detail,
   type CaseNote,
-  type AgentResponse,
+  type ConversationListItem,
+  type MemberSdoh,
 } from "@/lib/api";
 
 const mdComponents: Components = {
@@ -132,15 +138,24 @@ export function Member360() {
   // Selected member state
   const [member, setMember] = useState<Member360Detail | null>(null);
   const [caseNotes, setCaseNotes] = useState<CaseNote[]>([]);
+  const [sdoh, setSdoh] = useState<MemberSdoh | null>(null);
   const [memberLoading, setMemberLoading] = useState(false);
 
   // Agent chat state
   const [agentQuestion, setAgentQuestion] = useState("");
   const [agentMessages, setAgentMessages] = useState<
-    { role: "user" | "agent"; text: string }[]
+    { role: "user" | "agent"; text: string; messageId?: string }[]
   >([]);
   const [agentLoading, setAgentLoading] = useState(false);
+  const [conversationId, setConversationId] = useState<string | null>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
+
+  // Conversation history sidebar
+  const [conversations, setConversations] = useState<ConversationListItem[]>([]);
+  const [showConversations, setShowConversations] = useState(false);
+
+  // Feedback state: track which messages have been rated
+  const [feedbackGiven, setFeedbackGiven] = useState<Record<string, "positive" | "negative">>({});
 
   // Expanded case notes
   const [expandedNotes, setExpandedNotes] = useState<Set<string>>(new Set());
@@ -173,13 +188,20 @@ export function Member360() {
     setSearchQuery("");
     setMemberLoading(true);
     setAgentMessages([]);
+    setConversationId(null);
+    setFeedbackGiven({});
+    setSdoh(null);
     try {
-      const [profile, notes] = await Promise.all([
+      const [profile, notes, convos, sdohData] = await Promise.all([
         api.getMember360(memberId),
         api.getCaseNotes(memberId),
+        api.listConversations(memberId).catch(() => []),
+        api.getMemberSdoh(memberId).catch(() => null),
       ]);
       setMember(profile);
       setCaseNotes(notes);
+      setConversations(convos);
+      setSdoh(sdohData);
     } catch (err) {
       console.error("Failed to load member:", err);
     } finally {
@@ -187,7 +209,37 @@ export function Member360() {
     }
   };
 
-  // Ask agent
+  // Load a previous conversation
+  const loadConversation = async (convo: ConversationListItem) => {
+    setShowConversations(false);
+    setAgentLoading(true);
+    try {
+      const messages = await api.getConversationMessages(convo.conversation_id);
+      setConversationId(convo.conversation_id);
+      setAgentMessages(
+        messages.map((m) => ({
+          role: m.role === "human" ? ("user" as const) : ("agent" as const),
+          text: m.content,
+          messageId: undefined, // historical messages don't need feedback tracking
+        }))
+      );
+      setFeedbackGiven({});
+    } catch (err) {
+      console.error("Failed to load conversation:", err);
+    } finally {
+      setAgentLoading(false);
+    }
+  };
+
+  // Start a new conversation
+  const startNewConversation = () => {
+    setConversationId(null);
+    setAgentMessages([]);
+    setFeedbackGiven({});
+    setShowConversations(false);
+  };
+
+  // Ask agent (streaming)
   const handleAskAgent = async (q?: string) => {
     const text = q || agentQuestion;
     if (!text.trim() || !member) return;
@@ -196,21 +248,62 @@ export function Member360() {
     setAgentQuestion("");
     setAgentLoading(true);
 
-    try {
-      const response = await api.queryMemberAgent(member.member_id, text);
-      setAgentMessages((prev) => [...prev, { role: "agent", text: response.answer }]);
-    } catch (err) {
-      setAgentMessages((prev) => [
-        ...prev,
-        { role: "agent", text: `Error: ${err instanceof Error ? err.message : "Unknown error"}` },
-      ]);
-    } finally {
-      setAgentLoading(false);
-      setTimeout(() => {
+    // Add a placeholder agent message for streaming tokens
+    const streamIdx = agentMessages.length + 1; // index of the new agent message
+    setAgentMessages((prev) => [...prev, { role: "agent", text: "" }]);
+
+    api.streamMemberAgent(
+      member.member_id,
+      text,
+      conversationId || undefined,
+      // onToken: update the last agent message
+      (content: string) => {
+        setAgentMessages((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = { ...updated[updated.length - 1], text: content };
+          return updated;
+        });
         if (chatContainerRef.current) {
           chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
         }
-      }, 100);
+      },
+      // onDone: set conversation and message IDs
+      (data) => {
+        if (data.conversation_id) setConversationId(data.conversation_id);
+        setAgentMessages((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = {
+            ...updated[updated.length - 1],
+            messageId: data.message_id,
+          };
+          return updated;
+        });
+        setAgentLoading(false);
+        api.listConversations(member.member_id).then(setConversations).catch(() => {});
+      },
+      // onError: show error
+      (error: string) => {
+        setAgentMessages((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = {
+            ...updated[updated.length - 1],
+            text: `Error: ${error}`,
+          };
+          return updated;
+        });
+        setAgentLoading(false);
+      },
+    );
+  };
+
+  // Submit feedback on an agent message
+  const handleFeedback = async (messageId: string, rating: "positive" | "negative") => {
+    if (!conversationId || !messageId || feedbackGiven[messageId]) return;
+    try {
+      await api.submitFeedback(messageId, conversationId, rating);
+      setFeedbackGiven((prev) => ({ ...prev, [messageId]: rating }));
+    } catch (err) {
+      console.error("Failed to submit feedback:", err);
     }
   };
 
@@ -450,6 +543,51 @@ export function Member360() {
                 </div>
               </div>
 
+              {/* SDOH Profile */}
+              {sdoh && sdoh.total_sdoh_flags > 0 && (
+                <div className="card p-5">
+                  <h4 className="text-sm font-semibold text-databricks-dark mb-3 flex items-center gap-2">
+                    <Home className="w-4 h-4 text-databricks-red" /> Social Determinants (SDOH)
+                    <span className="text-xs font-normal text-gray-400">
+                      Screened {sdoh.screening_date || "N/A"}
+                    </span>
+                  </h4>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                    {[
+                      { flag: sdoh.food_insecurity_flag, label: "Food Insecurity", emoji: "🍎" },
+                      { flag: sdoh.housing_instability_flag, label: "Housing Instability", emoji: "🏠" },
+                      { flag: sdoh.transportation_barrier_flag, label: "Transportation Barrier", emoji: "🚗" },
+                      { flag: sdoh.social_isolation_flag, label: "Social Isolation", emoji: "👤" },
+                      { flag: sdoh.financial_strain_flag, label: "Financial Strain", emoji: "💰" },
+                    ]
+                      .filter((item) => item.flag)
+                      .map((item) => (
+                        <div
+                          key={item.label}
+                          className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg"
+                        >
+                          <span className="text-base">{item.emoji}</span>
+                          <span className="text-xs font-medium text-amber-800">{item.label}</span>
+                        </div>
+                      ))}
+                  </div>
+                  <div className="mt-3 flex items-center gap-4 text-sm">
+                    <div>
+                      <span className="text-gray-400 text-xs">SDOH Flags</span>
+                      <p className="text-lg font-bold text-amber-700">{sdoh.total_sdoh_flags}</p>
+                    </div>
+                    {sdoh.composite_sdoh_risk_score !== null && (
+                      <div>
+                        <span className="text-gray-400 text-xs">Composite Risk Score</span>
+                        <p className="text-lg font-bold text-amber-700">
+                          {sdoh.composite_sdoh_risk_score.toFixed(2)}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Recent Lab Results */}
               {member.recent_labs && member.recent_labs.length > 0 && (
                 <div className="card p-5">
@@ -529,14 +667,66 @@ export function Member360() {
 
             {/* RIGHT PANEL: Agent Chat */}
             <div className="lg:col-span-2 flex flex-col card h-[600px]">
+              {/* Chat header with conversation controls */}
               <div className="px-4 py-3 border-b border-gray-200">
-                <h4 className="text-sm font-semibold text-databricks-dark flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-databricks-red" /> Care Intelligence Agent
-                </h4>
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-semibold text-databricks-dark flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-databricks-red" /> Care Intelligence Agent
+                  </h4>
+                  <div className="flex items-center gap-1">
+                    {conversations.length > 0 && (
+                      <button
+                        onClick={() => setShowConversations(!showConversations)}
+                        className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors relative"
+                        title="Conversation history"
+                      >
+                        <MessageSquare className="w-4 h-4 text-gray-500" />
+                        <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 bg-databricks-red text-white text-[9px] font-bold rounded-full flex items-center justify-center">
+                          {conversations.length}
+                        </span>
+                      </button>
+                    )}
+                    <button
+                      onClick={startNewConversation}
+                      className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors"
+                      title="New conversation"
+                    >
+                      <Plus className="w-4 h-4 text-gray-500" />
+                    </button>
+                  </div>
+                </div>
                 <p className="text-xs text-gray-400">
                   Ask about this member's history, risk factors, or care needs
                 </p>
               </div>
+
+              {/* Conversation history dropdown */}
+              {showConversations && (
+                <div className="border-b border-gray-200 bg-gray-50 max-h-48 overflow-y-auto">
+                  {conversations.map((c) => (
+                    <button
+                      key={c.conversation_id}
+                      onClick={() => loadConversation(c)}
+                      className={`w-full text-left px-4 py-2.5 hover:bg-white border-b border-gray-100 last:border-0 transition-colors ${
+                        conversationId === c.conversation_id ? "bg-white border-l-2 border-l-databricks-red" : ""
+                      }`}
+                    >
+                      <p className="text-xs font-medium text-databricks-dark truncate">
+                        {c.title || "Untitled conversation"}
+                      </p>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-[10px] text-gray-400 flex items-center gap-1">
+                          <MessageSquare className="w-2.5 h-2.5" /> {c.message_count}
+                        </span>
+                        <span className="text-[10px] text-gray-400 flex items-center gap-1">
+                          <Clock className="w-2.5 h-2.5" />
+                          {c.updated_at ? new Date(c.updated_at).toLocaleDateString() : ""}
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
 
               {/* Chat messages */}
               <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -563,8 +753,39 @@ export function Member360() {
                         {msg.text}
                       </div>
                     ) : (
-                      <div className="max-w-[90%] rounded-2xl rounded-tl-sm px-3 py-2 text-sm bg-gray-100 text-gray-800">
-                        <ReactMarkdown components={mdComponents}>{msg.text}</ReactMarkdown>
+                      <div className="max-w-[90%]">
+                        <div className="rounded-2xl rounded-tl-sm px-3 py-2 text-sm bg-gray-100 text-gray-800">
+                          <ReactMarkdown components={mdComponents}>{msg.text}</ReactMarkdown>
+                        </div>
+                        {/* Feedback buttons */}
+                        {msg.messageId && (
+                          <div className="flex items-center gap-1 mt-1 ml-1">
+                            <button
+                              onClick={() => handleFeedback(msg.messageId!, "positive")}
+                              disabled={!!feedbackGiven[msg.messageId]}
+                              className={`p-1 rounded transition-colors ${
+                                feedbackGiven[msg.messageId] === "positive"
+                                  ? "text-green-600 bg-green-50"
+                                  : "text-gray-300 hover:text-green-500 hover:bg-green-50"
+                              }`}
+                              title="Helpful"
+                            >
+                              <ThumbsUp className="w-3 h-3" />
+                            </button>
+                            <button
+                              onClick={() => handleFeedback(msg.messageId!, "negative")}
+                              disabled={!!feedbackGiven[msg.messageId]}
+                              className={`p-1 rounded transition-colors ${
+                                feedbackGiven[msg.messageId] === "negative"
+                                  ? "text-red-600 bg-red-50"
+                                  : "text-gray-300 hover:text-red-500 hover:bg-red-50"
+                              }`}
+                              title="Not helpful"
+                            >
+                              <ThumbsDown className="w-3 h-3" />
+                            </button>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

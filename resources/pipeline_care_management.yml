@@ -1,0 +1,18 @@
+resources:
+  pipelines:
+    care_management_pipeline:
+      name: "[${bundle.target}] Red Bricks — Care Management Pipeline"
+      catalog: ${var.catalog}
+      target: care_management
+      configuration:
+        source_volume: ${var.source_volume}
+      libraries:
+        - file:
+            path: ../src/pipelines/care_management/bronze.sql
+        - file:
+            path: ../src/pipelines/care_management/silver.sql
+        - file:
+            path: ../src/pipelines/care_management/gold.sql
+      channel: PREVIEW
+      serverless: true
+      development: true

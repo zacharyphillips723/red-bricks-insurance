@@ -195,6 +195,122 @@ export interface CaseNote {
 export interface AgentResponse {
   answer: string;
   sources: Record<string, string>[];
+  conversation_id?: string;
+  message_id?: string;
+  specialists_consulted?: string[];
+  category?: string;
+}
+
+export interface ConversationListItem {
+  conversation_id: string;
+  member_id: string;
+  title: string | null;
+  message_count: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ConversationMessage {
+  role: string;
+  content: string;
+  metadata: Record<string, unknown>;
+  created_at: string | null;
+}
+
+export interface FeedbackResponse {
+  feedback_id: string;
+  status: string;
+}
+
+export interface UserInfo {
+  email: string;
+  display_name: string;
+}
+
+export interface MemberSdoh {
+  member_id: string;
+  screening_date: string | null;
+  county: string | null;
+  food_insecurity_flag: boolean;
+  housing_instability_flag: boolean;
+  transportation_barrier_flag: boolean;
+  social_isolation_flag: boolean;
+  financial_strain_flag: boolean;
+  total_sdoh_flags: number;
+  composite_sdoh_risk_score: number | null;
+}
+
+export interface NextBestAction {
+  action: string;
+  priority: string;
+  category: string;
+  detail: string;
+}
+
+export interface NextBestActionsResponse {
+  actions: NextBestAction[];
+  rationale: string;
+}
+
+// --- Outreach Draft Types ---
+
+export interface OutreachDraft {
+  channel: string;
+  subject: string | null;
+  script: string;
+  key_talking_points: string[];
+  member_name: string;
+  generated_at: string;
+}
+
+// --- Cohort Builder Types ---
+
+export interface CohortSearchCriteria {
+  risk_tiers?: string[];
+  counties?: string[];
+  lines_of_business?: string[];
+  min_age?: number | null;
+  max_age?: number | null;
+  gender?: string | null;
+  min_raf_score?: number | null;
+  has_hedis_gaps?: boolean | null;
+  diagnoses_contain?: string | null;
+  limit?: number;
+}
+
+export interface CohortMember {
+  member_id: string;
+  member_name: string | null;
+  age: string | null;
+  gender: string | null;
+  county: string | null;
+  risk_tier: string | null;
+  raf_score: string | null;
+  line_of_business: string | null;
+  hedis_gap_count: string | null;
+  top_diagnoses: string | null;
+  total_paid_ytd: string | null;
+}
+
+export interface CohortAnalytics {
+  total_members: number;
+  risk_distribution: Record<string, number>;
+  avg_raf_score: number | null;
+  avg_age: number | null;
+  total_cost_ytd: number | null;
+  avg_cost_per_member: number | null;
+  total_hedis_gaps: number;
+  gender_distribution: Record<string, number>;
+  lob_distribution: Record<string, number>;
+  top_counties: Record<string, number>;
+  members: CohortMember[];
+}
+
+export interface CohortFilterOptions {
+  risk_tiers: string[];
+  counties: string[];
+  lines_of_business: string[];
+  genders: string[];
 }
 
 // --- API Functions ---
@@ -248,9 +364,108 @@ export const api = {
   getCaseNotes: (memberId: string) =>
     fetchApi<CaseNote[]>(`/members/${memberId}/case-notes`),
 
-  queryMemberAgent: (memberId: string, question: string) =>
+  queryMemberAgent: (memberId: string, question: string, conversationId?: string) =>
     fetchApi<AgentResponse>(`/members/${memberId}/agent-query`, {
       method: "POST",
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, conversation_id: conversationId }),
     }),
+
+  streamMemberAgent: (
+    memberId: string,
+    question: string,
+    conversationId: string | undefined,
+    onToken: (content: string) => void,
+    onDone: (data: { conversation_id: string; message_id: string }) => void,
+    onError: (error: string) => void,
+  ) => {
+    const controller = new AbortController();
+    fetch(`${API_BASE}/members/${memberId}/agent-stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, conversation_id: conversationId }),
+      signal: controller.signal,
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`Stream error: ${res.status}`);
+        const reader = res.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          let currentEvent = "";
+          for (const line of lines) {
+            if (line.startsWith("event: ")) currentEvent = line.slice(7);
+            else if (line.startsWith("data: ") && currentEvent) {
+              const data = line.slice(6);
+              try {
+                const parsed = JSON.parse(data);
+                if (currentEvent === "token") onToken(parsed.content || "");
+                else if (currentEvent === "done") onDone({ conversation_id: parsed.conversation_id, message_id: parsed.message_id || "" });
+                else if (currentEvent === "message_saved") onDone(parsed);
+                else if (currentEvent === "error") onError(parsed.error || "Unknown error");
+              } catch {
+                // non-JSON event data — ignore
+              }
+              currentEvent = "";
+            }
+          }
+        }
+      })
+      .catch((err) => {
+        if (err.name !== "AbortError") onError(err.message);
+      });
+    return controller;
+  },
+
+  // Conversations
+  listConversations: (memberId: string) =>
+    fetchApi<ConversationListItem[]>(`/members/${memberId}/conversations`),
+
+  getConversationMessages: (conversationId: string) =>
+    fetchApi<ConversationMessage[]>(`/conversations/${conversationId}/messages`),
+
+  // Feedback
+  submitFeedback: (messageId: string, conversationId: string, rating: "positive" | "negative", comment?: string) =>
+    fetchApi<FeedbackResponse>("/feedback", {
+      method: "POST",
+      body: JSON.stringify({ message_id: messageId, conversation_id: conversationId, rating, comment }),
+    }),
+
+  // SDOH
+  getMemberSdoh: (memberId: string) =>
+    fetchApi<MemberSdoh>(`/members/${memberId}/sdoh`),
+
+  // Next Best Actions
+  getNextBestActions: (alertId: string) =>
+    fetchApi<NextBestActionsResponse>(`/alerts/${alertId}/next-actions`),
+
+  // Care Plan
+  generateCarePlan: (memberId: string) =>
+    fetchApi<{ summary: string; goals: { goal: string; target_date: string; status: string; interventions: { action: string; responsible: string; frequency: string; status: string; notes: string }[] }[]; generated_at: string }>(`/members/${memberId}/care-plan`, {
+      method: "POST",
+    }),
+
+  // Outreach Drafting
+  generateOutreachDraft: (memberId: string, channel: string, context?: string) =>
+    fetchApi<OutreachDraft>(`/members/${memberId}/outreach-draft`, {
+      method: "POST",
+      body: JSON.stringify({ channel, context }),
+    }),
+
+  // Cohort Builder
+  searchCohort: (criteria: CohortSearchCriteria) =>
+    fetchApi<CohortAnalytics>(`/cohorts/search`, {
+      method: "POST",
+      body: JSON.stringify(criteria),
+    }),
+
+  getCohortFilterOptions: () =>
+    fetchApi<CohortFilterOptions>("/cohorts/filter-options"),
+
+  // User identity
+  getCurrentUser: () => fetchApi<UserInfo>("/me"),
 };

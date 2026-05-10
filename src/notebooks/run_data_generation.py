@@ -79,6 +79,7 @@ from src.data_generation.domains import fwa as dom_fwa
 from src.data_generation.domains import medical_policies as dom_medical_policies
 from src.data_generation.domains import prior_auth as dom_prior_auth
 from src.data_generation.domains import network_adequacy as dom_network
+from src.data_generation.domains import care_management as dom_care_mgmt
 
 # COMMAND ----------
 
@@ -140,7 +141,7 @@ if not _catalog_ready:
 DOMAIN_SCHEMAS = [
     "raw", "members", "claims", "providers", "documents",
     "risk_adjustment", "underwriting", "clinical", "benefits", "analytics", "fwa",
-    "prior_auth", "network",
+    "prior_auth", "network", "care_management",
 ]
 for s in DOMAIN_SCHEMAS:
     spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog_sql}.{s}")
@@ -155,7 +156,12 @@ for subdir in ["members", "enrollment", "providers", "claims_medical", "claims_p
                "fwa_signals", "fwa_provider_profiles", "fwa_investigation_cases",
                "medical_policies", "medical_policies_pdfs", "prior_auth_requests", "medical_policy_rules",
                "provider_locations", "member_locations", "claims_network",
-               "cms_standards", "county_classification"]:
+               "cms_standards", "county_classification",
+               "care_programs", "program_enrollment", "case_episodes",
+               "case_activities", "case_assessments", "member_sdoh",
+               "sdoh_referrals", "sdoh_z_codes", "toc_episodes",
+               "toc_followup", "toc_barriers", "care_gaps",
+               "gap_interventions", "gap_closure_events"]:
     path = f"{volume_base}/{subdir}"
     try:
         dbutils.fs.rm(path, recurse=True)
@@ -911,6 +917,232 @@ df_claims_net.groupBy("network_indicator").agg(count("*").alias("count")).show()
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ### Care Management Domain (Disease Mgmt, Case Mgmt, SDOH, TOC, Care Gaps)
+
+# COMMAND ----------
+
+import time as _time_cm
+_t_cm = _time_cm.time()
+print("Generating care management domain...")
+
+# 1. Static care programs reference
+care_programs_data = dom_care_mgmt.generate_care_programs()
+care_programs_schema = T.StructType([
+    T.StructField("program_id", T.StringType()),
+    T.StructField("program_name", T.StringType()),
+    T.StructField("program_type", T.StringType()),
+    T.StructField("target_conditions", T.StringType()),
+    T.StructField("milestones_json", T.StringType()),
+])
+df_care_programs = spark.createDataFrame(care_programs_data, schema=care_programs_schema)
+df_care_programs.write.mode("overwrite").parquet(f"{volume_base}/care_programs/")
+print(f"  Care programs: {df_care_programs.count()}")
+
+# 2. Program enrollment (driven by member diagnoses from claims)
+program_enrollment_data = dom_care_mgmt.generate_program_enrollment(
+    members_data, enrollment_data, medical_claims_data, enrollment_rate=0.30
+)
+program_enrollment_schema = T.StructType([
+    T.StructField("enrollment_id", T.StringType()),
+    T.StructField("member_id", T.StringType()),
+    T.StructField("program_id", T.StringType()),
+    T.StructField("enrollment_date", T.StringType()),
+    T.StructField("disenrollment_date", T.StringType()),
+    T.StructField("status", T.StringType()),
+    T.StructField("referral_source", T.StringType()),
+    T.StructField("enrollment_reason", T.StringType()),
+    T.StructField("line_of_business", T.StringType()),
+])
+df_pgm_enrollment = spark.createDataFrame(program_enrollment_data, schema=program_enrollment_schema)
+df_pgm_enrollment.write.mode("overwrite").parquet(f"{volume_base}/program_enrollment/")
+print(f"  Program enrollments: {df_pgm_enrollment.count()}")
+
+# 3. Case management episodes
+case_episodes_data = dom_care_mgmt.generate_case_episodes(
+    members_data, enrollment_data, case_rate=0.15
+)
+case_episodes_schema = T.StructType([
+    T.StructField("case_id", T.StringType()),
+    T.StructField("member_id", T.StringType()),
+    T.StructField("case_manager_id", T.StringType()),
+    T.StructField("episode_type", T.StringType()),
+    T.StructField("acuity", T.StringType()),
+    T.StructField("open_date", T.StringType()),
+    T.StructField("close_date", T.StringType()),
+    T.StructField("close_reason", T.StringType()),
+])
+df_case_episodes = spark.createDataFrame(case_episodes_data, schema=case_episodes_schema)
+df_case_episodes.write.mode("overwrite").parquet(f"{volume_base}/case_episodes/")
+print(f"  Case episodes: {df_case_episodes.count()}")
+
+# 4. Case activities
+case_activities_data = dom_care_mgmt.generate_case_activities(case_episodes_data)
+case_activities_schema = T.StructType([
+    T.StructField("activity_id", T.StringType()),
+    T.StructField("case_id", T.StringType()),
+    T.StructField("activity_type", T.StringType()),
+    T.StructField("activity_date", T.StringType()),
+    T.StructField("duration_minutes", T.IntegerType()),
+    T.StructField("notes", T.StringType()),
+])
+df_case_activities = spark.createDataFrame(case_activities_data, schema=case_activities_schema)
+df_case_activities.write.mode("overwrite").parquet(f"{volume_base}/case_activities/")
+print(f"  Case activities: {df_case_activities.count()}")
+
+# 5. Case assessments
+case_assessments_data = dom_care_mgmt.generate_case_assessments(case_episodes_data)
+case_assessments_schema = T.StructType([
+    T.StructField("assessment_id", T.StringType()),
+    T.StructField("case_id", T.StringType()),
+    T.StructField("assessment_type", T.StringType()),
+    T.StructField("score", T.DoubleType()),
+    T.StructField("risk_level", T.StringType()),
+    T.StructField("assessment_date", T.StringType()),
+])
+df_case_assessments = spark.createDataFrame(case_assessments_data, schema=case_assessments_schema)
+df_case_assessments.write.mode("overwrite").parquet(f"{volume_base}/case_assessments/")
+print(f"  Case assessments: {df_case_assessments.count()}")
+
+# 6. Member SDOH screenings
+member_sdoh_data = dom_care_mgmt.generate_member_sdoh(
+    members_data, enrollment_data, screening_rate=0.40
+)
+member_sdoh_schema = T.StructType([
+    T.StructField("member_id", T.StringType()),
+    T.StructField("screening_date", T.StringType()),
+    T.StructField("county", T.StringType()),
+    T.StructField("food_insecurity_flag", T.BooleanType()),
+    T.StructField("housing_instability_flag", T.BooleanType()),
+    T.StructField("transportation_barrier_flag", T.BooleanType()),
+    T.StructField("social_isolation_flag", T.BooleanType()),
+    T.StructField("financial_strain_flag", T.BooleanType()),
+    T.StructField("composite_sdoh_risk_score", T.DoubleType()),
+])
+df_member_sdoh = spark.createDataFrame(member_sdoh_data, schema=member_sdoh_schema)
+df_member_sdoh.write.mode("overwrite").parquet(f"{volume_base}/member_sdoh/")
+print(f"  Member SDOH screenings: {df_member_sdoh.count()}")
+
+# 7. SDOH referrals
+sdoh_referrals_data = dom_care_mgmt.generate_sdoh_referrals(member_sdoh_data)
+sdoh_referrals_schema = T.StructType([
+    T.StructField("referral_id", T.StringType()),
+    T.StructField("member_id", T.StringType()),
+    T.StructField("referral_type", T.StringType()),
+    T.StructField("community_resource", T.StringType()),
+    T.StructField("referral_date", T.StringType()),
+    T.StructField("status", T.StringType()),
+    T.StructField("outcome", T.StringType()),
+])
+df_sdoh_referrals = spark.createDataFrame(sdoh_referrals_data, schema=sdoh_referrals_schema)
+df_sdoh_referrals.write.mode("overwrite").parquet(f"{volume_base}/sdoh_referrals/")
+print(f"  SDOH referrals: {df_sdoh_referrals.count()}")
+
+# 8. SDOH Z-codes
+sdoh_z_codes_data = dom_care_mgmt.generate_sdoh_z_codes(member_sdoh_data)
+sdoh_z_codes_schema = T.StructType([
+    T.StructField("member_id", T.StringType()),
+    T.StructField("z_code", T.StringType()),
+    T.StructField("z_code_description", T.StringType()),
+    T.StructField("claim_date", T.StringType()),
+])
+df_sdoh_z_codes = spark.createDataFrame(sdoh_z_codes_data, schema=sdoh_z_codes_schema)
+df_sdoh_z_codes.write.mode("overwrite").parquet(f"{volume_base}/sdoh_z_codes/")
+print(f"  SDOH Z-codes: {df_sdoh_z_codes.count()}")
+
+# 9. Transitions of Care episodes (from inpatient claims)
+toc_episodes_data = dom_care_mgmt.generate_toc_episodes(
+    members_data, medical_claims_data, toc_rate=0.60
+)
+toc_episodes_schema = T.StructType([
+    T.StructField("toc_id", T.StringType()),
+    T.StructField("member_id", T.StringType()),
+    T.StructField("discharge_date", T.StringType()),
+    T.StructField("discharge_facility", T.StringType()),
+    T.StructField("discharge_type", T.StringType()),
+    T.StructField("readmission_risk_score", T.DoubleType()),
+])
+df_toc_episodes = spark.createDataFrame(toc_episodes_data, schema=toc_episodes_schema)
+df_toc_episodes.write.mode("overwrite").parquet(f"{volume_base}/toc_episodes/")
+print(f"  TOC episodes: {df_toc_episodes.count()}")
+
+# 10. TOC follow-up tracking
+toc_followup_data = dom_care_mgmt.generate_toc_followup(toc_episodes_data)
+toc_followup_schema = T.StructType([
+    T.StructField("followup_id", T.StringType()),
+    T.StructField("toc_id", T.StringType()),
+    T.StructField("followup_type", T.StringType()),
+    T.StructField("due_date", T.StringType()),
+    T.StructField("completed_date", T.StringType()),
+    T.StructField("status", T.StringType()),
+])
+df_toc_followup = spark.createDataFrame(toc_followup_data, schema=toc_followup_schema)
+df_toc_followup.write.mode("overwrite").parquet(f"{volume_base}/toc_followup/")
+print(f"  TOC follow-ups: {df_toc_followup.count()}")
+
+# 11. TOC barriers
+toc_barriers_data = dom_care_mgmt.generate_toc_barriers(toc_episodes_data)
+toc_barriers_schema = T.StructType([
+    T.StructField("barrier_id", T.StringType()),
+    T.StructField("toc_id", T.StringType()),
+    T.StructField("barrier_type", T.StringType()),
+    T.StructField("description", T.StringType()),
+    T.StructField("resolved_flag", T.BooleanType()),
+])
+df_toc_barriers = spark.createDataFrame(toc_barriers_data, schema=toc_barriers_schema)
+df_toc_barriers.write.mode("overwrite").parquet(f"{volume_base}/toc_barriers/")
+print(f"  TOC barriers: {df_toc_barriers.count()}")
+
+# 12. Care gaps
+care_gaps_data = dom_care_mgmt.generate_care_gaps(
+    members_data, medical_claims_data, gap_prevalence=0.25
+)
+care_gaps_schema = T.StructType([
+    T.StructField("gap_id", T.StringType()),
+    T.StructField("member_id", T.StringType()),
+    T.StructField("measure_name", T.StringType()),
+    T.StructField("condition", T.StringType()),
+    T.StructField("gap_open_date", T.StringType()),
+    T.StructField("priority", T.StringType()),
+])
+df_care_gaps = spark.createDataFrame(care_gaps_data, schema=care_gaps_schema)
+df_care_gaps.write.mode("overwrite").parquet(f"{volume_base}/care_gaps/")
+print(f"  Care gaps: {df_care_gaps.count()}")
+
+# 13. Gap interventions
+gap_interventions_data = dom_care_mgmt.generate_gap_interventions(
+    care_gaps_data, intervention_rate=0.70
+)
+gap_interventions_schema = T.StructType([
+    T.StructField("intervention_id", T.StringType()),
+    T.StructField("gap_id", T.StringType()),
+    T.StructField("intervention_type", T.StringType()),
+    T.StructField("intervention_date", T.StringType()),
+    T.StructField("outcome", T.StringType()),
+])
+df_gap_interventions = spark.createDataFrame(gap_interventions_data, schema=gap_interventions_schema)
+df_gap_interventions.write.mode("overwrite").parquet(f"{volume_base}/gap_interventions/")
+print(f"  Gap interventions: {df_gap_interventions.count()}")
+
+# 14. Gap closure events
+gap_closure_data = dom_care_mgmt.generate_gap_closure_events(
+    care_gaps_data, gap_interventions_data, closure_rate=0.45
+)
+gap_closure_schema = T.StructType([
+    T.StructField("closure_id", T.StringType()),
+    T.StructField("gap_id", T.StringType()),
+    T.StructField("closure_date", T.StringType()),
+    T.StructField("closure_method", T.StringType()),
+    T.StructField("days_to_close", T.IntegerType()),
+])
+df_gap_closure = spark.createDataFrame(gap_closure_data, schema=gap_closure_schema)
+df_gap_closure.write.mode("overwrite").parquet(f"{volume_base}/gap_closure_events/")
+print(f"  Gap closure events: {df_gap_closure.count()}")
+
+print(f"\nCare management domain completed in {_time_cm.time() - _t_cm:.0f}s")
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## Summary
 
 # COMMAND ----------
@@ -945,5 +1177,19 @@ print("  member_locations/        -> Parquet (geocoded)")
 print("  cms_standards/           -> Parquet (CMS HSD thresholds)")
 print("  county_classification/   -> Parquet (NC county types)")
 print("  claims_network/          -> Parquet (in/OON enrichment)")
+print("  care_programs/           -> Parquet (6 programs)")
+print("  program_enrollment/      -> Parquet")
+print("  case_episodes/           -> Parquet")
+print("  case_activities/         -> Parquet")
+print("  case_assessments/        -> Parquet")
+print("  member_sdoh/             -> Parquet")
+print("  sdoh_referrals/          -> Parquet")
+print("  sdoh_z_codes/            -> Parquet")
+print("  toc_episodes/            -> Parquet")
+print("  toc_followup/            -> Parquet")
+print("  toc_barriers/            -> Parquet")
+print("  care_gaps/               -> Parquet")
+print("  gap_interventions/       -> Parquet")
+print("  gap_closure_events/      -> Parquet")
 print("NOTE: Clinical data (encounters, labs, vitals, FHIR) comes from Synthea via parse_fhir_with_dbignite.")
 print("Data quality: ~2% defects in key fields for SDP expectations.")

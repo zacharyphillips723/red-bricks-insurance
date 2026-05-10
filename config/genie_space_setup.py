@@ -35,6 +35,17 @@ TABLES = [
     f"{CATALOG}.claims.silver_claims_medical",
     f"{CATALOG}.members.silver_enrollment",
     f"{CATALOG}.members.silver_members",
+    # Care Management gold tables
+    f"{CATALOG}.care_management.gold_program_performance",
+    f"{CATALOG}.care_management.gold_program_outcomes",
+    f"{CATALOG}.care_management.gold_case_manager_productivity",
+    f"{CATALOG}.care_management.gold_sdoh_prevalence",
+    f"{CATALOG}.care_management.gold_sdoh_cost_impact",
+    f"{CATALOG}.care_management.gold_sdoh_referral_outcomes",
+    f"{CATALOG}.care_management.gold_toc_performance",
+    f"{CATALOG}.care_management.gold_toc_barriers",
+    f"{CATALOG}.care_management.gold_gap_closure_rates",
+    f"{CATALOG}.care_management.gold_gap_closure_funnel",
 ]
 
 # ---------------------------------------------------------------------------
@@ -78,6 +89,24 @@ SAMPLE_QUESTIONS = [
     # AI Risk Narratives
     "Show the top 10 highest risk members and their AI-generated clinical summaries",
     "What are the most common HCC codes among high-risk members?",
+
+    # Care Management Programs
+    "What are the completion rates by care program?",
+    "Which programs have the highest withdrawal rate?",
+    "Show case manager productivity — average cases and activities per manager",
+
+    # SDOH Analytics
+    "What is the SDOH prevalence by county?",
+    "What is the cost impact of members with SDOH flags vs without?",
+    "How many referrals have been completed vs pending by resource type?",
+
+    # Transitions of Care
+    "What is the 48-hour call completion rate by readmission risk tier?",
+    "Which barriers to care transitions are most common?",
+
+    # Care Gap Closure
+    "What are the care gap closure rates by HEDIS measure?",
+    "Show the care gap closure funnel for diabetes care",
 ]
 
 

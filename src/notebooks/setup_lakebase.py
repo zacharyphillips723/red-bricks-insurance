@@ -18,6 +18,7 @@
 # COMMAND ----------
 
 dbutils.widgets.text("catalog", "red_bricks_insurance", "Unity Catalog Name")
+dbutils.widgets.text("lakebase_project_id", "red-bricks-insurance", "Lakebase Project ID")
 
 # COMMAND ----------
 
@@ -49,7 +50,7 @@ print(f"Repo root: {_repo_root}")
 # ---------------------------------------------------------------------------
 # Lakebase Autoscaling config — single project with 4 databases
 # ---------------------------------------------------------------------------
-LAKEBASE_PROJECT_ID = "red-bricks-insurance"
+LAKEBASE_PROJECT_ID = dbutils.widgets.get("lakebase_project_id")
 LAKEBASE_BRANCH = "production"
 LAKEBASE_ENDPOINT_PATH = f"projects/{LAKEBASE_PROJECT_ID}/branches/{LAKEBASE_BRANCH}/endpoints/primary"
 

@@ -1,0 +1,164 @@
+{
+  "datasets": [
+    {
+      "name": "ds_trace_volume",
+      "displayName": "Agent Trace Volume (7d)",
+      "queryLines": [
+        "SELECT DATE(timestamp_ms / 1000) AS trace_date, COUNT(*) AS trace_count, SUM(CASE WHEN status = 'OK' THEN 1 ELSE 0 END) AS success_count, SUM(CASE WHEN status = 'ERROR' THEN 1 ELSE 0 END) AS error_count FROM system.mlflow.traces WHERE request_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS GROUP BY trace_date ORDER BY trace_date"
+      ]
+    },
+    {
+      "name": "ds_trace_totals",
+      "displayName": "Trace Summary Stats",
+      "queryLines": [
+        "SELECT COUNT(*) AS total_traces, SUM(CASE WHEN status = 'OK' THEN 1 ELSE 0 END) AS successful, SUM(CASE WHEN status = 'ERROR' THEN 1 ELSE 0 END) AS errors, ROUND(AVG(execution_time_ms), 0) AS avg_latency_ms, ROUND(PERCENTILE(execution_time_ms, 0.5), 0) AS p50_latency_ms, ROUND(PERCENTILE(execution_time_ms, 0.95), 0) AS p95_latency_ms FROM system.mlflow.traces WHERE request_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS"
+      ]
+    },
+    {
+      "name": "ds_latency_by_span",
+      "displayName": "Avg Latency by Span Name",
+      "queryLines": [
+        "SELECT s.name AS span_name, s.span_type, COUNT(*) AS invocations, ROUND(AVG(s.execution_time_ms), 0) AS avg_latency_ms, ROUND(PERCENTILE(s.execution_time_ms, 0.95), 0) AS p95_latency_ms FROM system.mlflow.trace_spans s JOIN system.mlflow.traces t ON s.trace_id = t.trace_id WHERE t.request_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS GROUP BY s.name, s.span_type ORDER BY avg_latency_ms DESC"
+      ]
+    },
+    {
+      "name": "ds_tool_usage",
+      "displayName": "Tool Call Frequency",
+      "queryLines": [
+        "SELECT s.name AS tool_name, COUNT(*) AS call_count, ROUND(AVG(s.execution_time_ms), 0) AS avg_latency_ms, SUM(CASE WHEN s.status = 'ERROR' THEN 1 ELSE 0 END) AS error_count FROM system.mlflow.trace_spans s JOIN system.mlflow.traces t ON s.trace_id = t.trace_id WHERE t.request_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS AND s.span_type = 'TOOL' GROUP BY s.name ORDER BY call_count DESC"
+      ]
+    },
+    {
+      "name": "ds_latency_trend",
+      "displayName": "Agent Latency Trend (7d)",
+      "queryLines": [
+        "SELECT DATE(timestamp_ms / 1000) AS trace_date, ROUND(AVG(execution_time_ms), 0) AS avg_latency_ms, ROUND(PERCENTILE(execution_time_ms, 0.5), 0) AS p50_latency_ms, ROUND(PERCENTILE(execution_time_ms, 0.95), 0) AS p95_latency_ms FROM system.mlflow.traces WHERE request_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS GROUP BY trace_date ORDER BY trace_date"
+      ]
+    },
+    {
+      "name": "ds_error_details",
+      "displayName": "Recent Errors",
+      "queryLines": [
+        "SELECT trace_id, DATE(timestamp_ms / 1000) AS trace_date, execution_time_ms, status FROM system.mlflow.traces WHERE request_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS AND status = 'ERROR' ORDER BY timestamp_ms DESC LIMIT 20"
+      ]
+    },
+    {
+      "name": "ds_feedback_summary",
+      "displayName": "Agent Feedback Summary",
+      "queryLines": [
+        "SELECT rating, COUNT(*) AS count FROM red_bricks_alerts.agent_feedback GROUP BY rating"
+      ]
+    },
+    {
+      "name": "ds_genie_latency",
+      "displayName": "Genie Query Latency",
+      "queryLines": [
+        "SELECT s.name AS span_name, COUNT(*) AS query_count, ROUND(AVG(s.execution_time_ms), 0) AS avg_latency_ms, ROUND(PERCENTILE(s.execution_time_ms, 0.95), 0) AS p95_latency_ms FROM system.mlflow.trace_spans s JOIN system.mlflow.traces t ON s.trace_id = t.trace_id WHERE t.request_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS AND s.name LIKE 'genie%' GROUP BY s.name ORDER BY avg_latency_ms DESC"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "page_overview",
+      "displayName": "Agent Overview",
+      "layout": [
+        {
+          "widget": {
+            "name": "widget_total_traces",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_trace_totals", "fields": [{"name": "total_traces", "expression": "`total_traces`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "counter", "encodings": {"value": {"fieldName": "total_traces", "displayName": "Total Traces (7d)"}}}
+          },
+          "position": {"x": 0, "y": 0, "width": 2, "height": 2}
+        },
+        {
+          "widget": {
+            "name": "widget_success_count",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_trace_totals", "fields": [{"name": "successful", "expression": "`successful`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "counter", "encodings": {"value": {"fieldName": "successful", "displayName": "Successful"}}}
+          },
+          "position": {"x": 2, "y": 0, "width": 2, "height": 2}
+        },
+        {
+          "widget": {
+            "name": "widget_error_count",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_trace_totals", "fields": [{"name": "errors", "expression": "`errors`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "counter", "encodings": {"value": {"fieldName": "errors", "displayName": "Errors"}}}
+          },
+          "position": {"x": 4, "y": 0, "width": 2, "height": 2}
+        },
+        {
+          "widget": {
+            "name": "widget_avg_latency",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_trace_totals", "fields": [{"name": "avg_latency_ms", "expression": "`avg_latency_ms`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "counter", "encodings": {"value": {"fieldName": "avg_latency_ms", "displayName": "Avg Latency (ms)"}}}
+          },
+          "position": {"x": 6, "y": 0, "width": 2, "height": 2}
+        },
+        {
+          "widget": {
+            "name": "widget_p50_latency",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_trace_totals", "fields": [{"name": "p50_latency_ms", "expression": "`p50_latency_ms`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "counter", "encodings": {"value": {"fieldName": "p50_latency_ms", "displayName": "P50 Latency (ms)"}}}
+          },
+          "position": {"x": 8, "y": 0, "width": 2, "height": 2}
+        },
+        {
+          "widget": {
+            "name": "widget_p95_latency",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_trace_totals", "fields": [{"name": "p95_latency_ms", "expression": "`p95_latency_ms`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "counter", "encodings": {"value": {"fieldName": "p95_latency_ms", "displayName": "P95 Latency (ms)"}}}
+          },
+          "position": {"x": 10, "y": 0, "width": 2, "height": 2}
+        },
+        {
+          "widget": {
+            "name": "widget_trace_volume_chart",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_trace_volume", "fields": [{"name": "trace_date", "expression": "`trace_date`"}, {"name": "success_count", "expression": "`success_count`"}, {"name": "error_count", "expression": "`error_count`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "trace_date", "scale": {"type": "temporal"}, "displayName": "Date"}, "y": {"fieldName": "success_count", "scale": {"type": "quantitative"}, "displayName": "Traces"}, "color": {"fieldName": "trace_date", "scale": {"type": "temporal"}, "displayName": ""}, "label": {"show": true}}, "frame": {"title": "Daily Trace Volume", "showDescription": false}}
+          },
+          "position": {"x": 0, "y": 2, "width": 6, "height": 4}
+        },
+        {
+          "widget": {
+            "name": "widget_latency_trend_chart",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_latency_trend", "fields": [{"name": "trace_date", "expression": "`trace_date`"}, {"name": "avg_latency_ms", "expression": "`avg_latency_ms`"}, {"name": "p50_latency_ms", "expression": "`p50_latency_ms`"}, {"name": "p95_latency_ms", "expression": "`p95_latency_ms`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "trace_date", "scale": {"type": "temporal"}, "displayName": "Date"}, "y": {"fieldName": "avg_latency_ms", "scale": {"type": "quantitative"}, "displayName": "Latency (ms)"}}, "frame": {"title": "Agent Latency Trend", "showDescription": false}}
+          },
+          "position": {"x": 6, "y": 2, "width": 6, "height": 4}
+        },
+        {
+          "widget": {
+            "name": "widget_tool_usage_table",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_tool_usage", "fields": [{"name": "tool_name", "expression": "`tool_name`"}, {"name": "call_count", "expression": "`call_count`"}, {"name": "avg_latency_ms", "expression": "`avg_latency_ms`"}, {"name": "error_count", "expression": "`error_count`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "table", "encodings": {"columns": [{"fieldName": "tool_name", "displayName": "Tool"}, {"fieldName": "call_count", "displayName": "Calls"}, {"fieldName": "avg_latency_ms", "displayName": "Avg Latency (ms)"}, {"fieldName": "error_count", "displayName": "Errors"}]}, "frame": {"title": "Tool Call Frequency & Latency", "showDescription": false}}
+          },
+          "position": {"x": 0, "y": 6, "width": 6, "height": 4}
+        },
+        {
+          "widget": {
+            "name": "widget_span_latency_table",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_latency_by_span", "fields": [{"name": "span_name", "expression": "`span_name`"}, {"name": "span_type", "expression": "`span_type`"}, {"name": "invocations", "expression": "`invocations`"}, {"name": "avg_latency_ms", "expression": "`avg_latency_ms`"}, {"name": "p95_latency_ms", "expression": "`p95_latency_ms`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "table", "encodings": {"columns": [{"fieldName": "span_name", "displayName": "Span"}, {"fieldName": "span_type", "displayName": "Type"}, {"fieldName": "invocations", "displayName": "Count"}, {"fieldName": "avg_latency_ms", "displayName": "Avg (ms)"}, {"fieldName": "p95_latency_ms", "displayName": "P95 (ms)"}]}, "frame": {"title": "Latency by Span", "showDescription": false}}
+          },
+          "position": {"x": 6, "y": 6, "width": 6, "height": 4}
+        },
+        {
+          "widget": {
+            "name": "widget_recent_errors",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_error_details", "fields": [{"name": "trace_id", "expression": "`trace_id`"}, {"name": "trace_date", "expression": "`trace_date`"}, {"name": "execution_time_ms", "expression": "`execution_time_ms`"}, {"name": "status", "expression": "`status`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "table", "encodings": {"columns": [{"fieldName": "trace_id", "displayName": "Trace ID"}, {"fieldName": "trace_date", "displayName": "Date"}, {"fieldName": "execution_time_ms", "displayName": "Duration (ms)"}, {"fieldName": "status", "displayName": "Status"}]}, "frame": {"title": "Recent Errors", "showDescription": false}}
+          },
+          "position": {"x": 0, "y": 10, "width": 6, "height": 4}
+        },
+        {
+          "widget": {
+            "name": "widget_genie_latency",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_genie_latency", "fields": [{"name": "span_name", "expression": "`span_name`"}, {"name": "query_count", "expression": "`query_count`"}, {"name": "avg_latency_ms", "expression": "`avg_latency_ms`"}, {"name": "p95_latency_ms", "expression": "`p95_latency_ms`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "table", "encodings": {"columns": [{"fieldName": "span_name", "displayName": "Genie Span"}, {"fieldName": "query_count", "displayName": "Queries"}, {"fieldName": "avg_latency_ms", "displayName": "Avg (ms)"}, {"fieldName": "p95_latency_ms", "displayName": "P95 (ms)"}]}, "frame": {"title": "Genie Query Latency", "showDescription": false}}
+          },
+          "position": {"x": 6, "y": 10, "width": 6, "height": 4}
+        }
+      ]
+    }
+  ]
+}

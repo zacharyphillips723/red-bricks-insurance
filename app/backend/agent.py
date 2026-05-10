@@ -189,6 +189,32 @@ def _call_llm(messages: list[dict]) -> str:
     return data.get("choices", [{}])[0].get("message", {}).get("content", "No response generated.")
 
 
+SDOH_TABLE = f"{_CAT}.care_management.silver_member_sdoh"
+
+
+def get_member_sdoh(member_id: str) -> dict | None:
+    """Fetch SDOH screening data for a member."""
+    try:
+        sql = f"""
+            SELECT member_id, screening_date, county,
+                   food_insecurity_flag, housing_instability_flag,
+                   transportation_barrier_flag, social_isolation_flag,
+                   financial_strain_flag, total_sdoh_flags,
+                   composite_sdoh_risk_score
+            FROM {SDOH_TABLE}
+            WHERE member_id = :member_id
+            LIMIT 1
+        """
+        rows = _execute_sql(sql, [{"name": "member_id", "value": member_id}])
+        if rows:
+            return rows[0]
+        return None
+    except Exception as e:
+        print(f"[SDOH] Error fetching SDOH for {member_id}: {e}")
+        traceback.print_exc()
+        return None
+
+
 def query_member_agent(member_id: str, question: str) -> dict:
     """RAG agent: retrieve member profile + relevant case notes, then synthesize with LLM."""
     try:

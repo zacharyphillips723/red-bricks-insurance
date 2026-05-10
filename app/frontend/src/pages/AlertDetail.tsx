@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import {
   ArrowLeft, UserPlus, Send, MessageSquarePlus,
   Activity, Pill, Building2, Calendar,
+  Sparkles, Loader2,
 } from "lucide-react";
-import { api, type AlertDetail as AlertDetailType, type CareManager } from "@/lib/api";
+import { api, type AlertDetail as AlertDetailType, type CareManager, type NextBestAction } from "@/lib/api";
 import { riskBadgeClass, statusColor, formatDateTime, sourceIcon } from "@/lib/utils";
 
 const STATUS_TRANSITIONS: Record<string, string[]> = {
@@ -32,6 +33,9 @@ export function AlertDetailPage({ alertId, onBack }: AlertDetailProps) {
   const [newNote, setNewNote] = useState("");
   const [statusNote, setStatusNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [nbaActions, setNbaActions] = useState<NextBestAction[]>([]);
+  const [nbaLoading, setNbaLoading] = useState(false);
+  const [nbaRationale, setNbaRationale] = useState("");
 
   useEffect(() => {
     Promise.all([api.getAlert(alertId), api.listCareManagers()])
@@ -338,6 +342,78 @@ export function AlertDetailPage({ alertId, onBack }: AlertDetailProps) {
               </div>
             </div>
           )}
+
+          {/* Next Best Actions (AI) */}
+          <div className="card p-6">
+            <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3 flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-databricks-red" /> Next Best Actions
+            </h3>
+            {nbaActions.length === 0 && !nbaLoading && (
+              <button
+                onClick={async () => {
+                  setNbaLoading(true);
+                  try {
+                    const resp = await api.getNextBestActions(alertId);
+                    setNbaActions(resp.actions);
+                    setNbaRationale(resp.rationale);
+                  } catch (err) {
+                    console.error("NBA error:", err);
+                  } finally {
+                    setNbaLoading(false);
+                  }
+                }}
+                className="btn-primary w-full flex items-center justify-center gap-2"
+              >
+                <Sparkles className="w-4 h-4" /> Generate Recommendations
+              </button>
+            )}
+            {nbaLoading && (
+              <div className="flex items-center justify-center py-4">
+                <Loader2 className="w-5 h-5 animate-spin text-databricks-red" />
+                <span className="ml-2 text-sm text-gray-500">Analyzing patient data...</span>
+              </div>
+            )}
+            {nbaActions.length > 0 && (
+              <div className="space-y-3">
+                {nbaActions.map((action, i) => {
+                  const priorityColor =
+                    action.priority === "High"
+                      ? "border-l-red-500 bg-red-50"
+                      : action.priority === "Medium"
+                      ? "border-l-amber-500 bg-amber-50"
+                      : "border-l-blue-500 bg-blue-50";
+                  const categoryColor: Record<string, string> = {
+                    Clinical: "bg-purple-100 text-purple-700",
+                    Outreach: "bg-blue-100 text-blue-700",
+                    Referral: "bg-green-100 text-green-700",
+                    Administrative: "bg-gray-100 text-gray-700",
+                    "Follow-Up": "bg-orange-100 text-orange-700",
+                  };
+                  return (
+                    <div
+                      key={i}
+                      className={`border-l-4 rounded-lg p-3 ${priorityColor}`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-semibold text-gray-800">{action.action}</span>
+                        <span
+                          className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
+                            categoryColor[action.category] || "bg-gray-100 text-gray-600"
+                          }`}
+                        >
+                          {action.category}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-600">{action.detail}</p>
+                    </div>
+                  );
+                })}
+                {nbaRationale && (
+                  <p className="text-[10px] text-gray-400 italic mt-2">{nbaRationale}</p>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

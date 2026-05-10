@@ -30,9 +30,11 @@
 
 dbutils.widgets.text("catalog", "red_bricks_insurance", "Unity Catalog Name")
 dbutils.widgets.text("warehouse_id", "", "SQL Warehouse ID (leave empty to auto-detect)")
+dbutils.widgets.text("lakebase_project_id", "red-bricks-insurance", "Lakebase Project ID")
 
 catalog = dbutils.widgets.get("catalog")
 warehouse_id = dbutils.widgets.get("warehouse_id")
+lakebase_project_id = dbutils.widgets.get("lakebase_project_id")
 
 print(f"Catalog: {catalog}")
 print(f"Warehouse ID: {warehouse_id or '(will auto-detect)'}")
@@ -47,6 +49,7 @@ print(f"Warehouse ID: {warehouse_id or '(will auto-detect)'}")
 catalog = dbutils.widgets.get("catalog")
 catalog_sql = f"`{catalog}`"  # SQL-safe quoting (handles hyphens in catalog names)
 warehouse_id = dbutils.widgets.get("warehouse_id")
+lakebase_project_id = dbutils.widgets.get("lakebase_project_id")
 
 import json
 import random
@@ -96,7 +99,7 @@ print(f"Repo root: {_repo_root}")
 
 # COMMAND ----------
 
-LAKEBASE_PROJECT_ID = "red-bricks-insurance"
+LAKEBASE_PROJECT_ID = lakebase_project_id
 LAKEBASE_BRANCH = "production"
 LAKEBASE_ENDPOINT_PATH = f"projects/{LAKEBASE_PROJECT_ID}/branches/{LAKEBASE_BRANCH}/endpoints/primary"
 
@@ -146,7 +149,8 @@ except Exception as e:
 UC_SCHEMAS = [
     "raw", "members", "claims", "providers", "documents",
     "risk_adjustment", "underwriting", "clinical", "benefits",
-    "analytics", "fwa", "prior_auth", "network",
+    "analytics", "fwa", "prior_auth", "network", "care_management",
+    "adt", "ai_tools",
 ]
 
 # COMMAND ----------
@@ -579,6 +583,13 @@ if app_sps:
                 print(f"    USE SCHEMA + SELECT on {catalog}.{schema}")
             except Exception as e:
                 print(f"    {catalog}.{schema}: {e}")
+
+        # EXECUTE on ai_tools schema functions (used by the Care Intelligence Agent)
+        try:
+            spark.sql(f"GRANT EXECUTE ON SCHEMA {catalog_sql}.ai_tools TO `{sp_name}`")
+            print(f"    EXECUTE on {catalog}.ai_tools functions")
+        except Exception as e:
+            print(f"    EXECUTE on ai_tools: {e}")
         print()
 
 # COMMAND ----------

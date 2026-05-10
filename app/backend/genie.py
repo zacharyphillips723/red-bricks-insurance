@@ -6,6 +6,17 @@ from datetime import timedelta
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import OperationFailed
 
+try:
+    import mlflow
+    _trace = mlflow.trace
+except ImportError:
+    def _trace(*args, **kwargs):
+        if args and callable(args[0]):
+            return args[0]
+        def decorator(fn):
+            return fn
+        return decorator
+
 from .models import GenieQuestionIn, GenieResponseOut
 
 from .env_config import SQL_WAREHOUSE_ID, GENIE_SPACE_ID
@@ -13,6 +24,7 @@ from .env_config import SQL_WAREHOUSE_ID, GENIE_SPACE_ID
 _TIMEOUT = timedelta(seconds=120)
 
 
+@_trace(name="genie_send_and_wait", span_type="TOOL")
 def _send_and_wait(w, space_id, question_in) -> "GenieMessage":
     """Send a Genie question and wait for completion, handling failures gracefully."""
     if question_in.conversation_id:
@@ -44,6 +56,7 @@ def _send_and_wait(w, space_id, question_in) -> "GenieMessage":
         return msg
 
 
+@_trace(name="genie_ask", span_type="CHAIN")
 def ask_genie(question_in: GenieQuestionIn) -> GenieResponseOut:
     """Send a question to the Genie Space and return structured results."""
     try:

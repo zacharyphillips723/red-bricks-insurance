@@ -252,3 +252,83 @@ SELECT
 FROM risk_stratification_alerts a
 LEFT JOIN care_managers cm ON a.assigned_care_manager_id = cm.care_manager_id
 ORDER BY a.patient_id, a.created_at DESC;
+
+
+-- ============================================================================
+-- Conversation Memory & Agent Feedback
+-- ============================================================================
+
+-- ---------------------------------------------------------------------------
+-- Conversations — one row per (user, member) chat thread
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS conversations (
+    conversation_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    member_id           TEXT NOT NULL,
+    user_email          TEXT NOT NULL,
+    title               TEXT,                     -- Auto-generated from first question
+    message_count       INT DEFAULT 0,
+    created_at          TIMESTAMPTZ DEFAULT now(),
+    updated_at          TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversations_user_member
+    ON conversations(user_email, member_id, updated_at DESC);
+
+-- ---------------------------------------------------------------------------
+-- Conversation messages — ordered message history per thread
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS conversation_messages (
+    message_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    conversation_id     UUID NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+    role                TEXT NOT NULL CHECK (role IN ('human', 'assistant')),
+    content             TEXT NOT NULL,
+    metadata            JSONB DEFAULT '{}',       -- category, tools_used, specialists, etc.
+    created_at          TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_conv_messages_thread
+    ON conversation_messages(conversation_id, created_at ASC);
+
+-- ---------------------------------------------------------------------------
+-- Agent feedback — thumbs up/down on agent responses
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS agent_feedback (
+    feedback_id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    message_id          UUID NOT NULL REFERENCES conversation_messages(message_id) ON DELETE CASCADE,
+    conversation_id     UUID NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+    user_email          TEXT NOT NULL,
+    rating              TEXT NOT NULL CHECK (rating IN ('positive', 'negative')),
+    comment             TEXT,
+    created_at          TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_conversation
+    ON agent_feedback(conversation_id);
+
+-- ---------------------------------------------------------------------------
+-- Trigger: keep conversations.updated_at and message_count in sync
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION update_conversation_on_message()
+RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE conversations
+    SET updated_at = now(),
+        message_count = message_count + 1,
+        title = CASE
+            WHEN title IS NULL AND NEW.role = 'human'
+            THEN LEFT(NEW.content, 100)
+            ELSE title
+        END
+    WHERE conversation_id = NEW.conversation_id;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_conversation_message_insert ON conversation_messages;
+CREATE TRIGGER trg_conversation_message_insert
+    AFTER INSERT ON conversation_messages
+    FOR EACH ROW EXECUTE FUNCTION update_conversation_on_message();

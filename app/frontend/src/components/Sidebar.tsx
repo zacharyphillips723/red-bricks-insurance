@@ -4,13 +4,19 @@ import {
   Users,
   Search,
   UserCircle,
+  ClipboardList,
   Activity,
+  Mail,
+  UsersRound,
 } from "lucide-react";
 
 const navItems = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: "alerts", label: "Alert Queue", icon: AlertTriangle },
   { id: "member360", label: "Member 360", icon: UserCircle },
+  { id: "careplan", label: "Care Plans", icon: ClipboardList },
+  { id: "outreach", label: "Outreach", icon: Mail },
+  { id: "cohorts", label: "Cohort Builder", icon: UsersRound },
   { id: "genie", label: "Patient Search", icon: Search },
   { id: "caseload", label: "Caseload", icon: Users },
 ];

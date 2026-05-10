@@ -1,0 +1,18 @@
+resources:
+  pipelines:
+    adt_pipeline:
+      name: "[${bundle.target}] Red Bricks — ADT Feed Pipeline"
+      catalog: ${var.catalog}
+      target: adt
+      configuration:
+        source_volume: ${var.source_volume}
+      libraries:
+        - file:
+            path: ../src/pipelines/adt/bronze.sql
+        - file:
+            path: ../src/pipelines/adt/silver.sql
+        - file:
+            path: ../src/pipelines/adt/gold.sql
+      channel: PREVIEW
+      serverless: true
+      continuous: true
