@@ -13,10 +13,15 @@ from .models import (
     AgentChatIn,
     AgentChatOut,
     BaselineSummaryOut,
+    BookOfBusinessSummaryOut,
     ComparisonIn,
     ComparisonOut,
+    FactorTablesOut,
     GenieQuestionIn,
     GenieResponseOut,
+    RateBuildupIn,
+    RateBuildupOut,
+    RiskPoolOut,
     SimulateIn,
     SimulateOut,
     SimulationDetailOut,
@@ -35,6 +40,7 @@ from .scenarios import (
     save_simulation,
     update_simulation,
 )
+from .pricing_engine import compute_rate_buildup, compute_risk_pool, get_book_of_business_summary, get_factor_tables
 from .simulation_engine import run_simulation
 
 api = APIRouter(prefix="/api")
@@ -231,6 +237,52 @@ async def get_comp(comp_id: str):
         if not comp:
             raise HTTPException(404, "Comparison not found")
         return ComparisonOut(**comp)
+
+
+# ===================================================================
+# Actuarial Pricing — Rate Build-Up
+# ===================================================================
+
+@api.post("/pricing/rate-buildup", response_model=RateBuildupOut)
+async def rate_buildup(body: RateBuildupIn):
+    """Compute community-rated actuarial pricing with step-by-step factors."""
+    result = await asyncio.to_thread(
+        compute_rate_buildup,
+        data_cache,
+        avg_age_band=body.avg_age_band,
+        county_type=body.county_type,
+        sic_code=body.sic_code,
+        loss_ratio=body.loss_ratio,
+        credibility_factor=body.credibility_factor,
+        trend_pct=body.trend_pct,
+        lob=body.lob or "Commercial",
+        group_id=body.group_id,
+    )
+    return RateBuildupOut(**result)
+
+
+@api.get("/pricing/factor-tables", response_model=FactorTablesOut)
+async def factor_tables():
+    """Return all actuarial rating factor reference tables."""
+    tables = get_factor_tables()
+    return FactorTablesOut(**tables)
+
+
+# ===================================================================
+# Risk Pool Analysis
+# ===================================================================
+
+@api.get("/groups/{group_id}/risk-pool", response_model=RiskPoolOut)
+async def group_risk_pool(group_id: str):
+    """Compare a group's risk profile against the book of business."""
+    result = await asyncio.to_thread(compute_risk_pool, data_cache, group_id)
+    return RiskPoolOut(**result)
+
+
+@api.get("/book-of-business/risk-summary", response_model=BookOfBusinessSummaryOut)
+async def book_risk_summary():
+    """Return aggregate book-of-business risk statistics."""
+    return BookOfBusinessSummaryOut(**get_book_of_business_summary())
 
 
 # ===================================================================

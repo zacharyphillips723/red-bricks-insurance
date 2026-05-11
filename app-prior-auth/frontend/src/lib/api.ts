@@ -118,6 +118,30 @@ export interface AgentResponse {
   sources: Record<string, unknown>[];
 }
 
+export interface ComplianceMetrics {
+  compliance_rate: number | null;
+  avg_turnaround_standard: number | null;
+  avg_turnaround_expedited: number | null;
+  overdue_count: number;
+  auto_adjudication_rate: number | null;
+  total_determined: number;
+  total_auto: number;
+  turnaround_distribution: { bucket: string; count: number; compliant: boolean }[];
+  weekly_trend: { week: string; compliance_rate: number; total: number }[];
+}
+
+export interface OverdueRequest {
+  auth_request_id: string;
+  member_name: string | null;
+  service_type: string;
+  procedure_code: string;
+  urgency: string | null;
+  reviewer_name: string | null;
+  cms_deadline: string | null;
+  hours_overdue: number;
+  request_date: string | null;
+}
+
 // --- API Functions ---
 
 export const api = {
@@ -168,4 +192,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ question, auth_request_id: authRequestId }),
     }),
+
+  getComplianceMetrics: () => fetchApi<ComplianceMetrics>("/compliance/metrics"),
+  getOverdueRequests: () => fetchApi<OverdueRequest[]>("/compliance/overdue"),
 };

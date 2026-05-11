@@ -1,6 +1,6 @@
-import { useState, useRef } from "react";
-import { Search, Sparkles, Code2, Table2, Send, Loader2 } from "lucide-react";
-import { api, type GenieResponse } from "@/lib/api";
+import { useState, useRef, useEffect } from "react";
+import { Search, Sparkles, Code2, Table2, Send, Loader2, ToggleLeft, ToggleRight } from "lucide-react";
+import { api, type GenieResponse, type EmbedConfig } from "@/lib/api";
 
 const SUGGESTED_QUESTIONS = [
   "How many high utilizer patients do we have?",
@@ -19,7 +19,13 @@ export function GenieSearch() {
   >([]);
   const [loading, setLoading] = useState(false);
   const [showSql, setShowSql] = useState<string | null>(null);
+  const [embedMode, setEmbedMode] = useState(false);
+  const [embedConfig, setEmbedConfig] = useState<EmbedConfig | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    api.getEmbedConfig().then(setEmbedConfig).catch(() => {});
+  }, []);
 
   const handleAsk = async (q?: string) => {
     const text = q || question;
@@ -42,17 +48,41 @@ export function GenieSearch() {
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)]">
       {/* Header */}
-      <div className="mb-4">
-        <h2 className="text-2xl font-bold text-databricks-dark flex items-center gap-2">
-          <Sparkles className="w-6 h-6 text-databricks-red" /> Patient Search
-        </h2>
-        <p className="text-sm text-gray-500 mt-1">
-          Ask natural language questions about your patient population using Databricks Genie
-        </p>
+      <div className="mb-4 flex items-start justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-databricks-dark flex items-center gap-2">
+            <Sparkles className="w-6 h-6 text-databricks-red" /> Patient Search
+          </h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Ask natural language questions about your patient population using Databricks Genie
+          </p>
+        </div>
+        {embedConfig?.workspace_url && embedConfig?.genie_space_id && (
+          <button
+            onClick={() => setEmbedMode(!embedMode)}
+            className="flex items-center gap-2 text-sm text-gray-500 hover:text-databricks-red transition-colors px-3 py-1.5 rounded-lg border border-gray-200 hover:border-databricks-red"
+          >
+            {embedMode ? <ToggleRight className="w-4 h-4 text-databricks-red" /> : <ToggleLeft className="w-4 h-4" />}
+            {embedMode ? "Custom Chat" : "Embedded Genie"}
+          </button>
+        )}
       </div>
 
-      {/* Conversation area */}
-      <div className="flex-1 overflow-y-auto space-y-6 pb-4">
+      {/* Embedded Genie iframe mode */}
+      {embedMode && embedConfig?.workspace_url && embedConfig?.genie_space_id && (
+        <div className="flex-1 rounded-xl border border-gray-200 overflow-hidden bg-white">
+          <iframe
+            src={`${embedConfig.workspace_url}/genie/rooms/${embedConfig.genie_space_id}`}
+            className="w-full h-full border-0"
+            style={{ minHeight: "calc(100vh - 10rem)" }}
+            title="Databricks Genie Space"
+            allow="clipboard-write"
+          />
+        </div>
+      )}
+
+      {/* Conversation area — custom chat mode */}
+      {!embedMode && (<><div className="flex-1 overflow-y-auto space-y-6 pb-4">
         {responses.length === 0 && !loading && (
           <div className="card p-8 text-center">
             <Sparkles className="w-12 h-12 text-databricks-red mx-auto mb-4 opacity-50" />
@@ -192,7 +222,7 @@ export function GenieSearch() {
             Start new conversation
           </button>
         )}
-      </div>
+      </div></>)}
     </div>
   );
 }

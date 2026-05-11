@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   ArrowLeft,
   Loader2,
@@ -10,8 +10,18 @@ import {
   MessageSquareText,
   Users,
   Building2,
+  Download,
+  BarChart3,
+  Swords,
+  Star,
 } from "lucide-react";
-import { api, type GroupReportCard as ReportCardData, type GroupTcocItem } from "@/lib/api";
+import {
+  api,
+  type GroupReportCard as ReportCardData,
+  type GroupTcocItem,
+  type RenewalScenarioResult,
+  type CompetitiveBenchmarkResponse,
+} from "@/lib/api";
 import { MetricCard } from "@/components/MetricCard";
 import { PercentileGauge } from "@/components/PercentileGauge";
 import { ChatPanel } from "@/components/ChatPanel";
@@ -67,6 +77,332 @@ function RenewalBadge({ action }: { action: string | null }) {
     </span>
   );
 }
+
+// ===================================================================
+// Renewal Scenario Modeling Component
+// ===================================================================
+
+function RenewalScenarioPanel({ groupId }: { groupId: string }) {
+  const [rateChange, setRateChange] = useState(5);
+  const [result, setResult] = useState<RenewalScenarioResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [curveData, setCurveData] = useState<{ pct: number; churn: number }[]>([]);
+
+  const runScenario = useCallback(async (pct: number) => {
+    setLoading(true);
+    try {
+      const r = await api.renewalScenario(groupId, pct);
+      setResult(r);
+    } catch (e) {
+      console.error(e);
+    }
+    setLoading(false);
+  }, [groupId]);
+
+  // Load initial scenario + churn curve
+  useEffect(() => {
+    runScenario(rateChange);
+    // Build churn curve from -10 to 25
+    const points: Promise<{ pct: number; churn: number }>[] = [];
+    for (let p = -10; p <= 25; p += 5) {
+      points.push(
+        api.renewalScenario(groupId, p).then((r) => ({ pct: p, churn: r.churn_probability }))
+      );
+    }
+    Promise.all(points).then(setCurveData).catch(console.error);
+  }, [groupId]);
+
+  const handleChange = (val: number) => {
+    setRateChange(val);
+    runScenario(val);
+  };
+
+  const churnColor = (prob: number) =>
+    prob < 0.1 ? "text-green-600" : prob < 0.25 ? "text-amber-600" : "text-red-600";
+  const churnBg = (prob: number) =>
+    prob < 0.1 ? "bg-green-50 border-green-200" : prob < 0.25 ? "bg-amber-50 border-amber-200" : "bg-red-50 border-red-200";
+
+  const maxChurn = Math.max(...curveData.map((d) => d.churn), 0.5);
+
+  return (
+    <div className="card p-5">
+      <h3 className="text-sm font-semibold text-databricks-dark mb-4 flex items-center gap-2">
+        <BarChart3 className="w-4 h-4 text-databricks-red" /> Renewal Scenario Modeling
+      </h3>
+
+      {/* Slider */}
+      <div className="mb-4">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-xs text-gray-500">Rate Change</span>
+          <span className="text-sm font-bold text-databricks-dark">
+            {rateChange > 0 ? "+" : ""}{rateChange}%
+          </span>
+        </div>
+        <input
+          type="range"
+          min={-10}
+          max={25}
+          step={0.5}
+          value={rateChange}
+          onChange={(e) => handleChange(parseFloat(e.target.value))}
+          className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-databricks-red"
+        />
+        <div className="flex justify-between text-[9px] text-gray-400 mt-1">
+          <span>-10%</span>
+          <span>0%</span>
+          <span>+10%</span>
+          <span>+25%</span>
+        </div>
+      </div>
+
+      {/* Results */}
+      {loading && !result ? (
+        <div className="flex justify-center py-4">
+          <Loader2 className="w-5 h-5 text-databricks-red animate-spin" />
+        </div>
+      ) : result ? (
+        <div className="space-y-3">
+          <div className="grid grid-cols-3 gap-3">
+            <div className="text-center">
+              <span className="text-xs text-gray-400 block">Projected PMPM</span>
+              <span className="text-lg font-bold text-databricks-dark">
+                ${result.projected_pmpm.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+              </span>
+            </div>
+            <div className="text-center">
+              <span className="text-xs text-gray-400 block">Projected Loss Ratio</span>
+              <span className={`text-lg font-bold ${result.projected_loss_ratio > 1 ? "text-red-600" : result.projected_loss_ratio > 0.85 ? "text-amber-600" : "text-green-600"}`}>
+                {(result.projected_loss_ratio * 100).toFixed(1)}%
+              </span>
+            </div>
+            <div className="text-center">
+              <span className="text-xs text-gray-400 block">Churn Probability</span>
+              <div className={`inline-block px-3 py-1 rounded-full border ${churnBg(result.churn_probability)}`}>
+                <span className={`text-lg font-bold ${churnColor(result.churn_probability)}`}>
+                  {(result.churn_probability * 100).toFixed(1)}%
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Mini churn curve chart */}
+          {curveData.length > 0 && (
+            <div className="mt-3">
+              <span className="text-xs text-gray-400 block mb-2">Churn Risk vs. Rate Change</span>
+              <div className="flex items-end gap-1 h-20">
+                {curveData.map((d) => {
+                  const barH = (d.churn / maxChurn) * 100;
+                  const isActive = Math.abs(d.pct - rateChange) < 2.5;
+                  return (
+                    <div key={d.pct} className="flex-1 flex flex-col items-center justify-end h-full">
+                      <div
+                        className={`w-full rounded-t transition-all ${
+                          isActive ? "bg-databricks-red" : d.churn < 0.1 ? "bg-green-300" : d.churn < 0.25 ? "bg-amber-300" : "bg-red-300"
+                        }`}
+                        style={{ height: `${barH}%` }}
+                      />
+                      <span className="text-[8px] text-gray-400 mt-1">
+                        {d.pct > 0 ? "+" : ""}{d.pct}%
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="text-[10px] text-gray-400 mt-2">
+            Model inputs: Health Score {result.health_score}, Tenure ~{result.group_tenure_years}yr
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+
+// ===================================================================
+// Competitive Benchmarking Component
+// ===================================================================
+
+function CompetitiveLandscape({ groupId }: { groupId: string }) {
+  const [data, setData] = useState<CompetitiveBenchmarkResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    api.getCompetitiveBenchmark(groupId)
+      .then(setData)
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }, [groupId]);
+
+  if (loading) {
+    return (
+      <div className="card p-5">
+        <h3 className="text-sm font-semibold text-databricks-dark mb-4 flex items-center gap-2">
+          <Swords className="w-4 h-4 text-databricks-red" /> Competitive Landscape
+        </h3>
+        <div className="flex justify-center py-8">
+          <Loader2 className="w-6 h-6 text-databricks-red animate-spin" />
+        </div>
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <div className="card p-5">
+        <h3 className="text-sm font-semibold text-databricks-dark mb-4 flex items-center gap-2">
+          <Swords className="w-4 h-4 text-databricks-red" /> Competitive Landscape
+        </h3>
+        <p className="text-sm text-gray-400">No competitive data available.</p>
+      </div>
+    );
+  }
+
+  const allPmpms = [data.red_bricks_pmpm, ...data.competitors.map((c) => c.pmpm)];
+  const maxPmpm = Math.max(...allPmpms);
+
+  return (
+    <div className="card p-5">
+      <h3 className="text-sm font-semibold text-databricks-dark mb-1 flex items-center gap-2">
+        <Swords className="w-4 h-4 text-databricks-red" /> Competitive Landscape
+      </h3>
+      <p className="text-xs text-gray-400 mb-4">
+        Synthetic benchmark vs. {data.sic_code} / {data.size_tier} competitors
+      </p>
+
+      {/* Comparison table */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-gray-50 text-left text-xs text-gray-500 uppercase tracking-wider">
+              <th className="px-3 py-2">Carrier</th>
+              <th className="px-3 py-2 text-right">PMPM</th>
+              <th className="px-3 py-2">vs. Red Bricks</th>
+              <th className="px-3 py-2">Network</th>
+              <th className="px-3 py-2">Satisfaction</th>
+              <th className="px-3 py-2">Wellness Programs</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {/* Red Bricks row */}
+            <tr className="bg-red-50/40 font-medium">
+              <td className="px-3 py-2.5">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-databricks-red" />
+                  Red Bricks Insurance
+                </span>
+              </td>
+              <td className="px-3 py-2.5 text-right font-bold">
+                ${data.red_bricks_pmpm.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+              </td>
+              <td className="px-3 py-2.5 text-gray-400 text-xs">--</td>
+              <td className="px-3 py-2.5 text-xs">Regional PPO 16,000+ providers</td>
+              <td className="px-3 py-2.5">
+                <SatisfactionStars rating={4.1} />
+              </td>
+              <td className="px-3 py-2.5 text-xs text-gray-600">
+                Wellness Portal, Chronic Care, Telehealth
+              </td>
+            </tr>
+
+            {/* Competitor rows */}
+            {data.competitors.map((c) => {
+              const diff = ((c.pmpm - data.red_bricks_pmpm) / data.red_bricks_pmpm) * 100;
+              const isLower = c.pmpm < data.red_bricks_pmpm;
+              return (
+                <tr key={c.carrier_name} className="hover:bg-gray-50">
+                  <td className="px-3 py-2.5">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-gray-400" />
+                      {c.carrier_name}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-semibold">
+                    ${c.pmpm.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <span className={`text-xs font-semibold ${isLower ? "text-red-600" : "text-green-600"}`}>
+                      {isLower ? "" : "+"}{diff.toFixed(1)}%
+                      <span className="text-[9px] ml-0.5 font-normal text-gray-400">
+                        {isLower ? "(cheaper)" : "(more expensive)"}
+                      </span>
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 text-xs text-gray-600">{c.network_size}</td>
+                  <td className="px-3 py-2.5">
+                    <SatisfactionStars rating={c.member_satisfaction} />
+                  </td>
+                  <td className="px-3 py-2.5 text-xs text-gray-600">
+                    {c.wellness_programs.join(", ")}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* PMPM comparison bar */}
+      <div className="mt-4">
+        <span className="text-xs text-gray-400 block mb-2">PMPM Comparison</span>
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs w-32 truncate font-medium">Red Bricks</span>
+            <div className="flex-1 h-4 bg-gray-100 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-databricks-red rounded-full"
+                style={{ width: `${(data.red_bricks_pmpm / maxPmpm) * 100}%` }}
+              />
+            </div>
+            <span className="text-xs font-semibold w-16 text-right">
+              ${data.red_bricks_pmpm.toFixed(0)}
+            </span>
+          </div>
+          {data.competitors.map((c) => (
+            <div key={c.carrier_name} className="flex items-center gap-2">
+              <span className="text-xs w-32 truncate">{c.carrier_name}</span>
+              <div className="flex-1 h-4 bg-gray-100 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full ${c.pmpm <= data.red_bricks_pmpm ? "bg-red-400" : "bg-green-400"}`}
+                  style={{ width: `${(c.pmpm / maxPmpm) * 100}%` }}
+                />
+              </div>
+              <span className="text-xs font-semibold w-16 text-right">
+                ${c.pmpm.toFixed(0)}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SatisfactionStars({ rating }: { rating: number }) {
+  const full = Math.floor(rating);
+  const partial = rating - full;
+  return (
+    <div className="flex items-center gap-0.5">
+      {Array.from({ length: 5 }, (_, i) => (
+        <Star
+          key={i}
+          className={`w-3 h-3 ${
+            i < full
+              ? "text-amber-400 fill-amber-400"
+              : i === full && partial >= 0.5
+              ? "text-amber-400 fill-amber-200"
+              : "text-gray-300"
+          }`}
+        />
+      ))}
+      <span className="text-[10px] text-gray-500 ml-1">{rating.toFixed(1)}</span>
+    </div>
+  );
+}
+
 
 const TIER_COLORS: Record<string, string> = {
   "Extreme Outlier": "bg-red-500",
@@ -150,6 +486,14 @@ export function GroupReportCard({ groupId, onBack, onOpenCoach, onOpenReports }:
         <div className="flex items-center gap-4">
           <HealthScore score={healthScore} />
           <RenewalBadge action={card.renewal_action} />
+          <a
+            href={api.getReportCardPdfUrl(groupId)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn-secondary flex items-center gap-2"
+          >
+            <Download className="w-4 h-4" /> Download Report Card
+          </a>
           <button onClick={onOpenReports} className="btn-secondary flex items-center gap-2">
             <Activity className="w-4 h-4" /> Standard Reports
           </button>
@@ -399,6 +743,12 @@ export function GroupReportCard({ groupId, onBack, onOpenCoach, onOpenReports }:
             </div>
           )}
         </div>
+      </div>
+
+      {/* Renewal Scenario Modeling */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <RenewalScenarioPanel groupId={groupId} />
+        <CompetitiveLandscape groupId={groupId} />
       </div>
     </div>
   );

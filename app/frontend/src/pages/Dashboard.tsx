@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Clock, CheckCircle2, Users, TrendingUp, ShieldAlert } from "lucide-react";
-import { api, type DashboardStats } from "@/lib/api";
+import { AlertTriangle, Clock, CheckCircle2, Users, TrendingUp, ShieldAlert, BarChart3 } from "lucide-react";
+import { api, type DashboardStats, type EmbedConfig } from "@/lib/api";
 
 export function Dashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [embedConfig, setEmbedConfig] = useState<EmbedConfig | null>(null);
+  const [showEmbed, setShowEmbed] = useState(false);
 
   useEffect(() => {
     api.getDashboardStats().then(setStats).finally(() => setLoading(false));
+    api.getEmbedConfig().then(setEmbedConfig).catch(() => {});
   }, []);
 
   if (loading) {
@@ -141,6 +144,40 @@ export function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* Embedded AI/BI Dashboard */}
+      {embedConfig?.workspace_url && (
+        <div className="card p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-databricks-dark flex items-center gap-2">
+              <BarChart3 className="w-5 h-5 text-databricks-red" /> AI/BI Analytics Dashboard
+            </h3>
+            <button
+              onClick={() => setShowEmbed(!showEmbed)}
+              className="text-sm text-gray-500 hover:text-databricks-red transition-colors px-3 py-1.5 rounded-lg border border-gray-200 hover:border-databricks-red"
+            >
+              {showEmbed ? "Hide Dashboard" : "Show Embedded Dashboard"}
+            </button>
+          </div>
+          {showEmbed && (
+            <div className="rounded-lg border border-gray-200 overflow-hidden">
+              <iframe
+                src={`${embedConfig.workspace_url}/dashboardsv3/embedded`}
+                className="w-full border-0"
+                style={{ height: "700px" }}
+                title="AI/BI Dashboard"
+                allow="clipboard-write"
+              />
+            </div>
+          )}
+          {!showEmbed && (
+            <p className="text-sm text-gray-400">
+              Click "Show Embedded Dashboard" to view Lakeview AI/BI analytics inline.
+              Executive KPIs, PMPM trends, HEDIS compliance, and population risk insights.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

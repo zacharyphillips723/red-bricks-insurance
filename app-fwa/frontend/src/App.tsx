@@ -6,6 +6,7 @@ import { InvestigationDetail } from "@/pages/InvestigationDetail";
 import { ProviderAnalysis } from "@/pages/ProviderAnalysis";
 import { AgentChat } from "@/pages/AgentChat";
 import { CaseloadView } from "@/pages/CaseloadView";
+import { NetworkGraph } from "@/pages/NetworkGraph";
 import { api } from "@/lib/api";
 
 export default function App() {
@@ -57,6 +58,8 @@ export default function App() {
         ) : (
           <ProviderAnalysis />
         );
+      case "network":
+        return <NetworkGraph />;
       case "agent":
         return <AgentChat />;
       case "caseload":

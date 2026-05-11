@@ -101,6 +101,100 @@ export interface GenieResponse {
   rows: unknown[][];
 }
 
+// --- Rate Build-Up Types ---
+
+export interface RateBuildupStep {
+  step_name: string;
+  factor_label: string;
+  factor_value: number;
+  running_total: number;
+  description: string;
+}
+
+export interface RateBuildupResult {
+  base_rate: number;
+  steps: RateBuildupStep[];
+  final_rate: number;
+  current_rate?: number;
+  rate_change?: number;
+  rate_change_pct?: number;
+  lob: string;
+  narrative: string;
+}
+
+export interface RateBuildupInput {
+  group_id?: string;
+  avg_age_band?: string;
+  county_type?: string;
+  sic_code?: string;
+  loss_ratio?: number;
+  credibility_factor?: number;
+  trend_pct?: number;
+  lob?: string;
+}
+
+export interface FactorTableEntry {
+  [key: string]: string | number;
+}
+
+export interface FactorTable {
+  table_name: string;
+  description: string;
+  factors: FactorTableEntry[];
+}
+
+export interface FactorTables {
+  age_factors: FactorTable;
+  area_factors: FactorTable;
+  industry_factors: FactorTable;
+  trend_factors: FactorTable;
+  experience_mod_ranges: FactorTable;
+}
+
+// --- Risk Pool Types ---
+
+export interface DistributionBucket {
+  label: string;
+  group_value: number;
+  book_value: number;
+}
+
+export interface ConditionPrevalence {
+  condition: string;
+  group_pct: number;
+  book_pct: number;
+  delta_pct: number;
+}
+
+export interface CostDriver {
+  category: string;
+  pmpm: number;
+  pct_of_total: number;
+}
+
+export interface RiskPoolResult {
+  group_id: string;
+  group_member_count: number;
+  group_avg_raf: number;
+  book_avg_raf: number;
+  raf_distribution: DistributionBucket[];
+  age_distribution: DistributionBucket[];
+  condition_prevalence: ConditionPrevalence[];
+  top_cost_drivers: CostDriver[];
+  adverse_selection_flag: boolean;
+  adverse_selection_severity?: string;
+  narrative: string;
+}
+
+export interface BookOfBusinessSummary {
+  total_members: number;
+  avg_raf: number;
+  avg_age: number;
+  raf_distribution: Record<string, unknown>[];
+  age_distribution: Record<string, unknown>[];
+  top_chronic_conditions: Record<string, unknown>[];
+}
+
 // --- API Methods ---
 
 export const api = {
@@ -181,4 +275,21 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ question, conversation_id: conversationId }),
     }),
+
+  // Pricing — Rate Build-Up
+  computeRateBuildup: (input: RateBuildupInput) =>
+    fetchApi<RateBuildupResult>("/pricing/rate-buildup", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  getFactorTables: () =>
+    fetchApi<FactorTables>("/pricing/factor-tables"),
+
+  // Risk Pool
+  getGroupRiskPool: (groupId: string) =>
+    fetchApi<RiskPoolResult>(`/groups/${encodeURIComponent(groupId)}/risk-pool`),
+
+  getBookOfBusinessSummary: () =>
+    fetchApi<BookOfBusinessSummary>("/book-of-business/risk-summary"),
 };

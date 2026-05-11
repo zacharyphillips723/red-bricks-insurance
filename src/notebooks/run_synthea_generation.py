@@ -30,6 +30,29 @@ print(f"Volume base: {volume_base}")
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ## Early Exit — Skip if Synthea Data Already Exists
+
+# COMMAND ----------
+
+import os
+
+_synthea_fhir_dir = f"{volume_base}/synthea_raw/fhir"
+_synthea_demo_dir = f"{volume_base}/synthea_demographics"
+
+if os.path.isdir(_synthea_fhir_dir) and os.path.isdir(_synthea_demo_dir):
+    _fhir_count = len([f for f in os.listdir(_synthea_fhir_dir) if f.endswith(".json")])
+    _demo_files = os.listdir(_synthea_demo_dir) if os.path.isdir(_synthea_demo_dir) else []
+    if _fhir_count >= 100:  # reasonable threshold — we expect ~5000
+        print(f"Synthea data already exists: {_fhir_count} FHIR bundles in {_synthea_fhir_dir}")
+        print(f"Demographics dir has {len(_demo_files)} files")
+        print("Skipping regeneration — delete synthea_raw/ to force a fresh run.")
+        dbutils.notebook.exit(f"SKIPPED: {_fhir_count} FHIR bundles already present")
+
+print("No existing Synthea data found — proceeding with generation...")
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## Configuration
 
 # COMMAND ----------

@@ -139,6 +139,35 @@ export interface AgentResponse {
   sources: Record<string, unknown>[];
 }
 
+export interface NetworkNode {
+  id: string;
+  type: "provider" | "member";
+  name: string;
+  risk_score: number;
+  investigation_count: number;
+  claim_count?: number;
+  estimated_overpayment?: number;
+}
+
+export interface NetworkEdge {
+  source: string;
+  target: string;
+  weight: number;
+  total_billed: number;
+  fraud_score?: number;
+}
+
+export interface NetworkGraphData {
+  nodes: NetworkNode[];
+  edges: NetworkEdge[];
+  stats: {
+    total_providers: number;
+    total_members: number;
+    total_claims: number;
+    total_overpayment: number;
+  };
+}
+
 // --- API Functions ---
 
 export const api = {
@@ -192,6 +221,12 @@ export const api = {
 
   getProviderMLScores: (npi: string) =>
     fetchApi<Record<string, unknown>[]>(`/providers/${npi}/ml-scores`),
+
+  getProviderShapValues: (npi: string) =>
+    fetchApi<Record<string, number>>(`/providers/${npi}/shap-values`),
+
+  // Network Graph
+  getNetworkGraph: () => fetchApi<NetworkGraphData>("/network-graph"),
 
   // Agent
   queryAgent: (question: string, targetId?: string, targetType?: string) =>

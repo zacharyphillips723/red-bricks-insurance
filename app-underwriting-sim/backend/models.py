@@ -164,3 +164,107 @@ class GenieResponseOut(BaseModel):
     description: Optional[str] = None
     columns: list[str] = Field(default_factory=list)
     rows: list[list] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Actuarial Pricing — Rate Build-Up
+# ---------------------------------------------------------------------------
+
+class RateBuildupIn(BaseModel):
+    """Input for community-rated actuarial pricing model."""
+    group_id: Optional[str] = None
+    avg_age_band: Optional[str] = Field(None, description="e.g. '26-35', '36-45'")
+    county_type: Optional[str] = Field(None, description="urban, suburban, rural")
+    sic_code: Optional[str] = Field(None, description="Industry SIC code or label")
+    loss_ratio: Optional[float] = Field(None, description="Group's own loss ratio (0-2+)")
+    credibility_factor: Optional[float] = Field(None, description="0.0-1.0 credibility weight")
+    trend_pct: Optional[float] = Field(None, description="Annual medical trend %")
+    lob: Optional[str] = Field("Commercial", description="Line of business")
+
+
+class RateBuildupStep(BaseModel):
+    """A single step in the rate build-up cascade."""
+    step_name: str
+    factor_label: str
+    factor_value: float
+    running_total: float
+    description: str
+
+
+class RateBuildupOut(BaseModel):
+    """Full rate build-up result."""
+    base_rate: float
+    steps: list[RateBuildupStep]
+    final_rate: float
+    current_rate: Optional[float] = None
+    rate_change: Optional[float] = None
+    rate_change_pct: Optional[float] = None
+    lob: str
+    narrative: str
+
+
+class FactorTable(BaseModel):
+    """A reference factor table."""
+    table_name: str
+    description: str
+    factors: list[dict]
+
+
+class FactorTablesOut(BaseModel):
+    """All actuarial factor tables."""
+    age_factors: FactorTable
+    area_factors: FactorTable
+    industry_factors: FactorTable
+    trend_factors: FactorTable
+    experience_mod_ranges: FactorTable
+
+
+# ---------------------------------------------------------------------------
+# Risk Pool Visualization
+# ---------------------------------------------------------------------------
+
+class DistributionBucket(BaseModel):
+    """A histogram bucket for distribution comparisons."""
+    label: str
+    group_value: float
+    book_value: float
+
+
+class ConditionPrevalence(BaseModel):
+    """Chronic condition prevalence comparison."""
+    condition: str
+    group_pct: float
+    book_pct: float
+    delta_pct: float
+
+
+class CostDriver(BaseModel):
+    """Top cost driver for a group."""
+    category: str
+    pmpm: float
+    pct_of_total: float
+
+
+class RiskPoolOut(BaseModel):
+    """Risk pool analysis for a group vs book of business."""
+    group_id: str
+    group_member_count: int
+    group_avg_raf: float
+    book_avg_raf: float
+    raf_distribution: list[DistributionBucket]
+    age_distribution: list[DistributionBucket]
+    condition_prevalence: list[ConditionPrevalence]
+    top_cost_drivers: list[CostDriver]
+    adverse_selection_flag: bool
+    adverse_selection_severity: Optional[str] = None
+    narrative: str
+
+
+class BookOfBusinessSummaryOut(BaseModel):
+    """Aggregate book-of-business risk summary."""
+    total_members: int
+    avg_raf: float
+    avg_age: float
+    raf_distribution: list[dict]
+    age_distribution: list[dict]
+    top_chronic_conditions: list[dict]

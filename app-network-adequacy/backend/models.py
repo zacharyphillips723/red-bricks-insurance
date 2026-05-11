@@ -131,6 +131,84 @@ class NetworkGap(BaseModel):
     telehealth_credit_applied: Optional[bool] = None
 
 
+# --- Geographic / Map Detail ---
+
+class GeoProvider(BaseModel):
+    npi: str
+    provider_name: str
+    specialty: str
+    cms_specialty_type: Optional[str] = None
+    network_status: str = "In-Network"
+    county_name: str = ""
+    latitude: float
+    longitude: float
+    panel_size: int = 0
+    accepts_new_patients: bool = True
+    telehealth_capable: bool = False
+
+
+class GeoMemberCluster(BaseModel):
+    """Aggregated member cluster by county + zip for map display."""
+    county_fips: str
+    county_name: str
+    zip_code: str
+    latitude: float
+    longitude: float
+    member_count: int
+    risk_tier: str = "Standard"  # Low, Standard, High, Critical
+
+
+class CountyComplianceSummary(BaseModel):
+    """County-level compliance summary for map overlays."""
+    county_fips: str
+    county_name: str
+    county_type: str
+    latitude: float = 0.0
+    longitude: float = 0.0
+    overall_compliant: bool = True
+    specialties_compliant: int = 0
+    specialties_non_compliant: int = 0
+    total_specialties: int = 0
+    gap_members: int = 0
+    total_members: int = 0
+    avg_compliance_pct: float = 0.0
+    non_compliant_specialties: list[str] = []
+
+
+# --- Recruitment Workflow ---
+
+class RecruitmentStatusUpdate(BaseModel):
+    npi: str
+    status: str  # Identified, Contacted, Interested, Contracted, Active
+    notes: Optional[str] = None
+
+
+class RecruitmentRecord(BaseModel):
+    npi: str
+    specialty: Optional[str] = None
+    county_name: Optional[str] = None
+    status: str = "Identified"
+    potential_savings: float = 0.0
+    members_served: int = 0
+    priority_score: float = 0.0
+    notes: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class OutreachLetterRequest(BaseModel):
+    npi: str
+    provider_name: Optional[str] = None
+    specialty: Optional[str] = None
+    county_name: Optional[str] = None
+    potential_savings: float = 0.0
+    members_served: int = 0
+
+
+class OutreachLetterResponse(BaseModel):
+    npi: str
+    letter: str
+
+
 # --- Map / Geographic View ---
 
 class CountyMapMetric(BaseModel):

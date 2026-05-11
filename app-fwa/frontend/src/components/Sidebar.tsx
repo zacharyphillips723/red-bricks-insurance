@@ -2,15 +2,16 @@ import {
   LayoutDashboard,
   FileSearch,
   Users,
-  Search,
   Bot,
   ShieldAlert,
+  Share2,
 } from "lucide-react";
 
 const navItems = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: "investigations", label: "Investigation Queue", icon: FileSearch },
   { id: "providers", label: "Provider Analysis", icon: ShieldAlert },
+  { id: "network", label: "Network Graph", icon: Share2 },
   { id: "agent", label: "FWA Agent", icon: Bot },
   { id: "caseload", label: "Caseload", icon: Users },
 ];

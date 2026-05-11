@@ -15,12 +15,16 @@ from .models import (
     AgentQueryIn,
     AgentQueryOut,
     AssignReviewerIn,
+    ComplianceMetricsOut,
     DashboardStats,
+    OverdueRequestOut,
     PARequestDetailOut,
     PARequestListOut,
     ReviewerCaseload,
     ReviewerOut,
+    TurnaroundBucket,
     UpdateStatusIn,
+    WeeklyTrend,
 )
 
 api = APIRouter(prefix="/api")
@@ -376,6 +380,118 @@ async def get_reviewer_caseload():
             FROM v_reviewer_caseload ORDER BY active_cases DESC
         """))
         return [ReviewerCaseload(**dict(r)) for r in result.mappings().all()]
+
+
+# ===================================================================
+# Compliance
+# ===================================================================
+
+@api.get("/compliance/metrics", response_model=ComplianceMetricsOut, operation_id="getComplianceMetrics")
+async def get_compliance_metrics():
+    async with db.session() as session:
+        # Core compliance KPIs
+        kpi_result = await session.execute(text("""
+            SELECT
+                ROUND(
+                    SUM(CASE WHEN cms_compliant THEN 1 ELSE 0 END) * 100.0
+                    / NULLIF(SUM(CASE WHEN status IN ('Approved', 'Denied', 'Partially Approved')
+                        THEN 1 ELSE 0 END), 0), 2
+                ) AS compliance_rate,
+                ROUND(AVG(turnaround_hours) FILTER (WHERE urgency = 'standard' AND turnaround_hours IS NOT NULL), 1)
+                    AS avg_turnaround_standard,
+                ROUND(AVG(turnaround_hours) FILTER (WHERE urgency = 'expedited' AND turnaround_hours IS NOT NULL), 1)
+                    AS avg_turnaround_expedited,
+                COUNT(*) FILTER (WHERE status IN ('Pending Review', 'In Review', 'Additional Info Requested')
+                    AND cms_deadline < now()) AS overdue_count,
+                COUNT(*) FILTER (WHERE status IN ('Approved', 'Denied', 'Partially Approved'))
+                    AS total_determined,
+                COUNT(*) FILTER (WHERE determination_tier = 'tier_1_auto')
+                    AS total_auto
+            FROM pa_review_queue
+        """))
+        kpi = kpi_result.mappings().one()
+
+        total_determined = kpi["total_determined"]
+        total_auto = kpi["total_auto"]
+        auto_rate = round(total_auto * 100.0 / total_determined, 2) if total_determined > 0 else None
+
+        # Turnaround distribution buckets
+        dist_result = await session.execute(text("""
+            SELECT
+                CASE
+                    WHEN turnaround_hours < 24 THEN '0-24h'
+                    WHEN turnaround_hours < 48 THEN '24-48h'
+                    WHEN turnaround_hours < 72 THEN '48-72h'
+                    WHEN turnaround_hours < 96 THEN '72-96h'
+                    WHEN turnaround_hours < 120 THEN '96-120h'
+                    ELSE '120h+'
+                END AS bucket,
+                COUNT(*) AS cnt,
+                CASE WHEN turnaround_hours < 72 THEN TRUE ELSE FALSE END AS compliant
+            FROM pa_review_queue
+            WHERE turnaround_hours IS NOT NULL
+            GROUP BY bucket, compliant
+            ORDER BY MIN(turnaround_hours)
+        """))
+        distribution = [
+            TurnaroundBucket(bucket=r["bucket"], count=r["cnt"], compliant=r["compliant"])
+            for r in dist_result.mappings().all()
+        ]
+
+        # Weekly compliance trend
+        trend_result = await session.execute(text("""
+            SELECT
+                to_char(date_trunc('week', determination_date), 'YYYY-MM-DD') AS week,
+                ROUND(
+                    SUM(CASE WHEN cms_compliant THEN 1 ELSE 0 END) * 100.0
+                    / NULLIF(COUNT(*), 0), 2
+                ) AS compliance_rate,
+                COUNT(*) AS total
+            FROM pa_review_queue
+            WHERE determination_date IS NOT NULL
+            GROUP BY date_trunc('week', determination_date)
+            ORDER BY date_trunc('week', determination_date)
+        """))
+        weekly_trend = [
+            WeeklyTrend(week=r["week"], compliance_rate=float(r["compliance_rate"] or 0), total=r["total"])
+            for r in trend_result.mappings().all()
+        ]
+
+        return ComplianceMetricsOut(
+            compliance_rate=float(kpi["compliance_rate"]) if kpi["compliance_rate"] else None,
+            avg_turnaround_standard=float(kpi["avg_turnaround_standard"]) if kpi["avg_turnaround_standard"] else None,
+            avg_turnaround_expedited=float(kpi["avg_turnaround_expedited"]) if kpi["avg_turnaround_expedited"] else None,
+            overdue_count=kpi["overdue_count"],
+            auto_adjudication_rate=auto_rate,
+            total_determined=total_determined,
+            total_auto=total_auto,
+            turnaround_distribution=distribution,
+            weekly_trend=weekly_trend,
+        )
+
+
+@api.get("/compliance/overdue", response_model=list[OverdueRequestOut], operation_id="getOverdueRequests")
+async def get_overdue_requests():
+    async with db.session() as session:
+        result = await session.execute(text("""
+            SELECT
+                q.auth_request_id,
+                q.member_name,
+                q.service_type,
+                q.procedure_code,
+                q.urgency::text,
+                r.display_name AS reviewer_name,
+                q.cms_deadline,
+                EXTRACT(EPOCH FROM (now() - q.cms_deadline)) / 3600.0 AS hours_overdue,
+                q.request_date
+            FROM pa_review_queue q
+            LEFT JOIN pa_reviewers r ON q.assigned_reviewer_id = r.reviewer_id
+            WHERE q.status IN ('Pending Review', 'In Review', 'Additional Info Requested')
+              AND q.cms_deadline < now()
+            ORDER BY q.cms_deadline ASC
+        """))
+        rows = result.mappings().all()
+        return [OverdueRequestOut(**_coerce_row(r)) for r in rows]
 
 
 # ===================================================================

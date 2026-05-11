@@ -429,6 +429,139 @@ RETURN (
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ## Composite / Triage Tools
+
+# COMMAND ----------
+
+register_function("assess_risk", """
+CREATE OR REPLACE FUNCTION ai_tools.assess_risk(member_id STRING)
+RETURNS STRING
+COMMENT 'Comprehensive risk assessment for a member. Aggregates clinical risk (RAF, HCC), social determinants (SDOH screening), care gap status, and recent transitions of care into a single risk profile. Returns risk_tier, raf_score, demographics, SDOH flags, open care gap count, recent discharge status, and a computed overall_risk_level. Use this for care management triage, population health stratification, and intervention prioritization.'
+RETURN (
+  SELECT to_json(named_struct(
+    'risk_tier', m.risk_tier,
+    'raf_score', m.raf_score,
+    'age', m.age,
+    'gender', m.gender,
+    'top_diagnoses', m.top_diagnoses,
+    'hcc_count', m.hcc_count,
+    'hedis_gap_count', m.hedis_gap_count,
+    'hedis_gap_measures', m.hedis_gap_measures,
+    'total_paid_ytd', m.total_paid_ytd,
+    'line_of_business', m.line_of_business,
+    'composite_sdoh_risk_score', s.composite_sdoh_risk_score,
+    'total_sdoh_flags', s.total_sdoh_flags,
+    'food_insecurity', s.food_insecurity_flag,
+    'housing_instability', s.housing_instability_flag,
+    'transportation_barrier', s.transportation_barrier_flag,
+    'social_isolation', s.social_isolation_flag,
+    'financial_strain', s.financial_strain_flag,
+    'open_care_gap_count', COALESCE(g.open_gap_count, 0),
+    'recent_discharge', CASE WHEN t.toc_id IS NOT NULL THEN TRUE ELSE FALSE END,
+    'readmission_risk_tier', t.readmission_risk_tier,
+    'overall_risk_level', CASE
+      WHEN m.raf_score > 3 OR COALESCE(s.composite_sdoh_risk_score, 0) > 70 THEN 'Critical'
+      WHEN m.raf_score > 2 OR COALESCE(s.composite_sdoh_risk_score, 0) > 50 THEN 'High'
+      WHEN m.raf_score > 1 THEN 'Moderate'
+      ELSE 'Low'
+    END
+  ))
+  FROM analytics.gold_member_360 m
+  LEFT JOIN (
+    SELECT * FROM (
+      SELECT *, ROW_NUMBER() OVER (PARTITION BY member_id ORDER BY screening_date DESC) AS rn
+      FROM care_management.silver_member_sdoh
+    ) WHERE rn = 1
+  ) s ON m.member_id = s.member_id
+  LEFT JOIN (
+    SELECT cg.member_id, CAST(COUNT(*) AS INT) AS open_gap_count
+    FROM care_management.silver_care_gaps cg
+    LEFT JOIN care_management.silver_gap_closure_events ce ON cg.gap_id = ce.gap_id
+    WHERE ce.gap_id IS NULL
+    GROUP BY cg.member_id
+  ) g ON m.member_id = g.member_id
+  LEFT JOIN (
+    SELECT * FROM (
+      SELECT *, ROW_NUMBER() OVER (PARTITION BY member_id ORDER BY discharge_date DESC) AS rn
+      FROM care_management.silver_toc_episodes
+      WHERE discharge_date >= DATE_ADD(CURRENT_DATE(), -30)
+    ) WHERE rn = 1
+  ) t ON m.member_id = t.member_id
+  WHERE m.member_id = assess_risk.member_id
+  LIMIT 1
+)
+""")
+
+# COMMAND ----------
+
+register_function("get_outreach_context", """
+CREATE OR REPLACE FUNCTION ai_tools.get_outreach_context(member_id STRING)
+RETURNS STRING
+COMMENT 'Get all context needed to generate a personalized outreach script for a member. Returns member demographics, active conditions, SDOH concerns, open care gaps, and care program enrollments. Designed for care managers and AI agents to draft phone, email, or SMS outreach that is personalized and clinically relevant.'
+RETURN (
+  SELECT to_json(named_struct(
+    'member_name', m.member_name,
+    'age', m.age,
+    'gender', m.gender,
+    'risk_tier', m.risk_tier,
+    'top_diagnoses', m.top_diagnoses,
+    'hedis_gap_measures', m.hedis_gap_measures,
+    'pcp_npi', m.pcp_npi,
+    'line_of_business', m.line_of_business,
+    'county', m.county,
+    'sdoh_concerns', s.active_sdoh_concerns,
+    'open_care_gaps', g.open_gaps,
+    'active_programs', p.active_programs
+  ))
+  FROM analytics.gold_member_360 m
+  LEFT JOIN (
+    SELECT member_id,
+      CONCAT_WS(', ',
+        CASE WHEN food_insecurity_flag THEN 'Food Insecurity' END,
+        CASE WHEN housing_instability_flag THEN 'Housing Instability' END,
+        CASE WHEN transportation_barrier_flag THEN 'Transportation Barrier' END,
+        CASE WHEN social_isolation_flag THEN 'Social Isolation' END,
+        CASE WHEN financial_strain_flag THEN 'Financial Strain' END
+      ) AS active_sdoh_concerns
+    FROM (
+      SELECT *, ROW_NUMBER() OVER (PARTITION BY member_id ORDER BY screening_date DESC) AS rn
+      FROM care_management.silver_member_sdoh
+    ) WHERE rn = 1
+  ) s ON m.member_id = s.member_id
+  LEFT JOIN (
+    SELECT member_id, to_json(collect_list(named_struct(
+      'measure_name', measure_name,
+      'condition', condition,
+      'priority', priority,
+      'gap_age_days', gap_age_days
+    ))) AS open_gaps
+    FROM (
+      SELECT cg.member_id, cg.measure_name, cg.condition, cg.priority, cg.gap_age_days
+      FROM care_management.silver_care_gaps cg
+      LEFT JOIN care_management.silver_gap_closure_events ce ON cg.gap_id = ce.gap_id
+      WHERE ce.gap_id IS NULL
+      ORDER BY cg.priority, cg.gap_age_days DESC
+      LIMIT 5
+    )
+    GROUP BY member_id
+  ) g ON m.member_id = g.member_id
+  LEFT JOIN (
+    SELECT member_id, to_json(collect_list(named_struct(
+      'program_name', program_name,
+      'enrollment_date', CAST(enrollment_date AS STRING)
+    ))) AS active_programs
+    FROM care_management.silver_program_enrollment
+    WHERE status = 'Active'
+    GROUP BY member_id
+  ) p ON m.member_id = p.member_id
+  WHERE m.member_id = get_outreach_context.member_id
+  LIMIT 1
+)
+""")
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## Grant Permissions
 # MAGIC Grant EXECUTE on the `ai_tools` schema so the Command Center app service
 # MAGIC principal (and any other consumer) can invoke these functions.

@@ -45,6 +45,9 @@ export function RequestDetail({ requestId, onBack }: RequestDetailProps) {
   const [agentResponse, setAgentResponse] = useState<AgentResponse | null>(null);
   const [agentLoading, setAgentLoading] = useState(false);
   const agentRef = useRef<HTMLDivElement>(null);
+  const [policyRules, setPolicyRules] = useState<Record<string, unknown>[]>([]);
+  const [policyRulesLoading, setPolicyRulesLoading] = useState(false);
+  const [appealFiling, setAppealFiling] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -53,6 +56,14 @@ export function RequestDetail({ requestId, onBack }: RequestDetailProps) {
     ]).then(([req, revs]) => {
       setDetail(req);
       setReviewers(revs);
+      // Fetch policy rules if policy_id exists
+      if (req.policy_id) {
+        setPolicyRulesLoading(true);
+        api.getPolicyRules(req.policy_id)
+          .then(setPolicyRules)
+          .catch(console.error)
+          .finally(() => setPolicyRulesLoading(false));
+      }
     }).catch(console.error).finally(() => setLoading(false));
   }, [requestId]);
 
@@ -92,6 +103,18 @@ export function RequestDetail({ requestId, onBack }: RequestDetailProps) {
     } finally {
       setAgentLoading(false);
       setAgentQuestion("");
+    }
+  };
+
+  const handleFileAppeal = async () => {
+    setAppealFiling(true);
+    try {
+      const updated = await api.addNote(requestId, "Appeal filed by reviewer. Initiating appeal review process per CMS-0057-F guidelines.");
+      setDetail(updated);
+    } catch (e) {
+      console.error("Failed to file appeal:", e);
+    } finally {
+      setAppealFiling(false);
     }
   };
 
@@ -223,6 +246,135 @@ export function RequestDetail({ requestId, onBack }: RequestDetailProps) {
               {detail.tier1_auto_eligible && (
                 <div className="mt-2 flex items-center gap-1 text-xs text-green-700 bg-green-50 px-2 py-1 rounded w-fit">
                   <CheckCircle size={12} /> Tier 1 Auto-Eligible
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Clinical Criteria Review */}
+          {detail.policy_id && (
+            <div className="card">
+              <h3 className="font-semibold text-databricks-dark mb-3 flex items-center gap-2">
+                <FileText size={16} className="text-blue-500" /> Clinical Criteria Review
+              </h3>
+              {policyRulesLoading ? (
+                <div className="animate-pulse space-y-3">
+                  {Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-12 bg-gray-100 rounded" />)}
+                </div>
+              ) : policyRules.length === 0 ? (
+                <p className="text-sm text-gray-400">No policy rules available for this policy.</p>
+              ) : (
+                <div className="grid grid-cols-2 gap-4">
+                  {/* Left: Policy Rules */}
+                  <div>
+                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Medical Policy Criteria</h4>
+                    <div className="space-y-2">
+                      {policyRules.map((rule, i) => {
+                        const ruleName = String(rule.rule_name || rule.criterion || rule.criteria_name || `Rule ${i + 1}`);
+                        const ruleDesc = String(rule.rule_description || rule.description || rule.requirement || "");
+                        const met = rule.met !== undefined ? Boolean(rule.met) : rule.criteria_met !== undefined ? Boolean(rule.criteria_met) : null;
+                        return (
+                          <div key={i} className="flex items-start gap-2 p-2 bg-gray-50 rounded-md">
+                            {met === true ? (
+                              <CheckCircle size={16} className="text-green-500 mt-0.5 flex-shrink-0" />
+                            ) : met === false ? (
+                              <XCircle size={16} className="text-red-500 mt-0.5 flex-shrink-0" />
+                            ) : (
+                              <AlertTriangle size={16} className="text-gray-400 mt-0.5 flex-shrink-0" />
+                            )}
+                            <div>
+                              <p className="text-sm font-medium text-databricks-dark">{ruleName}</p>
+                              {ruleDesc && <p className="text-xs text-gray-500 mt-0.5">{ruleDesc}</p>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  {/* Right: Patient Clinical Data */}
+                  <div>
+                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Patient Clinical Data</h4>
+                    <div className="space-y-3">
+                      {detail.clinical_summary && (
+                        <div className="p-2 bg-blue-50 rounded-md">
+                          <p className="text-xs font-semibold text-blue-700 mb-1">Clinical Summary</p>
+                          <p className="text-xs text-gray-700 leading-relaxed">{detail.clinical_summary}</p>
+                        </div>
+                      )}
+                      {detail.clinical_extraction && (
+                        <div className="p-2 bg-blue-50 rounded-md">
+                          <p className="text-xs font-semibold text-blue-700 mb-1">Clinical Extraction</p>
+                          <p className="text-xs text-gray-700 leading-relaxed whitespace-pre-wrap">{detail.clinical_extraction}</p>
+                        </div>
+                      )}
+                      {detail.diagnosis_codes && (
+                        <div className="p-2 bg-blue-50 rounded-md">
+                          <p className="text-xs font-semibold text-blue-700 mb-1">Diagnosis Codes</p>
+                          <p className="text-xs font-mono text-gray-700">{detail.diagnosis_codes}</p>
+                        </div>
+                      )}
+                      {detail.ai_recommendation && (
+                        <div className="p-2 bg-purple-50 rounded-md">
+                          <p className="text-xs font-semibold text-purple-700 mb-1">AI Recommendation</p>
+                          <p className="text-xs text-gray-700">{detail.ai_recommendation}</p>
+                          {detail.ai_confidence !== null && (
+                            <p className="text-xs text-purple-600 mt-1 font-medium">
+                              Confidence: {((detail.ai_confidence || 0) * 100).toFixed(0)}%
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Appeal Status */}
+          {(detail.appeal_filed || detail.status === "Denied") && (
+            <div className="card border-l-4 border-l-amber-400">
+              <h3 className="font-semibold text-databricks-dark mb-3 flex items-center gap-2">
+                <AlertTriangle size={16} className="text-amber-500" /> Appeal Status
+              </h3>
+              {detail.appeal_filed ? (
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Appeal Filed</span>
+                    <span className="text-green-600 font-medium flex items-center gap-1">
+                      <CheckCircle size={14} /> Yes
+                    </span>
+                  </div>
+                  {detail.appeal_date && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Filed Date</span>
+                      <span>{formatDate(detail.appeal_date)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Outcome</span>
+                    <span className={`font-medium ${
+                      detail.appeal_outcome === "Overturned" ? "text-green-600" :
+                      detail.appeal_outcome === "Upheld" ? "text-red-600" :
+                      "text-amber-600"
+                    }`}>
+                      {detail.appeal_outcome || "Pending"}
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <p className="text-sm text-gray-600 mb-3">
+                    This request has been denied. An appeal can be filed to request reconsideration.
+                  </p>
+                  <button
+                    onClick={handleFileAppeal}
+                    disabled={appealFiling}
+                    className="btn-primary text-sm flex items-center gap-2"
+                  >
+                    <FileText size={14} />
+                    {appealFiling ? "Filing..." : "File Appeal"}
+                  </button>
                 </div>
               )}
             </div>

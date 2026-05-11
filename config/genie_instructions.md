@@ -153,6 +153,94 @@ by RAF score.
 - How many referrals have been completed vs pending by resource type?
 - What is the cost impact of members with SDOH flags vs without?
 
+## Metric Views — Governed Semantic Layer
+
+Red Bricks Insurance publishes **metric views** in Unity Catalog that define
+measures and dimensions as governed objects. When a metric view exists for a
+question, **prefer it over querying gold tables directly** — metric views
+guarantee consistent definitions across dashboards, notebooks, and this Genie space.
+
+### How to Query Metric Views
+
+Use the `MEASURE()` function to reference named measures:
+
+```sql
+-- PMPM by line of business
+SELECT `line_of_business`, MEASURE(`PMPM Paid`) AS pmpm
+FROM mv_financial_overview
+GROUP BY `line_of_business`;
+
+-- MLR compliance with admin ratio
+SELECT `line_of_business`, `service_year`,
+       MEASURE(`MLR`) AS mlr, MEASURE(`Admin Ratio`) AS admin_ratio
+FROM mv_mlr_compliance
+GROUP BY `line_of_business`, `service_year`;
+
+-- Total Cost of Care by LOB and cost tier
+SELECT `line_of_business`, `cost_tier`,
+       MEASURE(`Avg TCOC`) AS avg_tcoc, MEASURE(`Avg TCI`) AS avg_tci
+FROM mv_cost_of_care
+GROUP BY `line_of_business`, `cost_tier`;
+```
+
+### Available Metric Views
+
+| Metric View | Measures | Dimensions |
+|---|---|---|
+| `mv_financial_overview` | Total Paid, Total Allowed, PMPM Paid, PMPM Allowed, Member Months | line_of_business, service_year_month |
+| `mv_mlr_compliance` | MLR, Total Claims Paid, Total Premiums, Medical Claims, Pharmacy Claims, Admin Ratio | line_of_business, service_year |
+| `mv_utilization` | Claims per 1000, Patients per 1000, Cost per 1000, Admits per 1000, Avg Cost per Claim, Total Claims, Member Months | line_of_business, service_year, service_category |
+| `mv_enrollment` | Member Months, Active Members, Avg Premium, Premium Revenue, Avg Risk Score | line_of_business, plan_type, eligibility_year, eligibility_month |
+| `mv_ibnr` | Avg Payment Lag Days, Completion Rate, Claims Over 90 Days Pct, Total Claims | service_year_month |
+| `mv_denials` | Denial Count, Total Denied Amount, Avg Denied Amount | denial_category, line_of_business, claim_type |
+| `mv_cost_of_care` | Avg TCOC, Avg TCI, Avg Actual PMPM, Total Paid, Total Members, Total Member Months, Avg RAF Score, High Cost Members | line_of_business, cost_tier, is_high_risk |
+| `mv_fwa_risk` | Signal Count, Estimated Overpayment, Avg Fraud Score, High Severity Signals, Distinct Providers, Distinct Members, Overpayment Ratio | fraud_type, severity, line_of_business, detection_method, service_year_month |
+
+### When to Use Metric Views vs Gold Tables
+
+- **Use metric views** for standard KPIs (PMPM, MLR, utilization per 1,000, enrollment counts, denial totals, TCOC, FWA risk)
+- **Use gold tables** for detail-level drill-down, ad-hoc exploratory queries, or columns not exposed as measures
+- Metric views and gold tables return the same answers — the metric view enforces *how* the metric is calculated
+
+## UC AI Functions — `ai_tools` Schema
+
+The `ai_tools` schema contains governed SQL functions that retrieve structured
+data for agents, Genie, and notebooks. These functions are callable from SQL
+and return JSON results.
+
+### How to Call
+
+```sql
+SELECT ai_tools.get_member_profile('MBR-00001');
+SELECT ai_tools.get_claims_summary('MBR-00001');
+SELECT ai_tools.recommend_intervention('MBR-00001');
+```
+
+### Available Functions
+
+| Function | Signature | Description |
+|---|---|---|
+| `get_member_profile` | `(member_id STRING)` | Full Member 360 profile: demographics, enrollment, risk scores, HEDIS gaps, claims totals, top diagnoses, PCP info |
+| `get_lab_results` | `(member_id STRING, max_results INT DEFAULT 15)` | Recent lab results (HbA1c, eGFR, lipids, glucose) with reference ranges and abnormal flags |
+| `get_case_assessments` | `(member_id STRING)` | Clinical and behavioral health assessments (PHQ-9, GAD-7, PRAPARE, Fall Risk, Functional Status) |
+| `get_claims_summary` | `(member_id STRING)` | Claims and cost summary: medical + pharmacy claim counts, paid/billed YTD, top diagnoses |
+| `get_denial_history` | `(member_id STRING)` | Denied claims: claim ID, service date, procedure, diagnosis, billed amount, denial reason |
+| `get_care_programs` | `(member_id STRING)` | Disease management program enrollments: program name, status, dates, referral source |
+| `get_sdoh_screening` | `(member_id STRING)` | Most recent SDOH screening: food insecurity, housing, transportation, isolation, financial strain flags and composite score |
+| `get_care_gaps` | `(member_id STRING)` | HEDIS care gaps with intervention tracking: measure, priority, gap age, intervention count, closure date |
+| `get_toc_history` | `(member_id STRING)` | Transitions of care: discharge details, readmission risk, follow-up type/status/completion |
+| `recommend_intervention` | `(member_id STRING)` | Aggregated next-best-action data: risk profile, SDOH flags, open care gap count |
+| `get_fwa_risk_profile` | `(provider_npi STRING)` | FWA risk profile for a provider: risk score, tier, flagged claims, investigation status |
+| `get_fwa_flagged_claims` | `(target_id STRING, target_type STRING DEFAULT 'provider')` | FWA-flagged claims for a provider or member: fraud score, type, severity, evidence, billed amount |
+| `get_pa_clinical_summary` | `(member_id STRING)` | Clinical summary for prior auth review: risk tier, RAF score, top diagnoses, HCC codes |
+| `get_group_benefit_summary` | `(group_name STRING)` | Employer group benefit summary: member count, total paid, avg cost per member, avg RAF, open gaps |
+| `assess_risk` | `(member_id STRING)` | Comprehensive risk assessment: clinical risk (RAF, HCC), SDOH flags, open care gap count, recent discharge status, and computed overall_risk_level (Critical/High/Moderate/Low) |
+| `get_outreach_context` | `(member_id STRING)` | Outreach context package: member demographics, active conditions, SDOH concerns, open care gaps (top 5), and active program enrollments for personalized outreach |
+
+These functions are callable from Genie, AI agents (Care Intelligence, FWA
+Investigation, Prior Auth Review, Group Sales Coach), and ad-hoc notebooks.
+Each function returns a JSON string and is auditable through Unity Catalog.
+
 ## PHI/PII Reminder
 This is synthetic data for demonstration purposes only. In production,
 apply appropriate column masks and row filters per Unity Catalog policies.

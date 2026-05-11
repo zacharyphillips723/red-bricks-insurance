@@ -5,9 +5,11 @@ import SimulationBuilder from "./pages/SimulationBuilder";
 import ScenarioComparison from "./pages/ScenarioComparison";
 import SimulationHistory from "./pages/SimulationHistory";
 import Agent from "./pages/Agent";
+import RateBuildup from "./pages/RateBuildup";
+import RiskPool from "./pages/RiskPool";
 import { api } from "./lib/api";
 
-type Page = "dashboard" | "builder" | "comparison" | "history" | "agent";
+type Page = "dashboard" | "builder" | "comparison" | "history" | "agent" | "rate-buildup" | "risk-pool";
 
 export default function App() {
   const [page, setPage] = useState<Page>("dashboard");
@@ -39,6 +41,8 @@ export default function App() {
         {page === "builder" && (
           <SimulationBuilder onSaved={refreshSavedCount} />
         )}
+        {page === "rate-buildup" && <RateBuildup />}
+        {page === "risk-pool" && <RiskPool />}
         {page === "comparison" && <ScenarioComparison />}
         {page === "history" && (
           <SimulationHistory onCountChange={setSavedCount} />

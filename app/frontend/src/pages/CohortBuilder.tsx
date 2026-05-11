@@ -11,8 +11,12 @@ import {
   Filter,
   ChevronDown,
   ChevronUp,
+  Save,
+  Trash2,
+  BookMarked,
+  X,
 } from "lucide-react";
-import { api, type CohortAnalytics, type CohortSearchCriteria, type CohortFilterOptions } from "@/lib/api";
+import { api, type CohortAnalytics, type CohortSearchCriteria, type CohortFilterOptions, type SavedCohort } from "@/lib/api";
 
 export function CohortBuilder() {
   const [filters, setFilters] = useState<CohortSearchCriteria>({
@@ -27,8 +31,20 @@ export function CohortBuilder() {
   const [showFilters, setShowFilters] = useState(true);
   const [showMembers, setShowMembers] = useState(false);
 
+  // Saved cohorts state
+  const [savedCohorts, setSavedCohorts] = useState<SavedCohort[]>([]);
+  const [showSaveForm, setShowSaveForm] = useState(false);
+  const [saveName, setSaveName] = useState("");
+  const [saveDescription, setSaveDescription] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const loadSavedCohorts = () => {
+    api.getSavedCohorts().then(setSavedCohorts).catch(() => {});
+  };
+
   useEffect(() => {
     api.getCohortFilterOptions().then(setFilterOptions).catch(() => {});
+    loadSavedCohorts();
   }, []);
 
   const handleSearch = async () => {
@@ -41,6 +57,66 @@ export function CohortBuilder() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSaveCohort = async () => {
+    if (!saveName.trim() || !results) return;
+    setSaving(true);
+    try {
+      await api.saveCohort(saveName.trim(), saveDescription.trim() || null, filters as Record<string, unknown>, results.total_members);
+      setShowSaveForm(false);
+      setSaveName("");
+      setSaveDescription("");
+      loadSavedCohorts();
+    } catch (e) {
+      console.error("Failed to save cohort:", e);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteCohort = async (cohortId: string) => {
+    try {
+      await api.deleteSavedCohort(cohortId);
+      setSavedCohorts((prev) => prev.filter((c) => c.cohort_id !== cohortId));
+    } catch (e) {
+      console.error("Failed to delete cohort:", e);
+    }
+  };
+
+  const handleLoadCohort = (cohort: SavedCohort) => {
+    const c = cohort.criteria as CohortSearchCriteria;
+    setFilters({
+      risk_tiers: c.risk_tiers || [],
+      counties: c.counties || [],
+      lines_of_business: c.lines_of_business || [],
+      min_age: c.min_age ?? null,
+      max_age: c.max_age ?? null,
+      gender: c.gender ?? null,
+      min_raf_score: c.min_raf_score ?? null,
+      has_hedis_gaps: c.has_hedis_gaps ?? null,
+      diagnoses_contain: c.diagnoses_contain ?? null,
+      limit: c.limit || 100,
+    });
+    setShowFilters(true);
+    // Auto-run the search with loaded criteria
+    setLoading(true);
+    api
+      .searchCohort({
+        risk_tiers: c.risk_tiers || [],
+        counties: c.counties || [],
+        lines_of_business: c.lines_of_business || [],
+        min_age: c.min_age,
+        max_age: c.max_age,
+        gender: c.gender,
+        min_raf_score: c.min_raf_score,
+        has_hedis_gaps: c.has_hedis_gaps,
+        diagnoses_contain: c.diagnoses_contain,
+        limit: c.limit || 100,
+      })
+      .then(setResults)
+      .catch((e) => console.error("Cohort search failed:", e))
+      .finally(() => setLoading(false));
   };
 
   const toggleArrayFilter = (key: "risk_tiers" | "counties" | "lines_of_business", value: string) => {
@@ -72,6 +148,54 @@ export function CohortBuilder() {
       <p className="text-sm text-gray-500 mb-6">
         Define cohorts, analyze populations, and identify intervention opportunities
       </p>
+
+      {/* Saved Cohorts Panel */}
+      {savedCohorts.length > 0 && (
+        <div className="bg-white rounded-xl border mb-6">
+          <div className="px-5 py-3 border-b flex items-center gap-2">
+            <BookMarked className="w-4 h-4 text-red-600" />
+            <span className="font-medium text-sm">Saved Cohorts</span>
+            <span className="text-xs text-gray-400 ml-1">({savedCohorts.length})</span>
+          </div>
+          <div className="px-5 py-4 flex flex-wrap gap-3">
+            {savedCohorts.map((cohort) => (
+              <div
+                key={cohort.cohort_id}
+                className="relative group border rounded-lg p-3 hover:border-red-300 hover:bg-red-50/30 cursor-pointer transition-colors min-w-[200px] max-w-[280px]"
+                onClick={() => handleLoadCohort(cohort)}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    <h5 className="text-sm font-semibold text-gray-800 truncate">{cohort.cohort_name}</h5>
+                    {cohort.description && (
+                      <p className="text-xs text-gray-500 truncate mt-0.5">{cohort.description}</p>
+                    )}
+                    <div className="flex items-center gap-3 mt-1.5">
+                      <span className="text-xs text-gray-400">
+                        <Users className="w-3 h-3 inline mr-1" />
+                        {cohort.member_count.toLocaleString()}
+                      </span>
+                      <span className="text-xs text-gray-400">
+                        {new Date(cohort.created_at).toLocaleDateString()}
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteCohort(cohort.cohort_id);
+                    }}
+                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-100 rounded transition-opacity"
+                    title="Delete saved cohort"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Filters Panel */}
       <div className="bg-white rounded-xl border mb-6">
@@ -212,9 +336,65 @@ export function CohortBuilder() {
         )}
       </div>
 
+      {/* Save Cohort Inline Form */}
+      {showSaveForm && results && (
+        <div className="bg-white rounded-xl border mb-6 p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+              <Save className="w-4 h-4 text-red-600" /> Save This Cohort
+            </h4>
+            <button onClick={() => setShowSaveForm(false)} className="p-1 hover:bg-gray-100 rounded">
+              <X className="w-4 h-4 text-gray-400" />
+            </button>
+          </div>
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="text-xs font-medium text-gray-500 uppercase mb-1 block">Cohort Name *</label>
+              <input
+                type="text"
+                value={saveName}
+                onChange={(e) => setSaveName(e.target.value)}
+                className="w-full px-3 py-1.5 border rounded-lg text-sm"
+                placeholder="e.g., High-Risk Diabetics Over 65"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-500 uppercase mb-1 block">Description</label>
+              <input
+                type="text"
+                value={saveDescription}
+                onChange={(e) => setSaveDescription(e.target.value)}
+                className="w-full px-3 py-1.5 border rounded-lg text-sm"
+                placeholder="Optional description"
+              />
+            </div>
+          </div>
+          <button
+            onClick={handleSaveCohort}
+            disabled={saving || !saveName.trim()}
+            className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 text-sm font-medium"
+          >
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            {saving ? "Saving..." : "Save Cohort"}
+          </button>
+        </div>
+      )}
+
       {/* Results */}
       {results && (
         <div className="space-y-4">
+          {/* Save Cohort Button + KPI Cards */}
+          <div className="flex items-center justify-end">
+            {!showSaveForm && (
+              <button
+                onClick={() => setShowSaveForm(true)}
+                className="flex items-center gap-2 px-4 py-2 border border-red-300 text-red-600 rounded-lg hover:bg-red-50 text-sm font-medium"
+              >
+                <Save className="w-4 h-4" /> Save Cohort
+              </button>
+            )}
+          </div>
+
           {/* KPI Cards */}
           <div className="grid grid-cols-4 gap-4">
             {[

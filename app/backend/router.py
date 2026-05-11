@@ -53,11 +53,40 @@ from .models import (
     CohortSearchIn,
     CohortAnalyticsOut,
     CohortMemberOut,
+    SaveCohortIn,
+    SavedCohortOut,
     RiskTier,
     UpdateStatusIn,
 )
 
 api = APIRouter(prefix="/api")
+
+
+# ===================================================================
+# Embed config — workspace URL and Genie space for iframe embedding
+# ===================================================================
+
+@api.get("/embed-config", operation_id="getEmbedConfig")
+async def get_embed_config():
+    """Return workspace URL and Genie space ID for iframe embedding."""
+    import os
+    from .env_config import GENIE_SPACE_ID
+
+    host = os.environ.get("DATABRICKS_HOST", "")
+    if host and not host.startswith("http"):
+        host = f"https://{host}"
+    if not host:
+        try:
+            from databricks.sdk import WorkspaceClient
+            w = WorkspaceClient()
+            host = w.config.host or ""
+        except Exception:
+            pass
+
+    return {
+        "workspace_url": host,
+        "genie_space_id": GENIE_SPACE_ID,
+    }
 
 
 # ===================================================================
@@ -922,7 +951,7 @@ async def generate_outreach_draft(member_id: str, body: OutreachDraftIn):
         channel_guidance = {
             "phone": "Write a warm, conversational phone script. Include an opening, key talking points, and a closing. Keep it under 400 words.",
             "email": "Write a professional email with a subject line. Be concise but empathetic. Include a clear call to action.",
-            "sms": "Write a brief SMS message (under 160 characters) with a link or callback number reference. Be friendly but concise.",
+            "sms": "Write a brief SMS message (under 160 characters). CRITICAL: SMS is an unsecured channel — do NOT include any Protected Health Information (PHI), diagnoses, conditions, medication names, or appointment details. Only include a friendly greeting by first name, a general wellness check-in, and a callback number (1-800-555-CARE). Be warm but vague.",
         }.get(channel, "Write an outreach script.")
 
         prompt = f"""You are a care management outreach specialist for Red Bricks Insurance. Generate a personalized {channel} outreach script.
@@ -1142,3 +1171,93 @@ async def get_cohort_filter_options():
     except Exception as e:
         print(f"[Cohort] Error fetching filter options: {e}")
         return {"risk_tiers": [], "counties": [], "lines_of_business": [], "genders": []}
+
+
+# ===================================================================
+# Saved Cohorts
+# ===================================================================
+
+@api.post(
+    "/cohorts/save",
+    response_model=SavedCohortOut,
+    operation_id="saveCohort",
+)
+async def save_cohort(body: SaveCohortIn, request: Request):
+    """Save a cohort definition for later reuse."""
+    user = get_current_user(request)
+    async with db.session() as session:
+        result = await session.execute(
+            text("""
+                INSERT INTO saved_cohorts (cohort_name, description, criteria, member_count, created_by)
+                VALUES (:name, :description, CAST(:criteria AS jsonb), :member_count, :created_by)
+                RETURNING cohort_id::text, cohort_name, description,
+                          criteria::text, member_count, created_by,
+                          created_at::text
+            """),
+            {
+                "name": body.cohort_name,
+                "description": body.description,
+                "criteria": json.dumps(body.criteria),
+                "member_count": body.member_count,
+                "created_by": user.email,
+            },
+        )
+        await session.commit()
+        row = result.mappings().one()
+        return SavedCohortOut(
+            cohort_id=row["cohort_id"],
+            cohort_name=row["cohort_name"],
+            description=row["description"],
+            criteria=json.loads(row["criteria"]) if isinstance(row["criteria"], str) else row["criteria"],
+            member_count=row["member_count"],
+            created_by=row["created_by"],
+            created_at=row["created_at"],
+        )
+
+
+@api.get(
+    "/cohorts/saved",
+    response_model=list[SavedCohortOut],
+    operation_id="getSavedCohorts",
+)
+async def get_saved_cohorts():
+    """List all saved cohorts ordered by most recent first."""
+    async with db.session() as session:
+        result = await session.execute(text("""
+            SELECT cohort_id::text, cohort_name, description,
+                   criteria::text, member_count, created_by,
+                   created_at::text
+            FROM saved_cohorts
+            ORDER BY created_at DESC
+            LIMIT 50
+        """))
+        rows = result.mappings().all()
+        return [
+            SavedCohortOut(
+                cohort_id=r["cohort_id"],
+                cohort_name=r["cohort_name"],
+                description=r["description"],
+                criteria=json.loads(r["criteria"]) if isinstance(r["criteria"], str) else r["criteria"],
+                member_count=r["member_count"],
+                created_by=r["created_by"],
+                created_at=r["created_at"],
+            )
+            for r in rows
+        ]
+
+
+@api.delete(
+    "/cohorts/saved/{cohort_id}",
+    operation_id="deleteSavedCohort",
+)
+async def delete_saved_cohort(cohort_id: str):
+    """Delete a saved cohort by ID."""
+    async with db.session() as session:
+        result = await session.execute(
+            text("DELETE FROM saved_cohorts WHERE cohort_id = CAST(:id AS uuid) RETURNING cohort_id"),
+            {"id": cohort_id},
+        )
+        if not result.fetchone():
+            raise HTTPException(status_code=404, detail="Saved cohort not found")
+        await session.commit()
+    return {"status": "deleted", "cohort_id": cohort_id}

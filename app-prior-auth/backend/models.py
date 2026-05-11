@@ -186,6 +186,46 @@ class DashboardStats(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Compliance
+# ---------------------------------------------------------------------------
+
+class TurnaroundBucket(BaseModel):
+    bucket: str
+    count: int
+    compliant: bool
+
+
+class WeeklyTrend(BaseModel):
+    week: str
+    compliance_rate: float
+    total: int
+
+
+class ComplianceMetricsOut(BaseModel):
+    compliance_rate: Optional[float] = None
+    avg_turnaround_standard: Optional[float] = None
+    avg_turnaround_expedited: Optional[float] = None
+    overdue_count: int = 0
+    auto_adjudication_rate: Optional[float] = None
+    total_determined: int = 0
+    total_auto: int = 0
+    turnaround_distribution: list[TurnaroundBucket] = []
+    weekly_trend: list[WeeklyTrend] = []
+
+
+class OverdueRequestOut(BaseModel):
+    auth_request_id: str
+    member_name: Optional[str] = None
+    service_type: str
+    procedure_code: str
+    urgency: Optional[str] = None
+    reviewer_name: Optional[str] = None
+    cms_deadline: Optional[datetime] = None
+    hours_overdue: float
+    request_date: Optional[datetime] = None
+
+
+# ---------------------------------------------------------------------------
 # Agent
 # ---------------------------------------------------------------------------
 

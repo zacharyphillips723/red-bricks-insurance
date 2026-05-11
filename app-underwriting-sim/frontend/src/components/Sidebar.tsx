@@ -5,9 +5,11 @@ import {
   History,
   Bot,
   TrendingUp,
+  DollarSign,
+  BarChart3,
 } from "lucide-react";
 
-type Page = "dashboard" | "builder" | "comparison" | "history" | "agent";
+type Page = "dashboard" | "builder" | "comparison" | "history" | "agent" | "rate-buildup" | "risk-pool";
 
 interface SidebarProps {
   currentPage: Page;
@@ -15,15 +17,19 @@ interface SidebarProps {
   savedCount: number;
 }
 
-const NAV_ITEMS: { page: Page; label: string; icon: React.ElementType }[] = [
+const NAV_ITEMS: { page: Page; label: string; icon: React.ElementType; section?: string }[] = [
   { page: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { page: "builder", label: "Simulation Builder", icon: Calculator },
-  { page: "comparison", label: "Compare Scenarios", icon: GitCompareArrows },
+  { page: "rate-buildup", label: "Rate Build-Up", icon: DollarSign, section: "Actuarial" },
+  { page: "risk-pool", label: "Risk Pool Analysis", icon: BarChart3 },
+  { page: "comparison", label: "Compare Scenarios", icon: GitCompareArrows, section: "Management" },
   { page: "history", label: "Simulation History", icon: History },
   { page: "agent", label: "Underwriting Agent", icon: Bot },
 ];
 
 export default function Sidebar({ currentPage, onNavigate, savedCount }: SidebarProps) {
+  let lastSection = "";
+
   return (
     <aside className="w-64 bg-databricks-dark text-white flex flex-col min-h-screen">
       {/* Logo */}
@@ -41,25 +47,36 @@ export default function Sidebar({ currentPage, onNavigate, savedCount }: Sidebar
 
       {/* Navigation */}
       <nav className="flex-1 p-4 space-y-1">
-        {NAV_ITEMS.map(({ page, label, icon: Icon }) => (
-          <button
-            key={page}
-            onClick={() => onNavigate(page)}
-            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-              currentPage === page
-                ? "bg-white/10 text-white"
-                : "text-white/60 hover:text-white hover:bg-white/5"
-            }`}
-          >
-            <Icon className="w-5 h-5 flex-shrink-0" />
-            <span>{label}</span>
-            {page === "history" && savedCount > 0 && (
-              <span className="ml-auto bg-databricks-red text-white text-xs px-2 py-0.5 rounded-full">
-                {savedCount}
-              </span>
-            )}
-          </button>
-        ))}
+        {NAV_ITEMS.map(({ page, label, icon: Icon, section }) => {
+          const showSection = section && section !== lastSection;
+          if (section) lastSection = section;
+
+          return (
+            <div key={page}>
+              {showSection && (
+                <div className="text-[10px] font-semibold text-white/30 uppercase tracking-wider mt-4 mb-1.5 px-3">
+                  {section}
+                </div>
+              )}
+              <button
+                onClick={() => onNavigate(page)}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                  currentPage === page
+                    ? "bg-white/10 text-white"
+                    : "text-white/60 hover:text-white hover:bg-white/5"
+                }`}
+              >
+                <Icon className="w-5 h-5 flex-shrink-0" />
+                <span>{label}</span>
+                {page === "history" && savedCount > 0 && (
+                  <span className="ml-auto bg-databricks-red text-white text-xs px-2 py-0.5 rounded-full">
+                    {savedCount}
+                  </span>
+                )}
+              </button>
+            </div>
+          );
+        })}
       </nav>
 
       {/* Footer */}

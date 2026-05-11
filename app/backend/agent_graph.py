@@ -257,30 +257,114 @@ async def stream_supervisor_agent(
     conversation_id: str | None = None,
     conversation_history: list[dict] | None = None,
 ):
-    """Async generator that yields SSE events as the supervisor runs."""
+    """Async generator that yields SSE events as the supervisor runs.
+
+    Events emitted:
+      start       — {conversation_id}
+      routing     — {category, agents}
+      agent_start — {agent}
+      agent_done  — {agent}
+      token       — {content}  (cumulative answer so far)
+      done        — {conversation_id}
+      error       — {error}
+    """
+    import asyncio
     thread_id = conversation_id or str(uuid.uuid4())
 
     try:
         yield {"event": "start", "data": json.dumps({"conversation_id": thread_id})}
 
-        # Step 1: Route
-        category, agent_names = _route(question)
+        # Step 1: Route (fast — single LLM call with temperature 0)
+        category, agent_names = await asyncio.to_thread(_route, question)
         yield {"event": "routing", "data": json.dumps({
             "category": category,
             "agents": agent_names,
         })}
 
-        # Step 2: Dispatch to specialists
+        # Step 2: Dispatch to specialists (parallel, may take seconds)
         for name in agent_names:
             yield {"event": "agent_start", "data": json.dumps({"agent": name})}
-        specialist_results = _dispatch(member_id, question, agent_names)
+        specialist_results = await asyncio.to_thread(
+            _dispatch, member_id, question, agent_names
+        )
         for result in specialist_results:
             yield {"event": "agent_done", "data": json.dumps({"agent": result["agent"]})}
 
-        # Step 3: Merge
-        answer = _merge(member_id, question, specialist_results, conversation_history)
-        yield {"event": "token", "data": json.dumps({"content": answer})}
+        # Step 3: Stream the merge/synthesis LLM call token-by-token
+        if len(specialist_results) == 1:
+            # Single specialist — stream the already-generated answer progressively
+            answer = specialist_results[0]["answer"]
+            chunk_size = 40
+            for i in range(0, len(answer), chunk_size):
+                yield {"event": "token", "data": json.dumps({"content": answer[: i + chunk_size]})}
+                await asyncio.sleep(0)
+            yield {"event": "token", "data": json.dumps({"content": answer})}
+        else:
+            # Multi-specialist — stream the merge LLM call token-by-token
+            async for event in _stream_merge_and_yield(
+                member_id, question, specialist_results, conversation_history
+            ):
+                yield event
+
         yield {"event": "done", "data": json.dumps({"conversation_id": thread_id})}
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         yield {"event": "error", "data": json.dumps({"error": str(e)})}
+
+
+async def _stream_merge_and_yield(
+    member_id: str,
+    question: str,
+    specialist_results: list[dict],
+    conversation_history: list[dict] | None,
+):
+    """Async generator that streams the merge LLM call token-by-token.
+
+    Yields SSE-formatted dicts with event='token' and cumulative content.
+    Returns the final answer text.
+    """
+    import asyncio
+
+    agent_labels = {
+        "clinical": "Clinical Specialist",
+        "financial": "Financial Specialist",
+        "care_management": "Care Management Specialist",
+        "document": "Document Analysis Specialist",
+    }
+
+    sections = []
+    for result in specialist_results:
+        label = agent_labels.get(result["agent"], result["agent"])
+        sections.append(f"### {label}\n{result['answer']}")
+
+    history_section = ""
+    if conversation_history:
+        lines = []
+        for msg in conversation_history[-6:]:
+            role_label = "Care Manager" if msg["role"] == "human" else "Agent"
+            lines.append(f"**{role_label}**: {msg['content'][:500]}")
+        history_section = (
+            "\n**Previous conversation context:**\n"
+            + "\n".join(lines)
+            + "\n\nMaintain continuity with prior context.\n"
+        )
+
+    prompt = MERGE_PROMPT.format(
+        question=question,
+        member_id=member_id,
+        agent_count=len(specialist_results),
+        specialist_responses="\n\n".join(sections),
+        history_section=history_section,
+    )
+
+    llm = _get_llm()
+    accumulated = ""
+
+    # Use LangChain's streaming interface
+    async for chunk in llm.astream([HumanMessage(content=prompt)]):
+        token = chunk.content
+        if token:
+            accumulated += token
+            yield {"event": "token", "data": json.dumps({"content": accumulated})}

@@ -35,6 +35,9 @@ Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB
 - [Lakebase & App Authentication](#lakebase--app-authentication)
 - [Deployment Notes & Known Issues](#deployment-notes--known-issues)
 - [Observability & Tracing](#observability--tracing)
+- [UC Governance — Row Filters & Column Masks](#uc-governance--row-filters--column-masks)
+- [Data Lineage Demo](#data-lineage-demo)
+- [UC AI Tool Functions](#uc-ai-tool-functions)
 - [Customization](#customization)
 - [Required Packages](#required-packages)
 
@@ -105,7 +108,7 @@ Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB
 
 ## Pipeline DAG
 
-The full demo job (`red_bricks_full_demo`) orchestrates 36 tasks:
+The full demo job (`red_bricks_full_demo`) orchestrates 37 tasks:
 
 ```
 synthea_generation (ROOT — generates FHIR bundles + extracts demographics + assigns MBR IDs)
@@ -132,7 +135,8 @@ synthea_generation (ROOT — generates FHIR bundles + extracts demographics + as
       → deploy_pa_agent (PA Review agent with clinical review tool-calling)
           → evaluate_agents (v1 vs v2 vs sales coach comparison)
           → evaluate_care_agent (MLflow GenAI evaluation: groundedness, relevance, safety, clinical completeness, actionability, HIPAA compliance)
-  → bootstrap_workspace (depends on gold_analytics + fwa_pipeline + network_adequacy_pipeline + prior_auth_pipeline + train_fwa_model)
+  → setup_uc_governance (depends on gold_analytics + members — row filters, column masks on PHI tables)
+  → bootstrap_workspace (depends on gold_analytics + create_metric_views + create_uc_tools + fwa_pipeline + network_adequacy_pipeline + prior_auth_pipeline + train_fwa_model + setup_uc_governance)
       — Creates Lakebase instances, applies UC/warehouse grants for app SPs, seeds operational data,
         seeds PA reviewer staff and review queue, creates Genie spaces (including Network Analytics)
       → deploy_app_source (deploys source code + starts compute for all 6 apps)
@@ -271,16 +275,16 @@ Clinical-focused application for care management teams:
 - **Frontend**: React + Vite + Tailwind (Databricks-branded dark theme)
 - **Observability**: MLflow 3 tracing (`@mlflow.trace`) on agent calls, Genie queries, and tool invocations; OpenTelemetry FastAPI auto-instrumentation
 - **Pages**:
-  - **Dashboard** — Real-time KPIs (active alerts, critical count, open cases, avg risk score), alert queue with filters
+  - **Dashboard** — Real-time KPIs (active alerts, critical count, open cases, avg risk score), alert queue with filters, population health summary cards
   - **Alert Queue** — Filterable/sortable alerts with risk tier, status, assignment tracking
   - **Alert Detail** — Full alert view with care manager assignment, status workflow, clinical context
-  - **Member 360** — Unified member view (demographics, clinical summary, claims, care gaps, risk factors, agent chat)
+  - **Member 360** — Unified member view (demographics, clinical summary, claims, care gaps, risk factors, multi-turn agent chat with streaming responses)
   - **Care Plan** — AI-generated care plans with goals, interventions, milestones, timeline visualization
-  - **Outreach Draft** — AI-generated personalized outreach scripts (phone, SMS, email) based on member profile and preferred communication
-  - **Cohort Builder** — Population cohort definition with demographic, clinical, and utilization filters; cohort analytics
-  - **Patient Search (Genie)** — Natural language SQL exploration via Genie space integration
+  - **Outreach Draft** — AI-generated personalized outreach scripts (phone, SMS, email) based on member profile and preferred communication; SMS channel enforces PHI-free messaging
+  - **Cohort Builder** — Population cohort definition with demographic, clinical, and utilization filters; cohort analytics; save/load named cohorts to Lakebase
+  - **Patient Search (Genie)** — Natural language SQL exploration via embedded Genie space (iframe) with toggle between custom chat UI and embedded Genie mode
   - **Caseload** — Care manager workload dashboard with assignment tracking
-- **Agent Architecture**: LangGraph state machine skeleton (`agent_graph.py`) with specialist agents (Clinical, Financial, Care Management) and UC function tool-calling (`agent_tools.py`)
+- **Agent Architecture**: Multi-agent supervisor with Route→Dispatch→Merge pattern (`agent_graph.py`). SSE token-by-token streaming. 4 specialist agents (Clinical, Financial, Care Management, Document) with UC function tool-calling (`agent_tools.py`). Parallel specialist dispatch with async streaming merge. Lakebase-backed conversation persistence (`conversation_store.py`)
 - **Config**: `app/app.yml`
 
 ### Group Reporting Portal (`app-group-reporting/`)
@@ -291,7 +295,7 @@ Sales enablement application for account executives preparing employer group ren
 - **Frontend**: React + Vite + Tailwind (Databricks-branded dark theme)
 - **Pages**:
   - **Group Search** — filter/search 200 employer groups by industry, funding type, renewal action
-  - **Report Card** — one-page executive summary with health score, peer percentile benchmarks, cost tier distribution, renewal projection
+  - **Report Card** — one-page executive summary with health score, peer percentile benchmarks, cost tier distribution, renewal projection, deep-dive analytics (risk distribution, utilization per 1000, stop-loss exposure, claims trend sparklines)
   - **Standard Reports** — 5 canned reports: High-Cost Members, Claims Trend (PMPM chart), Top Drugs, Utilization Summary, Risk & Care Gaps
   - **Sales Coach** — AI agent chat with negotiation roleplay and care management program recommendations
 - **Context Enrichment** (optional): Slack (account channel history), Glean (internal knowledge base), Salesforce (CRM account data) feed into the Sales Coach agent's context for richer renewal prep
@@ -307,7 +311,8 @@ SIU-focused application for fraud, waste, and abuse investigation:
   - **Dashboard** — KPIs (total/open/critical/closed investigations), financial metrics (estimated overpayment, recovered, recovery rate), breakdowns by status/severity/type
   - **Investigation Queue** — filterable/searchable table with status, severity, type, investigator filters; sorted by severity + risk score
   - **Investigation Detail** — full case view with key metrics, fraud types, agent chat panel, evidence list, immutable audit trail, and action sidebar (assign investigator, update status, add notes, record recovery)
-  - **Provider Analysis** — NPI search with risk scorecard, metrics grid (18 metrics), ML model predictions table, rules-based flagged claims table
+  - **Provider Analysis** — NPI search with risk scorecard, metrics grid (18 metrics), ML model predictions table, rules-based flagged claims table, provider network graph showing referral patterns and ring detection
+  - **Network Graph** — Interactive provider referral network visualization showing connections between providers flagged for billing rings, unusual referral patterns, and cross-referral anomalies
   - **FWA Agent** — standalone AI agent chat with `[INV-XXXX]`/`[PRV-NPI]` prefix targeting; the agent dynamically queries Unity Catalog tables via tool-calling
   - **Genie Search** — natural language SQL exploration over FWA gold tables
   - **Caseload** — investigator capacity dashboard with utilization bars
@@ -323,9 +328,12 @@ What-if analysis tool for actuaries and underwriters to model pricing scenarios 
 - **Simulation Engine**: 10 pure-Python simulation types with sub-100ms execution (no Spark required):
   - Premium Rate, Benefit Design, Group Renewal, Population Mix, Medical Trend, Stop-Loss, Risk Adjustment, Utilization Change, New Group Quote, IBNR Reserve
   - All return baseline vs. projected with delta, narrative summary, and warnings
+- **Pricing Engine**: Modular rate buildup engine (`pricing_engine.py`) — community-rated base, age/gender factors, area factors, industry SIC adjustments, group experience modifications, benefit richness multipliers, risk adjustment, trend projection, and margin/tax loading. Returns a transparent step-by-step rate buildup waterfall
 - **Pages**:
   - **Dashboard** — KPI cards (total premium, claims, MLR, member count), baseline summary, recent simulations, quick-sim launcher
   - **Simulation Builder** — dynamic form per simulation type with parameter inputs, delta-colored results, save dialog
+  - **Rate Buildup** — transparent premium rate construction showing each pricing factor (base rate → age/gender → area → SIC → experience → benefits → risk adjustment → trend → margin) as a waterfall chart with drill-down into each component
+  - **Risk Pool** — Population risk distribution analysis with age band breakdowns, risk tier stratification, cost concentration curves, and actuarial equivalence metrics
   - **Scenario Comparison** — side-by-side comparison of 2–4 simulations
   - **Simulation History** — list/detail view with status management (draft/computed/approved/archived), notes, and immutable audit trail
   - **Agent Chat** — conversational interface with tool-calling (`run_simulation`, `get_baseline`, `get_group_detail`, `query_uc_table`); SQL validation blocks write operations
@@ -346,7 +354,8 @@ Prior authorization review and auto-adjudication portal for UM nurses and PA rev
 - **Pages**:
   - **Dashboard** — KPI cards (total requests, approval rate, avg turnaround, pending queue depth), determination breakdown charts
   - **Review Queue** — filterable PA request queue sorted by urgency and turnaround SLA
-  - **Request Detail** — full PA request view with clinical summary, service details, determination history, and reviewer notes
+  - **Request Detail** — full PA request view with clinical summary, service details, determination history, reviewer notes, side-by-side clinical criteria comparison (policy rules vs patient data with match/mismatch indicators), and appeal tracking with status timeline
+  - **CMS Compliance** — CMS-0057-F interoperability compliance dashboard with KPIs (compliance rate, avg turnaround hours, expedited/standard/retrospective breakdowns), turnaround distribution charts, weekly trend analysis, and SLA deadline tracking (72h expedited / 168h standard / 30d retrospective)
   - **Caseload View** — reviewer workload management with assignment tracking
   - **Policy Library** — medical policy reference with searchable clinical criteria
   - **Agent Chat** — PA Review agent interface for clinical review briefings and determination recommendations
@@ -363,11 +372,11 @@ CMS network adequacy compliance monitoring for network operations teams:
 - **Geospatial Engine**: Haversine great-circle distance calculations in pure SQL for member-to-provider distance measurement. Pre-filters by 60-mile radius to keep cross-join complexity manageable (~2.5M calculations for 500 providers x 5K members). Location-agnostic — works for any state or geography.
 - **Pages**:
   - **Dashboard** — 6 KPI cards (overall compliance %, ghost providers flagged, OON leakage cost, gap members, telehealth credits, ghost impact members), top recruitment targets table
-  - **Geographic View** — Interactive Leaflet map with proportional circle markers at county centroids (computed from provider coordinates). 5 metric overlays (CMS Compliance, OON Leakage Cost, Gap Members, Ghost Network Flags, Provider Count) with diverging color scales, county type filters, click-to-inspect popups with full metric detail, auto-fit bounds (location-agnostic)
+  - **Geographic View** — Interactive Leaflet map with proportional circle markers at county centroids (computed from provider coordinates). 5 metric overlays (CMS Compliance, OON Leakage Cost, Gap Members, Ghost Network Flags, Provider Count) with diverging color scales, county type filters, click-to-inspect popups with full metric detail, auto-fit bounds (location-agnostic), specialty-type filtering, and drill-through to gap detail
   - **CMS Compliance** — Filterable compliance table by county, CMS specialty type, and compliance status; shows distance thresholds, member counts, and gap analysis
   - **Ghost Network Detection** — Provider cards with multi-signal ghost detection (no claims 12m, not accepting patients, extreme wait times, expired credentials, panel at capacity), severity badges, impact member counts
   - **OON Leakage Analysis** — Leakage cost breakdowns by specialty, county, and reason with horizontal bar charts; detailed specialty table with OON provider counts
-  - **Gaps & Recruitment** — Network gaps table with priority filtering (P1–P4) and gap status classification (Critical/Non-Compliant/At Risk/Marginal); OON provider recruitment targets ranked by priority score
+  - **Gaps & Recruitment** — Network gaps table with priority filtering (P1–P4) and gap status classification (Critical/Non-Compliant/At Risk/Marginal); OON provider recruitment targets ranked by priority score; recruitment pipeline tracking with outreach status; priority score breakdown by contributing factors
   - **Network Analytics** — Genie-powered natural language SQL exploration over network gold tables
 - **Data Architecture**: Read-only — Statement Execution API for all analytics queries against `network` schema gold tables
 - **Config**: `app-network-adequacy/app.yml`, DAB resource: `resources/app_network_adequacy.yml`
@@ -428,7 +437,10 @@ red-bricks-insurance/
 │   │   ├── database.py               #   Lakebase connection with OAuth token refresh
 │   │   ├── agent.py                  #   FWA agent (tool-calling with dynamic UC table queries)
 │   │   └── genie.py                  #   Genie space integration
-│   ├── frontend/                     #   React + Vite + Tailwind source
+│   ├── frontend/
+│   │   └── src/pages/
+│   │       ├── NetworkGraph.tsx       #   Provider referral network visualization
+│   │       └── ...                    #   Dashboard, InvestigationDetail, ProviderAnalysis, etc.
 │   └── static/                       #   Built frontend output
 ├── app-underwriting-sim/                # Underwriting Simulation Portal Databricks App
 │   ├── app.yml                       #   App config (Lakebase, SQL warehouse, LLM endpoint)
@@ -436,7 +448,8 @@ red-bricks-insurance/
 │   ├── backend/
 │   │   ├── router.py                 #   API routes (simulations, comparisons, agent, genie)
 │   │   ├── models.py                 #   Pydantic models (10 simulation types)
-│   │   ├── simulation_engine.py      #   Pure-Python simulation functions
+│   │   ├── simulation_engine.py      #   Pure-Python simulation functions (10 types)
+│   │   ├── pricing_engine.py         #   Rate buildup engine (community base → age/gender → area → SIC → experience → benefits → risk adj → trend → margin)
 │   │   ├── data_loader.py            #   Statement Execution API + caching
 │   │   ├── database.py               #   Lakebase connection with OAuth token refresh
 │   │   ├── scenarios.py              #   Lakebase CRUD (simulations, comparisons, audit)
@@ -453,7 +466,10 @@ red-bricks-insurance/
 │   │   ├── database.py               #   Lakebase connection with OAuth token refresh
 │   │   ├── agent.py                  #   PA Review agent (tool-calling with clinical data)
 │   │   └── env_config.py             #   Runtime auto-detection (warehouse, catalog, Genie)
-│   ├── frontend/                     #   React + Vite + Tailwind source
+│   ├── frontend/
+│   │   └── src/pages/
+│   │       ├── Compliance.tsx         #   CMS-0057-F compliance dashboard
+│   │       └── ...                    #   Dashboard, ReviewQueue, RequestDetail, etc.
 │   └── static/                       #   Built frontend output
 ├── app-network-adequacy/                # Network Adequacy Portal Databricks App
 │   ├── app.yml                       #   App config (SQL warehouse, catalog, Genie)
@@ -466,7 +482,7 @@ red-bricks-insurance/
 │   ├── frontend/                     #   React + Vite + Tailwind source
 │   └── static/                       #   Built frontend output
 ├── resources/
-│   ├── full_demo_job.yml             # End-to-end orchestration (36 tasks)
+│   ├── full_demo_job.yml             # End-to-end orchestration (37 tasks)
 │   ├── refresh_demo_job.yml          # Refresh without Synthea (data gen → all downstream)
 │   ├── adt_feed_job.yml              # Scheduled ADT event generation (every 3 hours)
 │   ├── data_generation_job.yml       # Standalone data generation
@@ -537,11 +553,13 @@ red-bricks-insurance/
 │   │   ├── pa_model_governance.py   #   PA model bias monitoring, drift detection, audit trail
 │   │   ├── generate_adt_feed.py     #   ADT event batch generation + Lakebase alert seeding
 │   │   ├── evaluate_care_agent.py  #   MLflow GenAI evaluation (6 scorers, 4 question types)
-│   │   ├── create_uc_tools.py      #   Register UC tool functions for agent tool-calling
+│   │   ├── create_uc_tools.py      #   Register 16 UC tool functions for agent tool-calling
 │   │   ├── deploy_app_source.py     #   Deploy source code + start compute for all 6 apps
 │   │   ├── setup_lakebase.py        #   Lakebase DDL initialization (all instances)
 │   │   ├── seed_lakebase_alerts.py  #   Seed risk alerts into Command Center Lakebase
 │   │   ├── seed_fwa_lakebase.py     #   Seed FWA investigations into Lakebase (legacy, use bootstrap)
+│   │   ├── setup_uc_governance.py  #   Row filters & column masks on PHI tables (3 groups, 5 masks, 2 filters)
+│   │   ├── demo_data_lineage.py   #   Data lineage demo (table, column, AI function, cross-domain)
 │   │   ├── bootstrap_workspace.py   #   Post-deploy setup: Lakebase, grants, seed data, PA queue
 │   │   └── evaluate_agents.py       #   Agent evaluation
 │   ├── pipelines/
@@ -561,8 +579,8 @@ red-bricks-insurance/
 │   │   ├── gold_analytics/           #   financial, quality, risk, ai, actuarial, groups,
 │   │   │                             #   cost_of_care, member_360, group_report_card, fwa_analytics
 │   │   └── python/                   #   Python alternatives for all pipelines
-│   ├── dashboards/                   #   Lakeview dashboard JSON definitions (6 dashboards)
-│   ├── lakebase_schema.sql           #   Command Center Lakebase DDL (alerts, care managers)
+│   ├── dashboards/                   #   Lakeview dashboard JSON definitions
+│   ├── lakebase_schema.sql           #   Command Center Lakebase DDL (alerts, care managers, saved cohorts, conversations)
 │   ├── fwa_lakebase_schema.sql       #   FWA Lakebase DDL (investigations, audit log, evidence)
 │   ├── pa_reviews_lakebase_schema.sql#   PA Lakebase DDL (review queue, reviewers, audit trail)
 │   ├── underwriting_sim_lakebase_schema.sql # UW Sim Lakebase DDL (simulations, comparisons)
@@ -598,7 +616,7 @@ This bundle exercises a broad surface area of the Databricks platform. The follo
 | **Genie / AI/BI** | Natural language SQL in all 5 apps + 3 Lakeview dashboards | NL query and dashboard features |
 | **MLflow (UC Model Registry)** | 5 agents + 2 ML models registered via Models from Code | All agents and ML models |
 | **UC Volumes** | Raw data storage; `read_files()` ingestion in bronze layers | All data ingestion fails |
-| **Lakeview Dashboards** | 4 AI/BI dashboards (Analytics, Agent Comparison, PA Operations, Network Adequacy) | Analytics visualization unavailable |
+| **Lakeview Dashboards** | 6 AI/BI dashboards (Analytics, Agent Comparison, PA Operations, Network Adequacy, Care Management, Observability) | Analytics visualization unavailable |
 
 #### Required Foundation Model Endpoints
 
@@ -857,7 +875,7 @@ The `bootstrap_workspace` task runs automatically at the end of both the full de
 5. **SQL Warehouse grants** — `CAN_USE` on the auto-detected (or configured) warehouse for each app SP
 6. **Serving endpoint grants** — `CAN_QUERY` on all model serving endpoints (LLM, embedding, FWA scorer) for each app SP
 7. **Vector search endpoint grants** — `CAN_USE` on the vector search endpoint (resolves endpoint UUID dynamically for Azure compatibility)
-8. **Genie spaces** — Creates 5 Genie spaces (Analytics Assistant, FWA Analytics, Group Reporting, Financial Analytics, Network Analytics) with catalog table references. Validates tables exist before adding. Grants `CAN_RUN` to all app SPs. Skips spaces that already exist (matched by title).
+8. **Genie spaces** — Creates 5 Genie spaces (Analytics Assistant, FWA Analytics, Group Reporting, Financial Analytics, Network Analytics) with catalog table references including metric views (`mv_financial_overview`, `mv_mlr_compliance`, etc.). Validates tables exist before adding. Grants `CAN_RUN` to all app SPs. Skips spaces that already exist (matched by title).
 9. **ML predictions table** — Pre-creates `analytics.fwa_ml_predictions` for gold MV compatibility
 10. **Operational data seeding** — Populates Lakebase with risk alerts (from gold tables), FWA investigation cases (from silver/gold FWA tables), and PA review queue entries (from PA gold tables with reviewer assignments)
 11. **App source code deployment** — Deploys source code to each of the 6 apps and restarts them so they pick up all grants and Lakebase connectivity
@@ -917,7 +935,7 @@ A single **Lakebase Autoscaling** project (`red-bricks-insurance`) hosts all app
 
 | Database | Used By | Status |
 |----------|---------|--------|
-| `red_bricks_alerts` | Command Center app (alerts, care managers, care management data) | Active |
+| `red_bricks_alerts` | Command Center app (alerts, care managers, care management data, saved cohorts, conversation history) | Active |
 | `fwa_cases` | FWA Investigation Portal | Active |
 | `uw_sim` | Underwriting Simulation Portal | Active |
 | `pa_reviews` | Prior Authorization Portal | Active |
@@ -953,6 +971,10 @@ On a fresh workspace (or after `bundle destroy`), you must run these clinical ta
 1. Run the **Full Demo Pipeline** (which includes Synthea generation + FHIR parsing), or
 2. Copy existing Synthea FHIR data to the volume and run `parse_fhir_with_dbignite` + `clinical_pipeline` manually
 3. Then the Refresh job will work for all subsequent runs
+
+### Synthea Idempotent Early-Exit
+
+The `run_synthea_generation` notebook checks for existing FHIR data before running generation. If `synthea_raw/fhir/` contains 100+ JSON bundles and `synthea_demographics/` exists, the notebook exits immediately with `dbutils.notebook.exit("SKIPPED: N FHIR bundles already present")`. This makes the full demo pipeline safe to re-run after `bundle destroy` + redeploy without regenerating 5,000 patients (~15 min savings). Delete `synthea_raw/` from the volume to force a fresh generation.
 
 ### Serverless Synthea Generation
 
@@ -1021,6 +1043,78 @@ The `evaluate_care_agent.py` notebook runs **MLflow GenAI evaluation** (`mlflow.
 | `hipaa_compliance` | Custom `Guidelines` | PHI handled professionally in a need-to-know format? |
 
 Results are persisted to `{catalog}.analytics.care_agent_eval_results` for dashboard consumption and tracked in the MLflow experiment for version comparison.
+
+## UC Governance — Row Filters & Column Masks
+
+The `setup_uc_governance` notebook (`src/notebooks/setup_uc_governance.py`) applies enterprise-grade data governance to PHI/PII columns using Unity Catalog's native row filter and column mask features. This runs as a pipeline task after `gold_analytics_pipeline` and `members_pipeline`.
+
+### Column Masks
+
+5 column masks on `members.silver_members` that dynamically redact PHI based on group membership:
+
+| Column | Mask Function | Full Access | Restricted |
+|--------|--------------|-------------|------------|
+| `ssn_last_4` | `governance.mask_ssn` | Full SSN | `***-**-1234` |
+| `phone` | `governance.mask_phone` | Full phone | `(***) ***-5678` |
+| `email` | `governance.mask_email` | Full email | `za***@***.com` |
+| `date_of_birth` | `governance.mask_dob` | Full DOB | Year only (`2000-01-01`) |
+| `address_line_1` | `governance.mask_address` | Full address | `*** REDACTED ***` |
+
+### Row Filters
+
+| Table | Filter Function | Logic |
+|-------|----------------|-------|
+| `members.silver_enrollment` | `governance.filter_by_lob` | `commercial_only` group sees only Commercial LOB rows |
+
+### Access Groups
+
+| Group | Members PHI | Enrollment Rows |
+|-------|-------------|-----------------|
+| `phi_full_access` | Unmasked | All LOBs |
+| `phi_restricted` | Masked | All LOBs |
+| `commercial_only` | Per group | Commercial only |
+| No group | Masked | All LOBs |
+
+All mask and filter functions use `is_account_group_member()` — no code changes needed, policies follow the data across SQL, Python, notebooks, Genie, dashboards, and apps.
+
+## Data Lineage Demo
+
+The `demo_data_lineage` notebook (`src/notebooks/demo_data_lineage.py`) demonstrates Unity Catalog's end-to-end data lineage across the Red Bricks Insurance lakehouse. This is a standalone demo notebook (not part of the pipeline job).
+
+| Section | What It Shows |
+|---------|--------------|
+| Table-Level Lineage | Medallion architecture dependencies via `system.access.table_lineage` |
+| Column-Level Lineage | PHI field tracing (SSN, DOB, phone, email, address) from source through gold |
+| AI Function Lineage | How `ai_tools` schema functions connect to governed tables |
+| Impact Analysis | "If I change `silver_members`, what downstream assets break?" |
+| Data Quality + Lineage | SDP expectation results from `system.lakeflow.flow_progress_expectations` |
+| Cross-Domain Summary | Schema-to-schema dependency graph across all 15 domains |
+| Governance + Lineage | Combined view: PHI columns, their masks, and downstream consumers |
+
+## UC AI Tool Functions
+
+The `create_uc_tools` notebook registers 16 governed SQL functions in the `ai_tools` schema. These serve as the shared tool layer for all AI agents, Genie spaces, and ad-hoc notebooks.
+
+| Function | Description |
+|----------|-------------|
+| `get_member_profile` | Full Member 360 profile (demographics, risk, claims, HEDIS gaps) |
+| `get_lab_results` | Recent lab results with reference ranges and abnormal flags |
+| `get_case_assessments` | Clinical/behavioral assessments (PHQ-9, GAD-7, PRAPARE, Fall Risk) |
+| `get_claims_summary` | Claims and cost summary from Member 360 |
+| `get_denial_history` | Denied claims with procedure codes and denial reasons |
+| `get_care_programs` | Disease management program enrollments |
+| `get_sdoh_screening` | SDOH screening results (food, housing, transport, isolation, financial) |
+| `get_care_gaps` | HEDIS care gaps with intervention tracking and closure status |
+| `get_toc_history` | Transitions of care with readmission risk and follow-up compliance |
+| `recommend_intervention` | Aggregated next-best-action data (risk + SDOH + care gaps) |
+| `assess_risk` | Comprehensive risk assessment (clinical + SDOH + care gaps + recent discharge) with computed `overall_risk_level` |
+| `get_outreach_context` | Full outreach context package (demographics, conditions, SDOH concerns, open gaps, active programs) |
+| `get_fwa_risk_profile` | Provider FWA risk profile by NPI |
+| `get_fwa_flagged_claims` | FWA-flagged claims for a provider or member |
+| `get_pa_clinical_summary` | Clinical summary for prior auth review |
+| `get_group_benefit_summary` | Employer group benefit utilization summary |
+
+All functions return JSON, are auditable through Unity Catalog lineage, and are callable from SQL, Genie, agents, and notebooks.
 
 ## Customization
 

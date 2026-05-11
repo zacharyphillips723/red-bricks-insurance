@@ -246,6 +246,77 @@ def get_provider_ml_scores(npi: str, limit: int = 20) -> list[dict]:
         return []
 
 
+def get_provider_shap_values(npi: str) -> dict | None:
+    """Compute synthetic SHAP-like feature attributions for a provider.
+
+    Compares the provider's risk factors against population means
+    and returns the deviation as a "contribution" value for each feature.
+    """
+    try:
+        # Get the individual provider's risk profile
+        provider_rows = _execute_sql(
+            f"""SELECT provider_npi, composite_risk_score, e5_visit_pct,
+                       billed_to_allowed_ratio, denial_rate, fwa_signal_count,
+                       fwa_avg_score, total_claims, total_billed, total_paid
+                FROM {PROVIDER_RISK_TABLE}
+                WHERE provider_npi = :npi LIMIT 1""",
+            [{"name": "npi", "value": npi}],
+        )
+        if not provider_rows:
+            return None
+
+        provider = provider_rows[0]
+
+        # Get population averages for comparison
+        pop_rows = _execute_sql(
+            f"""SELECT
+                    AVG(CAST(e5_visit_pct AS DOUBLE)) AS avg_e5_visit_pct,
+                    AVG(CAST(billed_to_allowed_ratio AS DOUBLE)) AS avg_billed_to_allowed_ratio,
+                    AVG(CAST(denial_rate AS DOUBLE)) AS avg_denial_rate,
+                    AVG(CAST(fwa_signal_count AS DOUBLE)) AS avg_fwa_signal_count,
+                    AVG(CAST(fwa_avg_score AS DOUBLE)) AS avg_fwa_avg_score,
+                    AVG(CAST(total_claims AS DOUBLE)) AS avg_total_claims,
+                    AVG(CAST(total_billed AS DOUBLE)) AS avg_total_billed
+                FROM {PROVIDER_RISK_TABLE}"""
+        )
+        if not pop_rows:
+            return None
+
+        pop = pop_rows[0]
+
+        def _safe_float(val) -> float:
+            try:
+                return float(val) if val is not None else 0.0
+            except (ValueError, TypeError):
+                return 0.0
+
+        # Calculate deviation-based contributions
+        features = {
+            "E5 Visit %": _safe_float(provider.get("e5_visit_pct")) - _safe_float(pop.get("avg_e5_visit_pct")),
+            "Billed/Allowed Ratio": _safe_float(provider.get("billed_to_allowed_ratio")) - _safe_float(pop.get("avg_billed_to_allowed_ratio")),
+            "Denial Rate": _safe_float(provider.get("denial_rate")) - _safe_float(pop.get("avg_denial_rate")),
+            "FWA Signal Count": _safe_float(provider.get("fwa_signal_count")) - _safe_float(pop.get("avg_fwa_signal_count")),
+            "Avg Fraud Score": _safe_float(provider.get("fwa_avg_score")) - _safe_float(pop.get("avg_fwa_avg_score")),
+            "Total Claims Volume": _safe_float(provider.get("total_claims")) - _safe_float(pop.get("avg_total_claims")),
+            "Total Billed Amount": _safe_float(provider.get("total_billed")) - _safe_float(pop.get("avg_total_billed")),
+        }
+
+        # Normalize contributions to sum to the composite risk score
+        composite = _safe_float(provider.get("composite_risk_score"))
+        abs_total = sum(abs(v) for v in features.values())
+        if abs_total > 0 and composite > 0:
+            scale_factor = composite / abs_total
+            features = {k: round(v * scale_factor, 4) for k, v in features.items()}
+        else:
+            features = {k: round(v, 4) for k, v in features.items()}
+
+        return features
+
+    except Exception as e:
+        print(f"[FWA] SHAP values error: {e}")
+        return None
+
+
 def get_dashboard_analytics() -> dict:
     """Get FWA dashboard analytics from gold tables."""
     try:

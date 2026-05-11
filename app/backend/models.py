@@ -426,3 +426,22 @@ class CohortAnalyticsOut(BaseModel):
     lob_distribution: dict = Field(default_factory=dict)
     top_counties: dict = Field(default_factory=dict)
     members: list[CohortMemberOut] = Field(default_factory=list)
+
+
+class SaveCohortIn(BaseModel):
+    """Input for saving a cohort."""
+    cohort_name: str
+    description: Optional[str] = None
+    criteria: dict
+    member_count: int
+
+
+class SavedCohortOut(BaseModel):
+    """Saved cohort record."""
+    cohort_id: str
+    cohort_name: str
+    description: Optional[str] = None
+    criteria: dict
+    member_count: int
+    created_by: str
+    created_at: str

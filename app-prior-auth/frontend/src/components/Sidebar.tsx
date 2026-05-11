@@ -4,6 +4,7 @@ import {
   BookOpen,
   Bot,
   Users,
+  ShieldCheck,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -18,6 +19,7 @@ const NAV_ITEMS = [
   { id: "policies", label: "Policy Library", icon: BookOpen },
   { id: "agent", label: "PA Review Agent", icon: Bot },
   { id: "caseload", label: "Caseload", icon: Users },
+  { id: "compliance", label: "CMS Compliance", icon: ShieldCheck },
 ];
 
 export function Sidebar({ activePage, onNavigate, pendingCount }: SidebarProps) {

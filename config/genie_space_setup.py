@@ -46,6 +46,15 @@ TABLES = [
     f"{CATALOG}.care_management.gold_toc_barriers",
     f"{CATALOG}.care_management.gold_gap_closure_rates",
     f"{CATALOG}.care_management.gold_gap_closure_funnel",
+    # Metric views (governed semantic layer)
+    f"{CATALOG}.analytics.mv_financial_overview",
+    f"{CATALOG}.analytics.mv_mlr_compliance",
+    f"{CATALOG}.analytics.mv_utilization",
+    f"{CATALOG}.analytics.mv_enrollment",
+    f"{CATALOG}.analytics.mv_ibnr",
+    f"{CATALOG}.analytics.mv_denials",
+    f"{CATALOG}.analytics.mv_cost_of_care",
+    f"{CATALOG}.analytics.mv_fwa_risk",
 ]
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Search, ShieldAlert, AlertTriangle, TrendingUp, Loader2 } from "lucide-react";
+import { Search, ShieldAlert, AlertTriangle, TrendingUp, Loader2, BarChart3 } from "lucide-react";
 import { api, type ProviderRisk } from "@/lib/api";
 
 interface ProviderAnalysisProps {
@@ -12,6 +12,7 @@ export function ProviderAnalysis({ initialNpi }: ProviderAnalysisProps) {
   const [profile, setProfile] = useState<ProviderRisk | null>(null);
   const [claims, setClaims] = useState<Record<string, unknown>[]>([]);
   const [mlScores, setMlScores] = useState<Record<string, unknown>[]>([]);
+  const [shapValues, setShapValues] = useState<Record<string, number> | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -24,15 +25,18 @@ export function ProviderAnalysis({ initialNpi }: ProviderAnalysisProps) {
     setProfile(null);
     setClaims([]);
     setMlScores([]);
+    setShapValues(null);
     try {
-      const [profileData, claimsData, mlData] = await Promise.all([
+      const [profileData, claimsData, mlData, shapData] = await Promise.all([
         api.getProviderRisk(query),
         api.getProviderClaims(query),
         api.getProviderMLScores(query),
+        api.getProviderShapValues(query).catch(() => null),
       ]);
       setProfile(profileData);
       setClaims(claimsData);
       setMlScores(mlData);
+      setShapValues(shapData);
     } catch (err) {
       setError(`Provider ${query} not found or an error occurred.`);
     } finally {
@@ -179,6 +183,87 @@ export function ProviderAnalysis({ initialNpi }: ProviderAnalysisProps) {
               </div>
             </div>
           )}
+
+          {/* ML Risk Factors (SHAP-like) */}
+          {shapValues && Object.keys(shapValues).length > 0 && (() => {
+            const entries = Object.entries(shapValues).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+            const maxAbs = Math.max(...entries.map(([, v]) => Math.abs(v)), 0.01);
+            const chartWidth = 400;
+            const barHeight = 24;
+            const labelWidth = 160;
+            const chartPadding = 20;
+            const svgHeight = entries.length * (barHeight + 8) + chartPadding;
+            const halfChart = (chartWidth - labelWidth) / 2;
+            const centerX = labelWidth + halfChart;
+
+            return (
+              <div className="card p-5">
+                <h3 className="text-lg font-semibold text-databricks-dark mb-3 flex items-center gap-2">
+                  <BarChart3 className="w-5 h-5 text-indigo-600" /> ML Risk Factors
+                </h3>
+                <p className="text-xs text-gray-500 mb-4">
+                  Feature contributions to the composite risk score. Positive values increase risk, negative values decrease it.
+                </p>
+                <svg
+                  viewBox={`0 0 ${chartWidth + 40} ${svgHeight}`}
+                  className="w-full"
+                  style={{ maxHeight: `${svgHeight + 20}px` }}
+                >
+                  {/* Center line */}
+                  <line
+                    x1={centerX}
+                    y1={0}
+                    x2={centerX}
+                    y2={svgHeight - chartPadding}
+                    stroke="#e2e8f0"
+                    strokeWidth="1"
+                  />
+                  {entries.map(([feature, value], i) => {
+                    const yPos = i * (barHeight + 8) + 4;
+                    const barWidth = (Math.abs(value) / maxAbs) * halfChart;
+                    const barX = value >= 0 ? centerX : centerX - barWidth;
+                    const barColor = value >= 0 ? "#ef4444" : "#22c55e";
+
+                    return (
+                      <g key={feature}>
+                        {/* Feature label */}
+                        <text
+                          x={labelWidth - 8}
+                          y={yPos + barHeight / 2 + 4}
+                          textAnchor="end"
+                          fontSize="11"
+                          fill="#475569"
+                          fontWeight="500"
+                        >
+                          {feature}
+                        </text>
+                        {/* Bar */}
+                        <rect
+                          x={barX}
+                          y={yPos}
+                          width={Math.max(barWidth, 2)}
+                          height={barHeight}
+                          rx={3}
+                          fill={barColor}
+                          opacity={0.8}
+                        />
+                        {/* Value label */}
+                        <text
+                          x={value >= 0 ? centerX + barWidth + 4 : centerX - barWidth - 4}
+                          y={yPos + barHeight / 2 + 4}
+                          textAnchor={value >= 0 ? "start" : "end"}
+                          fontSize="10"
+                          fill="#64748b"
+                        >
+                          {value >= 0 ? "+" : ""}{value.toFixed(4)}
+                        </text>
+                      </g>
+                    );
+                  })}
+                </svg>
+              </div>
+            );
+          })()}
 
           {/* Flagged Claims */}
           {claims.length > 0 && (

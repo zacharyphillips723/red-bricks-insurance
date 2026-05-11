@@ -313,6 +313,23 @@ export interface CohortFilterOptions {
   genders: string[];
 }
 
+export interface SavedCohort {
+  cohort_id: string;
+  cohort_name: string;
+  description: string | null;
+  criteria: Record<string, unknown>;
+  member_count: number;
+  created_by: string;
+  created_at: string;
+}
+
+// --- Embed Config ---
+
+export interface EmbedConfig {
+  workspace_url: string;
+  genie_space_id: string;
+}
+
 // --- API Functions ---
 
 export const api = {
@@ -377,6 +394,7 @@ export const api = {
     onToken: (content: string) => void,
     onDone: (data: { conversation_id: string; message_id: string }) => void,
     onError: (error: string) => void,
+    onStatus?: (status: { event: string; data: Record<string, unknown> }) => void,
   ) => {
     const controller = new AbortController();
     fetch(`${API_BASE}/members/${memberId}/agent-stream`, {
@@ -407,6 +425,7 @@ export const api = {
                 else if (currentEvent === "done") onDone({ conversation_id: parsed.conversation_id, message_id: parsed.message_id || "" });
                 else if (currentEvent === "message_saved") onDone(parsed);
                 else if (currentEvent === "error") onError(parsed.error || "Unknown error");
+                else if (onStatus) onStatus({ event: currentEvent, data: parsed });
               } catch {
                 // non-JSON event data — ignore
               }
@@ -466,6 +485,23 @@ export const api = {
   getCohortFilterOptions: () =>
     fetchApi<CohortFilterOptions>("/cohorts/filter-options"),
 
+  saveCohort: (name: string, description: string | null, criteria: Record<string, unknown>, memberCount: number) =>
+    fetchApi<SavedCohort>("/cohorts/save", {
+      method: "POST",
+      body: JSON.stringify({ cohort_name: name, description, criteria, member_count: memberCount }),
+    }),
+
+  getSavedCohorts: () =>
+    fetchApi<SavedCohort[]>("/cohorts/saved"),
+
+  deleteSavedCohort: (cohortId: string) =>
+    fetchApi<{ status: string; cohort_id: string }>(`/cohorts/saved/${cohortId}`, {
+      method: "DELETE",
+    }),
+
   // User identity
   getCurrentUser: () => fetchApi<UserInfo>("/me"),
+
+  // Embed config
+  getEmbedConfig: () => fetchApi<EmbedConfig>("/embed-config"),
 };

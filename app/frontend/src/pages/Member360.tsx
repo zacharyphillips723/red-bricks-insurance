@@ -156,6 +156,7 @@ export function Member360() {
 
   // Feedback state: track which messages have been rated
   const [feedbackGiven, setFeedbackGiven] = useState<Record<string, "positive" | "negative">>({});
+  const [streamStatus, setStreamStatus] = useState<string>("");
 
   // Expanded case notes
   const [expandedNotes, setExpandedNotes] = useState<Set<string>>(new Set());
@@ -247,10 +248,17 @@ export function Member360() {
     setAgentMessages((prev) => [...prev, { role: "user", text }]);
     setAgentQuestion("");
     setAgentLoading(true);
+    setStreamStatus("Routing question...");
 
     // Add a placeholder agent message for streaming tokens
-    const streamIdx = agentMessages.length + 1; // index of the new agent message
     setAgentMessages((prev) => [...prev, { role: "agent", text: "" }]);
+
+    const AGENT_LABELS: Record<string, string> = {
+      clinical: "Clinical",
+      financial: "Financial",
+      care_management: "Care Management",
+      document: "Document Analysis",
+    };
 
     api.streamMemberAgent(
       member.member_id,
@@ -258,6 +266,7 @@ export function Member360() {
       conversationId || undefined,
       // onToken: update the last agent message
       (content: string) => {
+        setStreamStatus("");
         setAgentMessages((prev) => {
           const updated = [...prev];
           updated[updated.length - 1] = { ...updated[updated.length - 1], text: content };
@@ -279,6 +288,7 @@ export function Member360() {
           return updated;
         });
         setAgentLoading(false);
+        setStreamStatus("");
         api.listConversations(member.member_id).then(setConversations).catch(() => {});
       },
       // onError: show error
@@ -292,6 +302,21 @@ export function Member360() {
           return updated;
         });
         setAgentLoading(false);
+        setStreamStatus("");
+      },
+      // onStatus: show agent routing/dispatch status
+      (status) => {
+        if (status.event === "routing") {
+          const agents = (status.data.agents as string[]) || [];
+          const labels = agents.map((a) => AGENT_LABELS[a] || a);
+          setStreamStatus(`Consulting ${labels.join(", ")} specialist${agents.length > 1 ? "s" : ""}...`);
+        } else if (status.event === "agent_start") {
+          const label = AGENT_LABELS[status.data.agent as string] || status.data.agent;
+          setStreamStatus(`${label} specialist analyzing...`);
+        } else if (status.event === "agent_done") {
+          const label = AGENT_LABELS[status.data.agent as string] || status.data.agent;
+          setStreamStatus(`${label} specialist complete`);
+        }
       },
     );
   };
@@ -794,7 +819,7 @@ export function Member360() {
                 {agentLoading && (
                   <div className="flex items-center gap-2 text-xs text-gray-400">
                     <Loader2 className="w-4 h-4 animate-spin text-databricks-red" />
-                    Agent is thinking...
+                    {streamStatus || "Agent is thinking..."}
                   </div>
                 )}
               </div>

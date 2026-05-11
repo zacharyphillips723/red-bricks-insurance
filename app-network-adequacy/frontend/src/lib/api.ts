@@ -167,6 +167,67 @@ export interface CountyMapMetric {
   oon_providers: number;
 }
 
+// --- Geographic / Map Detail ---
+
+export interface GeoProvider {
+  npi: string;
+  provider_name: string;
+  specialty: string;
+  cms_specialty_type: string | null;
+  network_status: string;
+  county_name: string;
+  latitude: number;
+  longitude: number;
+  panel_size: number;
+  accepts_new_patients: boolean;
+  telehealth_capable: boolean;
+}
+
+export interface GeoMemberCluster {
+  county_fips: string;
+  county_name: string;
+  zip_code: string;
+  latitude: number;
+  longitude: number;
+  member_count: number;
+  risk_tier: string;
+}
+
+export interface CountyComplianceSummary {
+  county_fips: string;
+  county_name: string;
+  county_type: string;
+  latitude: number;
+  longitude: number;
+  overall_compliant: boolean;
+  specialties_compliant: number;
+  specialties_non_compliant: number;
+  total_specialties: number;
+  gap_members: number;
+  total_members: number;
+  avg_compliance_pct: number;
+  non_compliant_specialties: string[];
+}
+
+// --- Recruitment Workflow ---
+
+export interface RecruitmentRecord {
+  npi: string;
+  specialty: string | null;
+  county_name: string | null;
+  status: string;
+  potential_savings: number;
+  members_served: number;
+  priority_score: number;
+  notes: string | null;
+  updated_at: string | null;
+}
+
+export interface OutreachLetterResponse {
+  npi: string;
+  letter: string;
+}
+
 export interface GenieResponse {
   conversation_id: string;
   message_id: string | null;
@@ -210,6 +271,33 @@ export const api = {
 
   // Map
   getCountyMapMetrics: () => fetchApi<CountyMapMetric[]>("/map/county-metrics"),
+
+  // Geographic Detail
+  getGeoProviders: () => fetchApi<GeoProvider[]>("/geographic/providers"),
+  getGeoMembers: () => fetchApi<GeoMemberCluster[]>("/geographic/members"),
+  getGeoCompliance: () =>
+    fetchApi<CountyComplianceSummary[]>("/geographic/compliance"),
+
+  // Recruitment Workflow
+  getRecruitmentStatuses: () =>
+    fetchApi<RecruitmentRecord[]>("/recruitment/status"),
+  updateRecruitmentStatus: (npi: string, status: string, notes?: string) =>
+    fetchApi<RecruitmentRecord>("/recruitment/status", {
+      method: "POST",
+      body: JSON.stringify({ npi, status, notes }),
+    }),
+  generateOutreachLetter: (data: {
+    npi: string;
+    provider_name?: string;
+    specialty?: string;
+    county_name?: string;
+    potential_savings?: number;
+    members_served?: number;
+  }) =>
+    fetchApi<OutreachLetterResponse>("/recruitment/outreach-letter", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 
   // Genie
   askGenie: (question: string, conversationId?: string) =>

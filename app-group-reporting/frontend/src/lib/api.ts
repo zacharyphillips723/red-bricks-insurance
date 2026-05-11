@@ -165,6 +165,38 @@ export interface RiskCareGapsResponse {
   }[];
 }
 
+// --- Renewal Scenario Types ---
+
+export interface RenewalScenarioResult {
+  current_pmpm: number;
+  projected_pmpm: number;
+  rate_change_pct: number;
+  current_loss_ratio: number;
+  projected_loss_ratio: number;
+  churn_probability: number;
+  health_score: number;
+  group_tenure_years: number;
+}
+
+// --- Competitive Benchmark Types ---
+
+export interface CompetitorBenchmark {
+  carrier_name: string;
+  pmpm: number;
+  network_size: string;
+  wellness_programs: string[];
+  member_satisfaction: number;
+}
+
+export interface CompetitiveBenchmarkResponse {
+  group_id: string;
+  group_name: string;
+  red_bricks_pmpm: number;
+  sic_code: string;
+  size_tier: string;
+  competitors: CompetitorBenchmark[];
+}
+
 export interface AgentResponse {
   answer: string;
   enrichment_sources: string[];
@@ -209,6 +241,21 @@ export const api = {
 
   getRiskCareGaps: (id: string) =>
     fetchApi<RiskCareGapsResponse>(`/groups/${id}/reports/risk-care-gaps`),
+
+  // Report Card PDF
+  getReportCardPdfUrl: (id: string) =>
+    `${API_BASE}/groups/${id}/report-card-pdf`,
+
+  // Renewal Scenario Modeling
+  renewalScenario: (id: string, rateChangePct: number) =>
+    fetchApi<RenewalScenarioResult>(`/groups/${id}/renewal-scenario`, {
+      method: "POST",
+      body: JSON.stringify({ rate_change_pct: rateChangePct }),
+    }),
+
+  // Competitive Benchmarking
+  getCompetitiveBenchmark: (id: string) =>
+    fetchApi<CompetitiveBenchmarkResponse>(`/groups/${id}/competitive-benchmark`),
 
   chatWithAgent: (groupId: string, question: string) =>
     fetchApi<AgentResponse>("/agent/chat", {

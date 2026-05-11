@@ -262,6 +262,50 @@ class RiskCareGapsResponse(BaseModel):
 # Genie
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Renewal Scenario Modeling
+# ---------------------------------------------------------------------------
+
+class RenewalScenarioIn(BaseModel):
+    """Input for renewal scenario modeling."""
+    rate_change_pct: float  # e.g., 8 for 8% increase
+
+
+class RenewalScenarioOut(BaseModel):
+    """Output from renewal scenario modeling."""
+    current_pmpm: float
+    projected_pmpm: float
+    rate_change_pct: float
+    current_loss_ratio: float
+    projected_loss_ratio: float
+    churn_probability: float
+    health_score: int
+    group_tenure_years: int
+
+
+# ---------------------------------------------------------------------------
+# Competitive Benchmarking
+# ---------------------------------------------------------------------------
+
+class CompetitorBenchmark(BaseModel):
+    """A single competitor's benchmark data."""
+    carrier_name: str
+    pmpm: float
+    network_size: str
+    wellness_programs: list[str]
+    member_satisfaction: float  # 1-5 scale
+
+
+class CompetitiveBenchmarkResponse(BaseModel):
+    """Competitive benchmark data for a group."""
+    group_id: str
+    group_name: str
+    red_bricks_pmpm: float
+    sic_code: str
+    size_tier: str
+    competitors: list[CompetitorBenchmark]
+
+
 class GenieQuestionIn(BaseModel):
     """Input for asking Genie a question."""
     question: str

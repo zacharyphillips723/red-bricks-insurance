@@ -6,6 +6,7 @@ import { RequestDetail } from "@/pages/RequestDetail";
 import { PolicyLibrary } from "@/pages/PolicyLibrary";
 import { AgentChat } from "@/pages/AgentChat";
 import { CaseloadView } from "@/pages/CaseloadView";
+import { Compliance } from "@/pages/Compliance";
 import { api } from "@/lib/api";
 
 export default function App() {
@@ -48,6 +49,8 @@ export default function App() {
         return <AgentChat />;
       case "caseload":
         return <CaseloadView />;
+      case "compliance":
+        return <Compliance onSelectRequest={handleSelectRequest} />;
       default:
         return <Dashboard onSelectRequest={handleSelectRequest} />;
     }

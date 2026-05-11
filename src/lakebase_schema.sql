@@ -332,3 +332,21 @@ DROP TRIGGER IF EXISTS trg_conversation_message_insert ON conversation_messages;
 CREATE TRIGGER trg_conversation_message_insert
     AFTER INSERT ON conversation_messages
     FOR EACH ROW EXECUTE FUNCTION update_conversation_on_message();
+
+
+-- ============================================================================
+-- Saved Cohorts
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS saved_cohorts (
+    cohort_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    cohort_name     TEXT NOT NULL,
+    description     TEXT,
+    criteria        JSONB NOT NULL,
+    member_count    INTEGER NOT NULL DEFAULT 0,
+    created_by      TEXT NOT NULL DEFAULT 'system',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_saved_cohorts_created ON saved_cohorts(created_at DESC);

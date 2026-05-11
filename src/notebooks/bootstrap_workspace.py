@@ -739,6 +739,15 @@ GENIE_SPACE_CONFIGS = [
             f"{catalog}.claims.silver_claims_medical",
             f"{catalog}.members.silver_enrollment",
             f"{catalog}.members.silver_members",
+            # Metric views (governed semantic layer)
+            f"{catalog}.analytics.mv_financial_overview",
+            f"{catalog}.analytics.mv_mlr_compliance",
+            f"{catalog}.analytics.mv_utilization",
+            f"{catalog}.analytics.mv_enrollment",
+            f"{catalog}.analytics.mv_ibnr",
+            f"{catalog}.analytics.mv_denials",
+            f"{catalog}.analytics.mv_cost_of_care",
+            f"{catalog}.analytics.mv_fwa_risk",
         ]),
     },
     {
@@ -785,6 +794,13 @@ GENIE_SPACE_CONFIGS = [
             f"{catalog}.analytics.gold_group_renewal",
             f"{catalog}.analytics.gold_group_stop_loss",
             f"{catalog}.underwriting.gold_underwriting_summary",
+            # Metric views (governed semantic layer)
+            f"{catalog}.analytics.mv_financial_overview",
+            f"{catalog}.analytics.mv_mlr_compliance",
+            f"{catalog}.analytics.mv_utilization",
+            f"{catalog}.analytics.mv_enrollment",
+            f"{catalog}.analytics.mv_ibnr",
+            f"{catalog}.analytics.mv_denials",
         ]),
     },
     {

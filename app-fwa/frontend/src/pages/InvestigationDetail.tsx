@@ -312,6 +312,132 @@ export function InvestigationDetail({
               )}
             </div>
           </div>
+
+          {/* Case Timeline */}
+          {inv.audit_log.length > 0 && (() => {
+            const sortedLog = [...inv.audit_log].sort(
+              (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+            );
+
+            const actionColor = (action: string) => {
+              if (action === "assignment") return "#3b82f6";
+              if (action === "note_added") return "#22c55e";
+              if (action === "status_change") return "#f59e0b";
+              if (action === "recovery_recorded") return "#ef4444";
+              return "#94a3b8";
+            };
+
+            const actionBgColor = (action: string) => {
+              if (action === "assignment") return "bg-blue-50";
+              if (action === "note_added") return "bg-green-50";
+              if (action === "status_change") return "bg-amber-50";
+              if (action === "recovery_recorded") return "bg-red-50";
+              return "bg-gray-50";
+            };
+
+            const timeBetween = (a: string, b: string) => {
+              const diffMs = new Date(b).getTime() - new Date(a).getTime();
+              if (diffMs < 0) return "";
+              const hours = Math.floor(diffMs / (1000 * 60 * 60));
+              const days = Math.floor(hours / 24);
+              if (days > 0) return `${days}d ${hours % 24}h`;
+              if (hours > 0) return `${hours}h ${Math.floor((diffMs / (1000 * 60)) % 60)}m`;
+              const mins = Math.floor(diffMs / (1000 * 60));
+              return `${mins}m`;
+            };
+
+            // Build status progression
+            const statusProgression: string[] = [];
+            for (const entry of sortedLog) {
+              if (entry.new_status && !statusProgression.includes(entry.new_status)) {
+                statusProgression.push(entry.new_status);
+              }
+            }
+            if (inv.status && !statusProgression.includes(inv.status)) {
+              statusProgression.push(inv.status);
+            }
+
+            return (
+              <div className="card p-5">
+                <h3 className="text-sm font-semibold text-databricks-dark mb-4 flex items-center gap-2">
+                  <Clock className="w-4 h-4" /> Case Timeline
+                </h3>
+
+                {/* Status progression bar */}
+                {statusProgression.length > 1 && (
+                  <div className="mb-5">
+                    <div className="text-xs text-gray-500 mb-2">Status Progression</div>
+                    <div className="flex items-center gap-1 flex-wrap">
+                      {statusProgression.map((status, i) => (
+                        <div key={i} className="flex items-center gap-1">
+                          <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${
+                            status === inv.status
+                              ? "bg-databricks-red text-white"
+                              : "bg-gray-100 text-gray-600"
+                          }`}>
+                            {status}
+                          </span>
+                          {i < statusProgression.length - 1 && (
+                            <span className="text-gray-300 text-xs px-1">&rarr;</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Vertical timeline */}
+                <div className="relative ml-3">
+                  {/* Vertical line */}
+                  <div className="absolute left-2 top-3 bottom-3 w-0.5 bg-gray-200" />
+
+                  <div className="space-y-0">
+                    {sortedLog.map((entry, i) => (
+                      <div key={entry.audit_id}>
+                        {/* Time gap indicator */}
+                        {i > 0 && (() => {
+                          const gap = timeBetween(sortedLog[i - 1].created_at, entry.created_at);
+                          return gap ? (
+                            <div className="flex items-center gap-2 pl-6 py-1">
+                              <span className="text-[10px] text-gray-400 italic">{gap} later</span>
+                            </div>
+                          ) : null;
+                        })()}
+
+                        <div className="flex items-start gap-3 relative pb-3">
+                          {/* Dot */}
+                          <div
+                            className="w-4 h-4 rounded-full border-2 border-white shrink-0 z-10 mt-0.5"
+                            style={{ backgroundColor: actionColor(entry.action_type) }}
+                          />
+                          {/* Content */}
+                          <div className={`flex-1 rounded-lg px-3 py-2 ${actionBgColor(entry.action_type)}`}>
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-semibold text-databricks-dark capitalize">
+                                {entry.action_type.replace(/_/g, " ")}
+                              </span>
+                              <span className="text-[10px] text-gray-400">{formatDateTime(entry.created_at)}</span>
+                            </div>
+                            {entry.previous_status && entry.new_status && (
+                              <div className="text-xs text-gray-500 mt-0.5">
+                                {entry.previous_status} &rarr; {entry.new_status}
+                              </div>
+                            )}
+                            {entry.note && (
+                              <p className="text-xs text-gray-600 mt-1">{entry.note}</p>
+                            )}
+                            {entry.investigator_name && (
+                              <p className="text-[10px] text-gray-400 mt-0.5">{entry.investigator_name}</p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
         </div>
 
         {/* Right column: Actions */}
