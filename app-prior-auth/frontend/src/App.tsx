@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Sidebar } from "@/components/Sidebar";
 import { Dashboard } from "@/pages/Dashboard";
 import { ReviewQueue } from "@/pages/ReviewQueue";
@@ -7,10 +8,11 @@ import { PolicyLibrary } from "@/pages/PolicyLibrary";
 import { AgentChat } from "@/pages/AgentChat";
 import { CaseloadView } from "@/pages/CaseloadView";
 import { Compliance } from "@/pages/Compliance";
+import { useHashRouter } from "@/lib/useHashRouter";
 import { api } from "@/lib/api";
 
 export default function App() {
-  const [page, setPage] = useState("dashboard");
+  const [page, setPage] = useHashRouter("dashboard");
   const [selectedReqId, setSelectedReqId] = useState<string | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
 
@@ -57,13 +59,15 @@ export default function App() {
   };
 
   return (
-    <div className="flex min-h-screen">
-      <Sidebar
-        activePage={page === "request-detail" ? "queue" : page}
-        onNavigate={setPage}
-        pendingCount={pendingCount}
-      />
-      <main className="flex-1 p-8 overflow-y-auto">{renderPage()}</main>
-    </div>
+    <ErrorBoundary>
+      <div className="flex min-h-screen">
+        <Sidebar
+          activePage={page === "request-detail" ? "queue" : page}
+          onNavigate={setPage}
+          pendingCount={pendingCount}
+        />
+        <main className="flex-1 p-8 overflow-y-auto">{renderPage()}</main>
+      </div>
+    </ErrorBoundary>
   );
 }

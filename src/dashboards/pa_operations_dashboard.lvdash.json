@@ -4,42 +4,42 @@
       "name": "ds_pa_volume_trend",
       "displayName": "PA Volume by Month",
       "queryLines": [
-        "SELECT reporting_month, total_requests, approved_count, denied_count, pended_count, partially_approved_count FROM prior_auth.gold_pa_metrics ORDER BY reporting_month"
+        "SELECT request_year_month AS reporting_month, SUM(total_requests) AS total_requests, SUM(approved_count) AS approved_count, SUM(denied_count) AS denied_count, SUM(pended_count) AS pended_count, 0 AS partially_approved_count FROM prior_auth.gold_pa_metrics GROUP BY request_year_month ORDER BY reporting_month"
       ]
     },
     {
       "name": "ds_approval_rate",
       "displayName": "Current Approval Rate",
       "queryLines": [
-        "SELECT ROUND(AVG(approval_rate) * 100, 1) AS approval_rate_pct FROM prior_auth.gold_pa_metrics WHERE reporting_month >= DATE_TRUNC('month', CURRENT_DATE()) - INTERVAL 3 MONTHS"
+        "SELECT ROUND(AVG(approval_rate_pct), 1) AS approval_rate_pct FROM prior_auth.gold_pa_metrics WHERE request_year_month >= DATE_FORMAT(ADD_MONTHS(TO_DATE((SELECT MAX(request_year_month) FROM prior_auth.gold_pa_metrics), 'yyyy-MM'), -2), 'yyyy-MM')"
       ]
     },
     {
       "name": "ds_avg_turnaround",
       "displayName": "Average Turnaround Hours",
       "queryLines": [
-        "SELECT ROUND(AVG(avg_turnaround_hours), 1) AS avg_turnaround_hours FROM prior_auth.gold_pa_metrics WHERE reporting_month >= DATE_TRUNC('month', CURRENT_DATE()) - INTERVAL 3 MONTHS"
+        "SELECT ROUND(AVG(avg_turnaround_hours), 1) AS avg_turnaround_hours FROM prior_auth.gold_pa_metrics WHERE request_year_month >= DATE_FORMAT(ADD_MONTHS(TO_DATE((SELECT MAX(request_year_month) FROM prior_auth.gold_pa_metrics), 'yyyy-MM'), -2), 'yyyy-MM')"
       ]
     },
     {
       "name": "ds_cms_compliance",
       "displayName": "CMS Compliance Rate",
       "queryLines": [
-        "SELECT ROUND(AVG(cms_compliance_rate) * 100, 1) AS compliance_pct FROM prior_auth.gold_pa_metrics WHERE reporting_month >= DATE_TRUNC('month', CURRENT_DATE()) - INTERVAL 3 MONTHS"
+        "SELECT ROUND(AVG(cms_compliance_rate_pct), 1) AS compliance_pct FROM prior_auth.gold_pa_metrics WHERE request_year_month >= DATE_FORMAT(ADD_MONTHS(TO_DATE((SELECT MAX(request_year_month) FROM prior_auth.gold_pa_metrics), 'yyyy-MM'), -2), 'yyyy-MM')"
       ]
     },
     {
       "name": "ds_appeal_overturn",
       "displayName": "Appeal Overturn Rate",
       "queryLines": [
-        "SELECT ROUND(AVG(appeal_overturn_rate) * 100, 1) AS overturn_pct FROM prior_auth.gold_pa_metrics WHERE reporting_month >= DATE_TRUNC('month', CURRENT_DATE()) - INTERVAL 3 MONTHS AND appeal_overturn_rate IS NOT NULL"
+        "SELECT ROUND(CASE WHEN SUM(appeals_filed) > 0 THEN SUM(appeals_overturned) * 100.0 / SUM(appeals_filed) ELSE NULL END, 1) AS overturn_pct FROM prior_auth.gold_pa_metrics WHERE request_year_month >= DATE_FORMAT(ADD_MONTHS(TO_DATE((SELECT MAX(request_year_month) FROM prior_auth.gold_pa_metrics), 'yyyy-MM'), -2), 'yyyy-MM') AND appeals_filed > 0"
       ]
     },
     {
       "name": "ds_turnaround_by_urgency",
       "displayName": "Turnaround by Urgency",
       "queryLines": [
-        "SELECT reporting_month, avg_expedited_turnaround_hours, avg_standard_turnaround_hours FROM prior_auth.gold_pa_metrics ORDER BY reporting_month"
+        "SELECT request_year_month AS reporting_month, ROUND(AVG(CASE WHEN urgency = 'expedited' THEN avg_turnaround_hours END), 1) AS avg_expedited_turnaround_hours, ROUND(AVG(CASE WHEN urgency = 'standard' THEN avg_turnaround_hours END), 1) AS avg_standard_turnaround_hours FROM prior_auth.gold_pa_metrics GROUP BY request_year_month ORDER BY reporting_month"
       ]
     },
     {
@@ -60,7 +60,7 @@
       "name": "ds_denial_reasons",
       "displayName": "Top Denial Reasons",
       "queryLines": [
-        "SELECT denial_reason_code, denial_reason_display, total_denials, appeal_rate_pct, overturn_rate_pct FROM prior_auth.gold_pa_denial_analysis WHERE denial_reason_code IS NOT NULL ORDER BY total_denials DESC LIMIT 10"
+        "SELECT denial_reason_code, determination_reason AS denial_reason_display, denial_count AS total_denials, ROUND(CASE WHEN denial_count > 0 THEN appeals_filed * 100.0 / denial_count ELSE 0 END, 1) AS appeal_rate_pct, overturn_rate_pct FROM prior_auth.gold_pa_denial_analysis WHERE denial_reason_code IS NOT NULL ORDER BY total_denials DESC LIMIT 10"
       ]
     },
     {
@@ -74,14 +74,14 @@
       "name": "ds_provider_leaderboard",
       "displayName": "Provider PA Patterns",
       "queryLines": [
-        "SELECT provider_name, provider_specialty, total_requests, approval_rate_pct, denial_rate_pct, avg_turnaround_hours, auto_adjudication_rate_pct FROM prior_auth.gold_pa_provider_patterns ORDER BY total_requests DESC LIMIT 15"
+        "SELECT requesting_provider_npi AS provider_name, service_type AS provider_specialty, total_requests, approval_rate_pct, denial_rate_pct, avg_turnaround_hours, auto_adjudication_rate_pct FROM prior_auth.gold_pa_provider_patterns ORDER BY total_requests DESC LIMIT 15"
       ]
     },
     {
       "name": "ds_policy_utilization",
       "displayName": "Policy Utilization",
       "queryLines": [
-        "SELECT policy_name, service_category, total_requests, approval_rate_pct, denial_rate_pct, top_denial_reason FROM prior_auth.gold_pa_policy_utilization ORDER BY total_requests DESC"
+        "SELECT policy_name, service_category, total_requests, approval_rate_pct, ROUND(CASE WHEN total_requests > 0 THEN denied_count * 100.0 / total_requests ELSE 0 END, 1) AS denial_rate_pct, top_denial_reason FROM prior_auth.gold_pa_policy_utilization ORDER BY total_requests DESC"
       ]
     },
     {

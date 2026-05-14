@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Sidebar } from "@/components/Sidebar";
 import { Dashboard } from "@/pages/Dashboard";
 import { AlertQueue } from "@/pages/AlertQueue";
@@ -11,10 +12,11 @@ import { OutreachDraft } from "@/pages/OutreachDraft";
 import { CohortBuilder } from "@/pages/CohortBuilder";
 import { ToastNotifications } from "@/components/ToastNotifications";
 import { useNotifications } from "@/lib/useNotifications";
+import { useHashRouter } from "@/lib/useHashRouter";
 import { api } from "@/lib/api";
 
 export default function App() {
-  const [page, setPage] = useState("dashboard");
+  const [page, setPage] = useHashRouter("dashboard");
   const [selectedAlertId, setSelectedAlertId] = useState<string | null>(null);
   const [unassignedCount, setUnassignedCount] = useState(0);
 
@@ -78,18 +80,20 @@ export default function App() {
   };
 
   return (
-    <div className="flex min-h-screen">
-      <Sidebar
-        activePage={page === "alert-detail" ? "alerts" : page}
-        onNavigate={setPage}
-        unassignedCount={unassignedCount}
-      />
-      <main className="flex-1 p-8 overflow-y-auto">{renderPage()}</main>
-      <ToastNotifications
-        notifications={notifications}
-        onDismiss={dismissNotification}
-        onClickAlert={handleToastClick}
-      />
-    </div>
+    <ErrorBoundary>
+      <div className="flex min-h-screen">
+        <Sidebar
+          activePage={page === "alert-detail" ? "alerts" : page}
+          onNavigate={setPage}
+          unassignedCount={unassignedCount}
+        />
+        <main className="flex-1 p-8 overflow-y-auto">{renderPage()}</main>
+        <ToastNotifications
+          notifications={notifications}
+          onDismiss={dismissNotification}
+          onClickAlert={handleToastClick}
+        />
+      </div>
+    </ErrorBoundary>
   );
 }

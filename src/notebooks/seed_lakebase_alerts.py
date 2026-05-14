@@ -44,13 +44,18 @@ def get_connection():
     )
     return psycopg.connect(conn_string)
 
-# Verify connection
+# Verify connection and clear stale alerts for idempotent re-seeding
 with get_connection() as conn:
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM care_managers")
         print(f"Care managers: {cur.fetchone()[0]}")
         cur.execute("SELECT count(*) FROM risk_stratification_alerts")
-        print(f"Existing alerts: {cur.fetchone()[0]}")
+        existing = cur.fetchone()[0]
+        print(f"Existing alerts: {existing}")
+        if existing > 0:
+            cur.execute("TRUNCATE risk_stratification_alerts")
+            conn.commit()
+            print(f"  Cleared {existing} existing alerts for clean re-seed.")
 
 # COMMAND ----------
 

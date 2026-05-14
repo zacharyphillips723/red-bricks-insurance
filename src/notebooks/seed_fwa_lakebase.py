@@ -47,13 +47,19 @@ def get_connection():
     )
     return psycopg.connect(conn_string)
 
-# Verify connection
+# Verify connection and clear stale data for idempotent re-seeding
 with get_connection() as conn:
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM fraud_investigators")
         print(f"Fraud investigators: {cur.fetchone()[0]}")
         cur.execute("SELECT count(*) FROM fwa_investigations")
-        print(f"Existing investigations: {cur.fetchone()[0]}")
+        existing = cur.fetchone()[0]
+        print(f"Existing investigations: {existing}")
+        if existing > 0:
+            # Truncate in dependency order (evidence/audit reference investigations)
+            cur.execute("TRUNCATE investigation_evidence, investigation_audit_log, fwa_investigations")
+            conn.commit()
+            print(f"  Cleared {existing} existing investigations + audit/evidence for clean re-seed.")
 
 # COMMAND ----------
 

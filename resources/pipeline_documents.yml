@@ -11,6 +11,8 @@ resources:
             path: ../src/pipelines/documents/bronze.sql
         - file:
             path: ../src/pipelines/documents/silver.sql
+        - file:
+            path: ../src/pipelines/documents/gold.sql
       channel: PREVIEW
       serverless: true
       development: true

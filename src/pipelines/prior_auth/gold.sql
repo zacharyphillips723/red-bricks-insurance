@@ -83,8 +83,8 @@ SELECT
 
   -- Turnaround time metrics
   ROUND(AVG(turnaround_hours), 1)                                     AS avg_turnaround_hours,
-  ROUND(PERCENTILE(turnaround_hours, 0.5), 1)                         AS median_turnaround_hours,
-  ROUND(PERCENTILE(turnaround_hours, 0.95), 1)                        AS p95_turnaround_hours,
+  ROUND(PERCENTILE_APPROX(turnaround_hours, 0.5), 1)                         AS median_turnaround_hours,
+  ROUND(PERCENTILE_APPROX(turnaround_hours, 0.95), 1)                        AS p95_turnaround_hours,
 
   -- CMS compliance rate
   ROUND(SUM(CASE WHEN cms_compliant THEN 1 ELSE 0 END)

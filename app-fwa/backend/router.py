@@ -1,12 +1,15 @@
 """FastAPI routes for the FWA Investigation Portal."""
 
 import asyncio
+import logging
 from typing import Optional
 
+from databricks.sdk import WorkspaceClient
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import text
 
 from .database import db
+from .env_config import UC_CATALOG, SQL_WAREHOUSE_ID
 from .agent import (
     query_fwa_agent,
     get_provider_risk_profile,
@@ -33,6 +36,25 @@ from .models import (
 )
 
 api = APIRouter(prefix="/api")
+log = logging.getLogger(__name__)
+
+_CAT = f"`{UC_CATALOG}`"
+
+
+def _uc_query(sql: str) -> list[dict]:
+    """Execute a read-only SQL query against Unity Catalog via Statement Execution."""
+    w = WorkspaceClient()
+    stmt = w.statement_execution.execute_statement(
+        warehouse_id=SQL_WAREHOUSE_ID,
+        statement=sql,
+        wait_timeout="30s",
+    )
+    if not stmt.result or not stmt.result.data_array:
+        return []
+    cols = [c.name for c in stmt.manifest.schema.columns] if stmt.manifest and stmt.manifest.schema else []
+    if not cols:
+        return []
+    return [dict(zip(cols, row)) for row in stmt.result.data_array]
 
 
 # ===================================================================
@@ -478,9 +500,10 @@ async def get_provider_shap(npi: str):
 
 @api.get("/network-graph", operation_id="getNetworkGraph")
 async def get_network_graph():
-    """Build a provider-member-claim fraud network from investigations and evidence."""
+    """Build a provider-member-claim fraud network from investigations + UC claim flags."""
+
+    # --- 1. Load provider investigations from Lakebase ---
     async with db.session() as session:
-        # Get all provider-type investigations with their risk data
         inv_result = await session.execute(text("""
             SELECT
                 i.investigation_id,
@@ -489,56 +512,54 @@ async def get_network_graph():
                 i.target_name,
                 i.composite_risk_score,
                 i.estimated_overpayment,
-                i.claims_involved_count,
-                i.status::text,
-                i.severity::text
+                i.claims_involved_count
             FROM fwa_investigations i
-            WHERE i.target_type IN ('provider', 'member')
+            WHERE i.target_type = 'provider'
             ORDER BY i.composite_risk_score DESC NULLS LAST
-            LIMIT 100
+            LIMIT 60
         """))
         investigations = [dict(r) for r in inv_result.mappings().all()]
 
-        # Get evidence records that link investigations to members/claims
-        evidence_result = await session.execute(text("""
+    # --- 2. Query UC gold_fwa_claim_flags for provider→member edges ---
+    provider_npis = [inv["target_id"] for inv in investigations if inv.get("target_id")]
+    claim_edges: list[dict] = []
+    if provider_npis:
+        npi_list = ", ".join(f"'{npi}'" for npi in provider_npis)
+        sql = f"""
             SELECT
-                e.investigation_id,
-                e.evidence_type,
-                e.reference_id,
-                e.description
-            FROM investigation_evidence e
-            WHERE e.reference_id IS NOT NULL
-            ORDER BY e.created_at DESC
-            LIMIT 500
-        """))
-        evidence_rows = [dict(r) for r in evidence_result.mappings().all()]
+                provider_npi,
+                member_id,
+                COUNT(*) AS claim_count,
+                AVG(CAST(fraud_score AS DOUBLE)) AS avg_fraud_score,
+                SUM(CAST(estimated_overpayment AS DOUBLE)) AS total_overpayment
+            FROM {_CAT}.fwa.gold_fwa_claim_flags
+            WHERE provider_npi IN ({npi_list})
+            GROUP BY provider_npi, member_id
+            ORDER BY avg_fraud_score DESC
+            LIMIT 300
+        """
+        try:
+            claim_edges = await asyncio.to_thread(_uc_query, sql)
+        except Exception as exc:
+            log.warning("UC query for claim edges failed, falling back to Lakebase-only: %s", exc)
 
-    # Build nodes and edges
-    nodes = []
-    edges = []
-    node_ids = set()
-    edge_set = set()
-
-    # Track per-investigation evidence references for linking
-    inv_evidence: dict[str, list[dict]] = {}
-    for ev in evidence_rows:
-        inv_id = ev["investigation_id"]
-        if inv_id not in inv_evidence:
-            inv_evidence[inv_id] = []
-        inv_evidence[inv_id].append(ev)
+    # --- 3. Build nodes and edges ---
+    nodes: list[dict] = []
+    edges: list[dict] = []
+    node_ids: set[str] = set()
+    edge_set: set[str] = set()
 
     total_providers = 0
     total_members = 0
     total_claims = 0
     total_overpayment = 0.0
 
+    # Provider nodes from investigations
     for inv in investigations:
         target_id = inv["target_id"]
-        target_type = inv["target_type"]
         if not target_id:
             continue
-
-        node_key = f"{target_type}_{target_id}"
+        node_key = f"provider_{target_id}"
         risk_score = float(inv["composite_risk_score"] or 0)
         overpayment = float(inv["estimated_overpayment"] or 0)
         claim_count = int(inv["claims_involved_count"] or 0)
@@ -548,108 +569,98 @@ async def get_network_graph():
 
         if node_key not in node_ids:
             node_ids.add(node_key)
-            node_data = {
+            nodes.append({
                 "id": node_key,
-                "type": target_type,
+                "type": "provider",
                 "name": inv["target_name"] or target_id,
                 "risk_score": risk_score,
                 "investigation_count": 1,
                 "claim_count": claim_count,
                 "estimated_overpayment": overpayment,
-            }
-            nodes.append(node_data)
-            if target_type == "provider":
-                total_providers += 1
-            else:
-                total_members += 1
+            })
+            total_providers += 1
         else:
-            # Increment investigation count for existing node
             for n in nodes:
                 if n["id"] == node_key:
                     n["investigation_count"] = n.get("investigation_count", 0) + 1
                     n["risk_score"] = max(n["risk_score"], risk_score)
                     break
 
-        # Create member nodes from evidence references and link them
-        inv_id = inv["investigation_id"]
-        if inv_id in inv_evidence:
-            for ev in inv_evidence[inv_id]:
-                ref_id = ev.get("reference_id", "")
-                if not ref_id:
-                    continue
+    # Member nodes and provider→member edges from UC claim flags
+    provider_lookup = {n["id"]: n for n in nodes}
+    for row in claim_edges:
+        npi = row.get("provider_npi")
+        member_id = row.get("member_id")
+        if not npi or not member_id:
+            continue
 
-                # Determine the type of evidence reference
-                if ev["evidence_type"] in ("member_link", "member_claims", "member_id"):
-                    member_key = f"member_{ref_id}"
-                    if member_key not in node_ids:
-                        node_ids.add(member_key)
-                        nodes.append({
-                            "id": member_key,
-                            "type": "member",
-                            "name": f"Member {ref_id[:8]}",
-                            "risk_score": risk_score * 0.6,
-                            "investigation_count": 1,
-                            "claim_count": 1,
-                        })
-                        total_members += 1
+        provider_key = f"provider_{npi}"
+        member_key = f"member_{member_id}"
 
-                    edge_key = f"{node_key}->{member_key}"
-                    if edge_key not in edge_set:
-                        edge_set.add(edge_key)
-                        edges.append({
-                            "source": node_key,
-                            "target": member_key,
-                            "weight": 1,
-                            "total_billed": overpayment,
-                            "fraud_score": risk_score,
-                        })
-                elif ev["evidence_type"] in ("claim_reference", "claim_id", "flagged_claim"):
-                    # Create a link from provider to a synthetic member node for this claim
-                    claim_member_key = f"claim_{ref_id}"
-                    if claim_member_key not in node_ids:
-                        node_ids.add(claim_member_key)
-                        nodes.append({
-                            "id": claim_member_key,
-                            "type": "member",
-                            "name": f"Claim {ref_id[:8]}",
-                            "risk_score": risk_score * 0.5,
-                            "investigation_count": 1,
-                            "claim_count": 1,
-                        })
-                        total_members += 1
+        # Only add edges for providers we have nodes for
+        if provider_key not in node_ids:
+            continue
 
-                    edge_key = f"{node_key}->{claim_member_key}"
-                    if edge_key not in edge_set:
-                        edge_set.add(edge_key)
-                        edges.append({
-                            "source": node_key,
-                            "target": claim_member_key,
-                            "weight": 1,
-                            "total_billed": overpayment * 0.3,
-                            "fraud_score": risk_score,
-                        })
+        avg_fraud = float(row.get("avg_fraud_score") or 0)
+        edge_claims = int(row.get("claim_count") or 1)
+        edge_overpay = float(row.get("total_overpayment") or 0)
 
-    # If there are providers without evidence links, create synthetic edges
-    # between providers that share investigation characteristics
-    provider_nodes = [n for n in nodes if n["type"] == "provider"]
-    if len(edges) == 0 and len(provider_nodes) > 1:
-        # Link high-risk providers to create a visible network
-        for i, pn in enumerate(provider_nodes[:10]):
-            for j in range(i + 1, min(i + 3, len(provider_nodes))):
-                edge_key = f"{pn['id']}->{provider_nodes[j]['id']}"
-                if edge_key not in edge_set:
-                    edge_set.add(edge_key)
+        # Create member node if new
+        if member_key not in node_ids:
+            node_ids.add(member_key)
+            nodes.append({
+                "id": member_key,
+                "type": "member",
+                "name": f"Member {member_id[:8]}…" if len(member_id) > 8 else f"Member {member_id}",
+                "risk_score": avg_fraud * 0.6,
+                "investigation_count": 0,
+                "claim_count": edge_claims,
+                "estimated_overpayment": edge_overpay,
+            })
+            total_members += 1
+
+        edge_key = f"{provider_key}->{member_key}"
+        if edge_key not in edge_set:
+            edge_set.add(edge_key)
+            edges.append({
+                "source": provider_key,
+                "target": member_key,
+                "weight": min(edge_claims, 10),
+                "fraud_score": avg_fraud,
+                "claim_count": edge_claims,
+            })
+
+    # If a member is linked to multiple providers, add provider→provider edges
+    # through shared members for a richer network
+    member_providers: dict[str, list[str]] = {}
+    for e in edges:
+        src = e["source"]
+        tgt = e["target"]
+        if isinstance(tgt, str) and tgt.startswith("member_"):
+            member_providers.setdefault(tgt, []).append(src)
+
+    for member_key, providers in member_providers.items():
+        if len(providers) < 2:
+            continue
+        for i in range(len(providers)):
+            for j in range(i + 1, len(providers)):
+                pp_key = f"{providers[i]}->{providers[j]}"
+                pp_key_r = f"{providers[j]}->{providers[i]}"
+                if pp_key not in edge_set and pp_key_r not in edge_set:
+                    edge_set.add(pp_key)
+                    p1 = provider_lookup.get(providers[i], {})
+                    p2 = provider_lookup.get(providers[j], {})
                     edges.append({
-                        "source": pn["id"],
-                        "target": provider_nodes[j]["id"],
-                        "weight": 1,
-                        "total_billed": 0,
-                        "fraud_score": (pn["risk_score"] + provider_nodes[j]["risk_score"]) / 2,
+                        "source": providers[i],
+                        "target": providers[j],
+                        "weight": 2,
+                        "fraud_score": (float(p1.get("risk_score", 0)) + float(p2.get("risk_score", 0))) / 2,
+                        "claim_count": 0,
                     })
 
     return {
-        "nodes": nodes[:80],
-        "edges": edges[:200],
+        "nodes": nodes[:120],
+        "edges": edges[:400],
         "stats": {
             "total_providers": total_providers,
             "total_members": total_members,

@@ -1,12 +1,14 @@
 import { useState } from "react";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Sidebar } from "@/components/Sidebar";
 import { GroupSearch } from "@/pages/GroupSearch";
 import { GroupReportCard } from "@/pages/GroupReportCard";
 import { GroupReports } from "@/pages/GroupReports";
 import { SalesCoach } from "@/pages/SalesCoach";
+import { useHashRouter } from "@/lib/useHashRouter";
 
 export default function App() {
-  const [page, setPage] = useState("groups");
+  const [page, setPage] = useHashRouter("groups");
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
 
   const handleSelectGroup = (groupId: string) => {
@@ -65,14 +67,16 @@ export default function App() {
   };
 
   return (
-    <div className="flex min-h-screen">
-      <Sidebar
-        activePage={page}
-        onNavigate={setPage}
-        selectedGroupId={selectedGroupId}
-        onSelectGroup={handleSelectGroup}
-      />
-      <main className="flex-1 p-8 overflow-y-auto">{renderPage()}</main>
-    </div>
+    <ErrorBoundary>
+      <div className="flex min-h-screen">
+        <Sidebar
+          activePage={page}
+          onNavigate={setPage}
+          selectedGroupId={selectedGroupId}
+          onSelectGroup={handleSelectGroup}
+        />
+        <main className="flex-1 p-8 overflow-y-auto">{renderPage()}</main>
+      </div>
+    </ErrorBoundary>
   );
 }

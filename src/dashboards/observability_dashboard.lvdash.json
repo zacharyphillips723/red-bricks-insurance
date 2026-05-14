@@ -1,162 +1,369 @@
 {
   "datasets": [
     {
-      "name": "ds_trace_volume",
-      "displayName": "Agent Trace Volume (7d)",
+      "name": "ds_gateway_totals",
+      "displayName": "AI Gateway Summary (7d)",
       "queryLines": [
-        "SELECT DATE(timestamp_ms / 1000) AS trace_date, COUNT(*) AS trace_count, SUM(CASE WHEN status = 'OK' THEN 1 ELSE 0 END) AS success_count, SUM(CASE WHEN status = 'ERROR' THEN 1 ELSE 0 END) AS error_count FROM system.mlflow.traces WHERE request_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS GROUP BY trace_date ORDER BY trace_date"
+        "SELECT COUNT(*) AS total_requests, SUM(CASE WHEN status_code = '200' THEN 1 ELSE 0 END) AS successful_requests, SUM(CASE WHEN status_code != '200' THEN 1 ELSE 0 END) AS failed_requests, ROUND(AVG(latency_ms), 0) AS avg_latency_ms, ROUND(PERCENTILE(latency_ms, 0.5), 0) AS p50_latency_ms, ROUND(PERCENTILE(latency_ms, 0.95), 0) AS p95_latency_ms FROM system.ai_gateway.usage WHERE event_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS"
       ]
     },
     {
-      "name": "ds_trace_totals",
-      "displayName": "Trace Summary Stats",
+      "name": "ds_gateway_daily",
+      "displayName": "Daily Request Volume",
       "queryLines": [
-        "SELECT COUNT(*) AS total_traces, SUM(CASE WHEN status = 'OK' THEN 1 ELSE 0 END) AS successful, SUM(CASE WHEN status = 'ERROR' THEN 1 ELSE 0 END) AS errors, ROUND(AVG(execution_time_ms), 0) AS avg_latency_ms, ROUND(PERCENTILE(execution_time_ms, 0.5), 0) AS p50_latency_ms, ROUND(PERCENTILE(execution_time_ms, 0.95), 0) AS p95_latency_ms FROM system.mlflow.traces WHERE request_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS"
+        "SELECT DATE(event_time) AS request_date, COUNT(*) AS request_count, SUM(CASE WHEN status_code = '200' THEN 1 ELSE 0 END) AS success_count, SUM(CASE WHEN status_code != '200' THEN 1 ELSE 0 END) AS error_count FROM system.ai_gateway.usage WHERE event_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS GROUP BY request_date ORDER BY request_date"
       ]
     },
     {
-      "name": "ds_latency_by_span",
-      "displayName": "Avg Latency by Span Name",
+      "name": "ds_latency_daily",
+      "displayName": "Daily Latency Trend",
       "queryLines": [
-        "SELECT s.name AS span_name, s.span_type, COUNT(*) AS invocations, ROUND(AVG(s.execution_time_ms), 0) AS avg_latency_ms, ROUND(PERCENTILE(s.execution_time_ms, 0.95), 0) AS p95_latency_ms FROM system.mlflow.trace_spans s JOIN system.mlflow.traces t ON s.trace_id = t.trace_id WHERE t.request_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS GROUP BY s.name, s.span_type ORDER BY avg_latency_ms DESC"
+        "SELECT DATE(event_time) AS request_date, ROUND(AVG(latency_ms), 0) AS avg_latency_ms, ROUND(PERCENTILE(latency_ms, 0.5), 0) AS p50_latency_ms, ROUND(PERCENTILE(latency_ms, 0.95), 0) AS p95_latency_ms FROM system.ai_gateway.usage WHERE event_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS GROUP BY request_date ORDER BY request_date"
       ]
     },
     {
-      "name": "ds_tool_usage",
-      "displayName": "Tool Call Frequency",
+      "name": "ds_endpoint_usage",
+      "displayName": "Usage by Endpoint",
       "queryLines": [
-        "SELECT s.name AS tool_name, COUNT(*) AS call_count, ROUND(AVG(s.execution_time_ms), 0) AS avg_latency_ms, SUM(CASE WHEN s.status = 'ERROR' THEN 1 ELSE 0 END) AS error_count FROM system.mlflow.trace_spans s JOIN system.mlflow.traces t ON s.trace_id = t.trace_id WHERE t.request_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS AND s.span_type = 'TOOL' GROUP BY s.name ORDER BY call_count DESC"
+        "SELECT endpoint_name, COUNT(*) AS total_requests, ROUND(AVG(latency_ms), 0) AS avg_latency_ms, ROUND(PERCENTILE(latency_ms, 0.95), 0) AS p95_latency_ms, SUM(input_tokens) AS total_input_tokens, SUM(output_tokens) AS total_output_tokens, SUM(total_tokens) AS total_tokens, SUM(CASE WHEN status_code != '200' THEN 1 ELSE 0 END) AS errors FROM system.ai_gateway.usage WHERE event_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS GROUP BY endpoint_name ORDER BY total_requests DESC"
       ]
     },
     {
-      "name": "ds_latency_trend",
-      "displayName": "Agent Latency Trend (7d)",
+      "name": "ds_model_usage",
+      "displayName": "Usage by Model",
       "queryLines": [
-        "SELECT DATE(timestamp_ms / 1000) AS trace_date, ROUND(AVG(execution_time_ms), 0) AS avg_latency_ms, ROUND(PERCENTILE(execution_time_ms, 0.5), 0) AS p50_latency_ms, ROUND(PERCENTILE(execution_time_ms, 0.95), 0) AS p95_latency_ms FROM system.mlflow.traces WHERE request_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS GROUP BY trace_date ORDER BY trace_date"
+        "SELECT destination_model, COUNT(*) AS total_requests, ROUND(AVG(latency_ms), 0) AS avg_latency_ms, SUM(total_tokens) AS total_tokens, SUM(CASE WHEN status_code != '200' THEN 1 ELSE 0 END) AS errors FROM system.ai_gateway.usage WHERE event_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS GROUP BY destination_model ORDER BY total_requests DESC"
       ]
     },
     {
-      "name": "ds_error_details",
+      "name": "ds_token_totals",
+      "displayName": "Token Usage (7d)",
+      "queryLines": [
+        "SELECT SUM(input_tokens) AS total_input_tokens, SUM(output_tokens) AS total_output_tokens, SUM(total_tokens) AS total_tokens, COUNT(DISTINCT endpoint_name) AS active_endpoints FROM system.ai_gateway.usage WHERE event_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS"
+      ]
+    },
+    {
+      "name": "ds_token_daily",
+      "displayName": "Daily Token Consumption",
+      "queryLines": [
+        "SELECT DATE(event_time) AS request_date, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens, SUM(total_tokens) AS total_tokens FROM system.ai_gateway.usage WHERE event_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS GROUP BY request_date ORDER BY request_date"
+      ]
+    },
+    {
+      "name": "ds_recent_errors",
       "displayName": "Recent Errors",
       "queryLines": [
-        "SELECT trace_id, DATE(timestamp_ms / 1000) AS trace_date, execution_time_ms, status FROM system.mlflow.traces WHERE request_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS AND status = 'ERROR' ORDER BY timestamp_ms DESC LIMIT 20"
+        "SELECT event_time, endpoint_name, destination_model, status_code, latency_ms, requester FROM system.ai_gateway.usage WHERE event_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS AND status_code != '200' ORDER BY event_time DESC LIMIT 50"
       ]
     },
     {
-      "name": "ds_feedback_summary",
-      "displayName": "Agent Feedback Summary",
+      "name": "ds_requester_usage",
+      "displayName": "Usage by Requester",
       "queryLines": [
-        "SELECT rating, COUNT(*) AS count FROM red_bricks_alerts.agent_feedback GROUP BY rating"
-      ]
-    },
-    {
-      "name": "ds_genie_latency",
-      "displayName": "Genie Query Latency",
-      "queryLines": [
-        "SELECT s.name AS span_name, COUNT(*) AS query_count, ROUND(AVG(s.execution_time_ms), 0) AS avg_latency_ms, ROUND(PERCENTILE(s.execution_time_ms, 0.95), 0) AS p95_latency_ms FROM system.mlflow.trace_spans s JOIN system.mlflow.traces t ON s.trace_id = t.trace_id WHERE t.request_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS AND s.name LIKE 'genie%' GROUP BY s.name ORDER BY avg_latency_ms DESC"
+        "SELECT requester, COUNT(*) AS total_requests, SUM(total_tokens) AS total_tokens, ROUND(AVG(latency_ms), 0) AS avg_latency_ms, SUM(CASE WHEN status_code != '200' THEN 1 ELSE 0 END) AS errors FROM system.ai_gateway.usage WHERE event_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS GROUP BY requester ORDER BY total_requests DESC LIMIT 25"
       ]
     }
   ],
   "pages": [
     {
       "name": "page_overview",
-      "displayName": "Agent Overview",
+      "displayName": "Overview & Trends",
       "layout": [
         {
           "widget": {
-            "name": "widget_total_traces",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_trace_totals", "fields": [{"name": "total_traces", "expression": "`total_traces`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "counter", "encodings": {"value": {"fieldName": "total_traces", "displayName": "Total Traces (7d)"}}}
+            "name": "widget_total_requests",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_gateway_totals", "fields": [{"name": "total_requests", "expression": "`total_requests`"}], "disaggregated": true}}],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {"fieldName": "total_requests", "displayName": "Total Requests (7d)"}
+              },
+              "frame": {"showTitle": true, "title": "Total Requests (7d)"}
+            }
           },
-          "position": {"x": 0, "y": 0, "width": 2, "height": 2}
+          "position": {"x": 0, "y": 0, "width": 3, "height": 3}
         },
         {
           "widget": {
             "name": "widget_success_count",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_trace_totals", "fields": [{"name": "successful", "expression": "`successful`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "counter", "encodings": {"value": {"fieldName": "successful", "displayName": "Successful"}}}
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_gateway_totals", "fields": [{"name": "successful_requests", "expression": "`successful_requests`"}], "disaggregated": true}}],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {"fieldName": "successful_requests", "displayName": "Successful"}
+              },
+              "frame": {"showTitle": true, "title": "Successful Requests"}
+            }
           },
-          "position": {"x": 2, "y": 0, "width": 2, "height": 2}
+          "position": {"x": 3, "y": 0, "width": 3, "height": 3}
         },
         {
           "widget": {
             "name": "widget_error_count",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_trace_totals", "fields": [{"name": "errors", "expression": "`errors`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "counter", "encodings": {"value": {"fieldName": "errors", "displayName": "Errors"}}}
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_gateway_totals", "fields": [{"name": "failed_requests", "expression": "`failed_requests`"}], "disaggregated": true}}],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {"fieldName": "failed_requests", "displayName": "Failed"}
+              },
+              "frame": {"showTitle": true, "title": "Failed Requests"}
+            }
           },
-          "position": {"x": 4, "y": 0, "width": 2, "height": 2}
+          "position": {"x": 6, "y": 0, "width": 3, "height": 3}
+        },
+        {
+          "widget": {
+            "name": "widget_active_endpoints",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_token_totals", "fields": [{"name": "active_endpoints", "expression": "`active_endpoints`"}], "disaggregated": true}}],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {"fieldName": "active_endpoints", "displayName": "Active Endpoints"}
+              },
+              "frame": {"showTitle": true, "title": "Active Endpoints"}
+            }
+          },
+          "position": {"x": 9, "y": 0, "width": 3, "height": 3}
         },
         {
           "widget": {
             "name": "widget_avg_latency",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_trace_totals", "fields": [{"name": "avg_latency_ms", "expression": "`avg_latency_ms`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "counter", "encodings": {"value": {"fieldName": "avg_latency_ms", "displayName": "Avg Latency (ms)"}}}
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_gateway_totals", "fields": [{"name": "avg_latency_ms", "expression": "`avg_latency_ms`"}], "disaggregated": true}}],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {"fieldName": "avg_latency_ms", "displayName": "Avg Latency (ms)"}
+              },
+              "frame": {"showTitle": true, "title": "Avg Latency (ms)"}
+            }
           },
-          "position": {"x": 6, "y": 0, "width": 2, "height": 2}
+          "position": {"x": 0, "y": 3, "width": 4, "height": 3}
         },
         {
           "widget": {
             "name": "widget_p50_latency",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_trace_totals", "fields": [{"name": "p50_latency_ms", "expression": "`p50_latency_ms`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "counter", "encodings": {"value": {"fieldName": "p50_latency_ms", "displayName": "P50 Latency (ms)"}}}
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_gateway_totals", "fields": [{"name": "p50_latency_ms", "expression": "`p50_latency_ms`"}], "disaggregated": true}}],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {"fieldName": "p50_latency_ms", "displayName": "P50 Latency (ms)"}
+              },
+              "frame": {"showTitle": true, "title": "P50 Latency (ms)"}
+            }
           },
-          "position": {"x": 8, "y": 0, "width": 2, "height": 2}
+          "position": {"x": 4, "y": 3, "width": 4, "height": 3}
         },
         {
           "widget": {
             "name": "widget_p95_latency",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_trace_totals", "fields": [{"name": "p95_latency_ms", "expression": "`p95_latency_ms`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "counter", "encodings": {"value": {"fieldName": "p95_latency_ms", "displayName": "P95 Latency (ms)"}}}
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_gateway_totals", "fields": [{"name": "p95_latency_ms", "expression": "`p95_latency_ms`"}], "disaggregated": true}}],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {"fieldName": "p95_latency_ms", "displayName": "P95 Latency (ms)"}
+              },
+              "frame": {"showTitle": true, "title": "P95 Latency (ms)"}
+            }
           },
-          "position": {"x": 10, "y": 0, "width": 2, "height": 2}
+          "position": {"x": 8, "y": 3, "width": 4, "height": 3}
         },
         {
           "widget": {
-            "name": "widget_trace_volume_chart",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_trace_volume", "fields": [{"name": "trace_date", "expression": "`trace_date`"}, {"name": "success_count", "expression": "`success_count`"}, {"name": "error_count", "expression": "`error_count`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "trace_date", "scale": {"type": "temporal"}, "displayName": "Date"}, "y": {"fieldName": "success_count", "scale": {"type": "quantitative"}, "displayName": "Traces"}, "color": {"fieldName": "trace_date", "scale": {"type": "temporal"}, "displayName": ""}, "label": {"show": true}}, "frame": {"title": "Daily Trace Volume", "showDescription": false}}
+            "name": "widget_daily_volume_chart",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_gateway_daily", "fields": [{"name": "request_date", "expression": "`request_date`"}, {"name": "request_count", "expression": "`request_count`"}], "disaggregated": true}}],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {"fieldName": "request_date", "scale": {"type": "temporal"}, "displayName": "Date"},
+                "y": {"fieldName": "request_count", "scale": {"type": "quantitative"}, "displayName": "Requests"}
+              },
+              "frame": {"showTitle": true, "title": "Daily Request Volume"}
+            }
           },
-          "position": {"x": 0, "y": 2, "width": 6, "height": 4}
+          "position": {"x": 0, "y": 6, "width": 6, "height": 7}
         },
         {
           "widget": {
             "name": "widget_latency_trend_chart",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_latency_trend", "fields": [{"name": "trace_date", "expression": "`trace_date`"}, {"name": "avg_latency_ms", "expression": "`avg_latency_ms`"}, {"name": "p50_latency_ms", "expression": "`p50_latency_ms`"}, {"name": "p95_latency_ms", "expression": "`p95_latency_ms`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "trace_date", "scale": {"type": "temporal"}, "displayName": "Date"}, "y": {"fieldName": "avg_latency_ms", "scale": {"type": "quantitative"}, "displayName": "Latency (ms)"}}, "frame": {"title": "Agent Latency Trend", "showDescription": false}}
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_latency_daily", "fields": [{"name": "request_date", "expression": "`request_date`"}, {"name": "avg_latency_ms", "expression": "`avg_latency_ms`"}, {"name": "p95_latency_ms", "expression": "`p95_latency_ms`"}], "disaggregated": true}}],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {"fieldName": "request_date", "scale": {"type": "temporal"}, "displayName": "Date"},
+                "y": {"fieldName": "avg_latency_ms", "scale": {"type": "quantitative"}, "displayName": "Avg Latency (ms)"}
+              },
+              "frame": {"showTitle": true, "title": "Daily Latency Trend"}
+            }
           },
-          "position": {"x": 6, "y": 2, "width": 6, "height": 4}
+          "position": {"x": 6, "y": 6, "width": 6, "height": 7}
+        }
+      ]
+    },
+    {
+      "name": "page_endpoints_models",
+      "displayName": "Endpoints & Models",
+      "layout": [
+        {
+          "widget": {
+            "name": "widget_total_input_tokens",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_token_totals", "fields": [{"name": "total_input_tokens", "expression": "`total_input_tokens`"}], "disaggregated": true}}],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {"fieldName": "total_input_tokens", "displayName": "Input Tokens (7d)"}
+              },
+              "frame": {"showTitle": true, "title": "Input Tokens (7d)"}
+            }
+          },
+          "position": {"x": 0, "y": 0, "width": 4, "height": 3}
         },
         {
           "widget": {
-            "name": "widget_tool_usage_table",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_tool_usage", "fields": [{"name": "tool_name", "expression": "`tool_name`"}, {"name": "call_count", "expression": "`call_count`"}, {"name": "avg_latency_ms", "expression": "`avg_latency_ms`"}, {"name": "error_count", "expression": "`error_count`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "table", "encodings": {"columns": [{"fieldName": "tool_name", "displayName": "Tool"}, {"fieldName": "call_count", "displayName": "Calls"}, {"fieldName": "avg_latency_ms", "displayName": "Avg Latency (ms)"}, {"fieldName": "error_count", "displayName": "Errors"}]}, "frame": {"title": "Tool Call Frequency & Latency", "showDescription": false}}
+            "name": "widget_total_output_tokens",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_token_totals", "fields": [{"name": "total_output_tokens", "expression": "`total_output_tokens`"}], "disaggregated": true}}],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {"fieldName": "total_output_tokens", "displayName": "Output Tokens (7d)"}
+              },
+              "frame": {"showTitle": true, "title": "Output Tokens (7d)"}
+            }
           },
-          "position": {"x": 0, "y": 6, "width": 6, "height": 4}
+          "position": {"x": 4, "y": 0, "width": 4, "height": 3}
         },
         {
           "widget": {
-            "name": "widget_span_latency_table",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_latency_by_span", "fields": [{"name": "span_name", "expression": "`span_name`"}, {"name": "span_type", "expression": "`span_type`"}, {"name": "invocations", "expression": "`invocations`"}, {"name": "avg_latency_ms", "expression": "`avg_latency_ms`"}, {"name": "p95_latency_ms", "expression": "`p95_latency_ms`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "table", "encodings": {"columns": [{"fieldName": "span_name", "displayName": "Span"}, {"fieldName": "span_type", "displayName": "Type"}, {"fieldName": "invocations", "displayName": "Count"}, {"fieldName": "avg_latency_ms", "displayName": "Avg (ms)"}, {"fieldName": "p95_latency_ms", "displayName": "P95 (ms)"}]}, "frame": {"title": "Latency by Span", "showDescription": false}}
+            "name": "widget_total_tokens",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_token_totals", "fields": [{"name": "total_tokens", "expression": "`total_tokens`"}], "disaggregated": true}}],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {"fieldName": "total_tokens", "displayName": "Total Tokens (7d)"}
+              },
+              "frame": {"showTitle": true, "title": "Total Tokens (7d)"}
+            }
           },
-          "position": {"x": 6, "y": 6, "width": 6, "height": 4}
+          "position": {"x": 8, "y": 0, "width": 4, "height": 3}
+        },
+        {
+          "widget": {
+            "name": "widget_token_daily_chart",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_token_daily", "fields": [{"name": "request_date", "expression": "`request_date`"}, {"name": "total_tokens", "expression": "`total_tokens`"}], "disaggregated": true}}],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {"fieldName": "request_date", "scale": {"type": "temporal"}, "displayName": "Date"},
+                "y": {"fieldName": "total_tokens", "scale": {"type": "quantitative"}, "displayName": "Total Tokens"}
+              },
+              "frame": {"showTitle": true, "title": "Daily Token Consumption"}
+            }
+          },
+          "position": {"x": 0, "y": 3, "width": 12, "height": 6}
+        },
+        {
+          "widget": {
+            "name": "widget_endpoint_table",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_endpoint_usage", "fields": [{"name": "endpoint_name", "expression": "`endpoint_name`"}, {"name": "total_requests", "expression": "`total_requests`"}, {"name": "avg_latency_ms", "expression": "`avg_latency_ms`"}, {"name": "p95_latency_ms", "expression": "`p95_latency_ms`"}, {"name": "total_tokens", "expression": "`total_tokens`"}, {"name": "errors", "expression": "`errors`"}], "disaggregated": true}}],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {"fieldName": "endpoint_name", "displayName": "Endpoint"},
+                  {"fieldName": "total_requests", "displayName": "Requests"},
+                  {"fieldName": "avg_latency_ms", "displayName": "Avg Latency (ms)"},
+                  {"fieldName": "p95_latency_ms", "displayName": "P95 Latency (ms)"},
+                  {"fieldName": "total_tokens", "displayName": "Total Tokens"},
+                  {"fieldName": "errors", "displayName": "Errors"}
+                ]
+              },
+              "frame": {"showTitle": true, "title": "Usage by Endpoint"}
+            }
+          },
+          "position": {"x": 0, "y": 9, "width": 12, "height": 7}
+        },
+        {
+          "widget": {
+            "name": "widget_model_table",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_model_usage", "fields": [{"name": "destination_model", "expression": "`destination_model`"}, {"name": "total_requests", "expression": "`total_requests`"}, {"name": "avg_latency_ms", "expression": "`avg_latency_ms`"}, {"name": "total_tokens", "expression": "`total_tokens`"}, {"name": "errors", "expression": "`errors`"}], "disaggregated": true}}],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {"fieldName": "destination_model", "displayName": "Model"},
+                  {"fieldName": "total_requests", "displayName": "Requests"},
+                  {"fieldName": "avg_latency_ms", "displayName": "Avg Latency (ms)"},
+                  {"fieldName": "total_tokens", "displayName": "Total Tokens"},
+                  {"fieldName": "errors", "displayName": "Errors"}
+                ]
+              },
+              "frame": {"showTitle": true, "title": "Usage by Model"}
+            }
+          },
+          "position": {"x": 0, "y": 16, "width": 12, "height": 7}
+        }
+      ]
+    },
+    {
+      "name": "page_errors_users",
+      "displayName": "Errors & Users",
+      "layout": [
+        {
+          "widget": {
+            "name": "widget_requester_table",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_requester_usage", "fields": [{"name": "requester", "expression": "`requester`"}, {"name": "total_requests", "expression": "`total_requests`"}, {"name": "total_tokens", "expression": "`total_tokens`"}, {"name": "avg_latency_ms", "expression": "`avg_latency_ms`"}, {"name": "errors", "expression": "`errors`"}], "disaggregated": true}}],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {"fieldName": "requester", "displayName": "Requester"},
+                  {"fieldName": "total_requests", "displayName": "Total Requests"},
+                  {"fieldName": "total_tokens", "displayName": "Total Tokens"},
+                  {"fieldName": "avg_latency_ms", "displayName": "Avg Latency (ms)"},
+                  {"fieldName": "errors", "displayName": "Errors"}
+                ]
+              },
+              "frame": {"showTitle": true, "title": "Top Requesters (7d)"}
+            }
+          },
+          "position": {"x": 0, "y": 0, "width": 12, "height": 8}
         },
         {
           "widget": {
             "name": "widget_recent_errors",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_error_details", "fields": [{"name": "trace_id", "expression": "`trace_id`"}, {"name": "trace_date", "expression": "`trace_date`"}, {"name": "execution_time_ms", "expression": "`execution_time_ms`"}, {"name": "status", "expression": "`status`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "table", "encodings": {"columns": [{"fieldName": "trace_id", "displayName": "Trace ID"}, {"fieldName": "trace_date", "displayName": "Date"}, {"fieldName": "execution_time_ms", "displayName": "Duration (ms)"}, {"fieldName": "status", "displayName": "Status"}]}, "frame": {"title": "Recent Errors", "showDescription": false}}
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_recent_errors", "fields": [{"name": "event_time", "expression": "`event_time`"}, {"name": "endpoint_name", "expression": "`endpoint_name`"}, {"name": "destination_model", "expression": "`destination_model`"}, {"name": "status_code", "expression": "`status_code`"}, {"name": "latency_ms", "expression": "`latency_ms`"}, {"name": "requester", "expression": "`requester`"}], "disaggregated": true}}],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {"fieldName": "event_time", "displayName": "Time"},
+                  {"fieldName": "endpoint_name", "displayName": "Endpoint"},
+                  {"fieldName": "destination_model", "displayName": "Model"},
+                  {"fieldName": "status_code", "displayName": "Status Code"},
+                  {"fieldName": "latency_ms", "displayName": "Latency (ms)"},
+                  {"fieldName": "requester", "displayName": "Requester"}
+                ]
+              },
+              "frame": {"showTitle": true, "title": "Recent Errors (Last 7 Days)"}
+            }
           },
-          "position": {"x": 0, "y": 10, "width": 6, "height": 4}
-        },
-        {
-          "widget": {
-            "name": "widget_genie_latency",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_genie_latency", "fields": [{"name": "span_name", "expression": "`span_name`"}, {"name": "query_count", "expression": "`query_count`"}, {"name": "avg_latency_ms", "expression": "`avg_latency_ms`"}, {"name": "p95_latency_ms", "expression": "`p95_latency_ms`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "table", "encodings": {"columns": [{"fieldName": "span_name", "displayName": "Genie Span"}, {"fieldName": "query_count", "displayName": "Queries"}, {"fieldName": "avg_latency_ms", "displayName": "Avg (ms)"}, {"fieldName": "p95_latency_ms", "displayName": "P95 (ms)"}]}, "frame": {"title": "Genie Query Latency", "showDescription": false}}
-          },
-          "position": {"x": 6, "y": 10, "width": 6, "height": 4}
+          "position": {"x": 0, "y": 8, "width": 12, "height": 8}
         }
       ]
     }

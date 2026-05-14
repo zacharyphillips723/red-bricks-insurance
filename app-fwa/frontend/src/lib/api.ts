@@ -153,8 +153,8 @@ export interface NetworkEdge {
   source: string;
   target: string;
   weight: number;
-  total_billed: number;
   fraud_score?: number;
+  claim_count?: number;
 }
 
 export interface NetworkGraphData {

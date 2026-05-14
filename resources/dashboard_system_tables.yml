@@ -1,0 +1,9 @@
+resources:
+  dashboards:
+    system_tables_dashboard:
+      display_name: "[${bundle.target}] Red Bricks Insurance — System Tables: Billing & Audit"
+      warehouse_id: ${var.warehouse_id}
+      file_path: ../src/dashboards/system_tables_dashboard.lvdash.json
+      permissions:
+        - level: CAN_READ
+          group_name: users

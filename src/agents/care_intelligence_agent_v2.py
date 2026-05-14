@@ -7,6 +7,12 @@ Changes from v1:
   - Benefit utilization data integration (cost/utilization context)
   - Lower temperature (0.05) for more deterministic clinical outputs
   - 2000 max tokens for longer structured responses
+
+A/B Testing Strategy:
+  - v1 (care_intelligence_agent.py): Registered with alias "production"
+  - v2 (this file): Registered with alias "champion"
+  - Both are evaluated side-by-side by evaluate_agents.py
+  - See care_intelligence_agent.py docstring for full A/B details
 """
 
 import json

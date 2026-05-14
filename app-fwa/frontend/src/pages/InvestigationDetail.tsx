@@ -12,6 +12,8 @@ import {
   ShieldAlert,
   ExternalLink,
 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import type { Components } from "react-markdown";
 import { api, type InvestigationDetail as InvDetail, type Investigator } from "@/lib/api";
 import {
   formatCurrency,
@@ -20,6 +22,25 @@ import {
   severityBadgeClass,
   statusColor,
 } from "@/lib/utils";
+
+const mdComponents: Components = {
+  h2: ({ children }) => (
+    <h2 className="text-base font-bold text-databricks-dark mt-6 mb-2 pb-1 border-b border-gray-200 first:mt-0">
+      {children}
+    </h2>
+  ),
+  h3: ({ children }) => (
+    <h3 className="text-sm font-semibold text-databricks-dark mt-4 mb-1">{children}</h3>
+  ),
+  p: ({ children }) => <p className="my-2 leading-relaxed">{children}</p>,
+  ol: ({ children }) => <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>,
+  ul: ({ children }) => <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>,
+  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+  strong: ({ children }) => <strong className="font-semibold text-gray-900">{children}</strong>,
+  code: ({ children }) => (
+    <code className="bg-gray-100 text-databricks-red px-1 py-0.5 rounded text-xs font-mono">{children}</code>
+  ),
+};
 
 interface InvestigationDetailProps {
   investigationId: string;
@@ -253,8 +274,8 @@ export function InvestigationDetail({
               ))}
             </div>
             {agentAnswer && (
-              <div className="bg-gray-50 rounded-lg p-4 text-sm text-gray-700 whitespace-pre-wrap max-h-96 overflow-y-auto">
-                {agentAnswer}
+              <div className="bg-gray-50 rounded-lg p-4 text-sm text-gray-700 max-h-96 overflow-y-auto">
+                <ReactMarkdown components={mdComponents}>{agentAnswer}</ReactMarkdown>
               </div>
             )}
           </div>

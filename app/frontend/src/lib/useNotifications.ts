@@ -25,21 +25,27 @@ export function useNotifications({ onNotification }: UseNotificationsOptions = {
   const [connected, setConnected] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
+  const reconnectDelay = useRef(1000);
+  const onNotificationRef = useRef(onNotification);
+  onNotificationRef.current = onNotification;
 
   const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    if (wsRef.current?.readyState === WebSocket.OPEN ||
+        wsRef.current?.readyState === WebSocket.CONNECTING) return;
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(`${protocol}//${window.location.host}/ws/notifications`);
 
     ws.onopen = () => {
       setConnected(true);
+      reconnectDelay.current = 1000;
       console.log("[WS] Connected to notifications");
     };
 
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
+        if (msg.type === "ping") return;
         const notification: Notification = {
           id: `${msg.type}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           type: msg.type,
@@ -47,7 +53,7 @@ export function useNotifications({ onNotification }: UseNotificationsOptions = {
           timestamp: msg.timestamp,
         };
         setNotifications((prev) => [notification, ...prev].slice(0, 50));
-        onNotification?.(notification);
+        onNotificationRef.current?.(notification);
       } catch {
         // ignore non-JSON messages
       }
@@ -55,16 +61,18 @@ export function useNotifications({ onNotification }: UseNotificationsOptions = {
 
     ws.onclose = () => {
       setConnected(false);
-      // Reconnect after 5 seconds
-      reconnectTimer.current = setTimeout(connect, 5000);
+      wsRef.current = null;
+      // Reconnect with exponential backoff (1s → 2s → 4s … max 30s)
+      reconnectTimer.current = setTimeout(connect, reconnectDelay.current);
+      reconnectDelay.current = Math.min(reconnectDelay.current * 2, 30000);
     };
 
     ws.onerror = () => {
-      ws.close();
+      // onclose fires after onerror, reconnect handled there
     };
 
     wsRef.current = ws;
-  }, [onNotification]);
+  }, []);
 
   useEffect(() => {
     connect();

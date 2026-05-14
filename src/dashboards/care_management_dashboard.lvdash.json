@@ -86,66 +86,449 @@
         {
           "widget": {
             "name": "widget_total_enrollments",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_program_totals", "fields": [{"name": "total_enrollments", "expression": "`total_enrollments`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "counter", "encodings": {"value": {"fieldName": "total_enrollments", "displayName": "Total Enrollments"}}}
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_program_totals",
+                  "fields": [
+                    {
+                      "name": "total_enrollments",
+                      "expression": "`total_enrollments`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "total_enrollments",
+                  "displayName": "Total Enrollments"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Total Enrollments"
+              }
+            }
           },
-          "position": {"x": 0, "y": 0, "width": 3, "height": 2}
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 3,
+            "height": 3
+          }
         },
         {
           "widget": {
             "name": "widget_active_enrollments",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_program_totals", "fields": [{"name": "active_enrollments", "expression": "`active_enrollments`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "counter", "encodings": {"value": {"fieldName": "active_enrollments", "displayName": "Active"}}}
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_program_totals",
+                  "fields": [
+                    {
+                      "name": "active_enrollments",
+                      "expression": "`active_enrollments`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "active_enrollments",
+                  "displayName": "Active Enrollments"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Active Enrollments"
+              }
+            }
           },
-          "position": {"x": 3, "y": 0, "width": 3, "height": 2}
+          "position": {
+            "x": 3,
+            "y": 0,
+            "width": 3,
+            "height": 3
+          }
         },
         {
           "widget": {
             "name": "widget_completion_rate",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_program_totals", "fields": [{"name": "overall_completion_rate", "expression": "`overall_completion_rate`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "counter", "encodings": {"value": {"fieldName": "overall_completion_rate", "displayName": "Completion Rate (%)"}}}
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_program_totals",
+                  "fields": [
+                    {
+                      "name": "overall_completion_rate",
+                      "expression": "`overall_completion_rate`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "overall_completion_rate",
+                  "displayName": "Completion Rate (%)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Overall Completion Rate (%)"
+              }
+            }
           },
-          "position": {"x": 6, "y": 0, "width": 3, "height": 2}
+          "position": {
+            "x": 6,
+            "y": 0,
+            "width": 3,
+            "height": 3
+          }
         },
         {
           "widget": {
             "name": "widget_program_count",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_program_totals", "fields": [{"name": "program_count", "expression": "`program_count`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "counter", "encodings": {"value": {"fieldName": "program_count", "displayName": "Programs"}}}
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_program_totals",
+                  "fields": [
+                    {
+                      "name": "program_count",
+                      "expression": "`program_count`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "program_count",
+                  "displayName": "Total Programs"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Total Programs"
+              }
+            }
           },
-          "position": {"x": 9, "y": 0, "width": 3, "height": 2}
+          "position": {
+            "x": 9,
+            "y": 0,
+            "width": 3,
+            "height": 3
+          }
         },
         {
           "widget": {
             "name": "widget_program_enrollments_chart",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_program_performance", "fields": [{"name": "program_name", "expression": "`program_name`"}, {"name": "active_enrollments", "expression": "`active_enrollments`"}, {"name": "completed_enrollments", "expression": "`completed_enrollments`"}, {"name": "withdrawn_enrollments", "expression": "`withdrawn_enrollments`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "program_name", "scale": {"type": "categorical"}, "displayName": "Program"}, "y": {"fieldName": "active_enrollments", "scale": {"type": "quantitative"}, "displayName": "Enrollments"}, "color": {"fieldName": "program_name", "scale": {"type": "categorical"}, "displayName": ""}}, "frame": {"title": "Active Enrollments by Program", "showDescription": false}}
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_program_performance",
+                  "fields": [
+                    {
+                      "name": "program_name",
+                      "expression": "`program_name`"
+                    },
+                    {
+                      "name": "active_enrollments",
+                      "expression": "`active_enrollments`"
+                    },
+                    {
+                      "name": "completed_enrollments",
+                      "expression": "`completed_enrollments`"
+                    },
+                    {
+                      "name": "withdrawn_enrollments",
+                      "expression": "`withdrawn_enrollments`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "program_name",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Program"
+                },
+                "y": {
+                  "fieldName": "active_enrollments",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Enrollments"
+                },
+                "color": {
+                  "fieldName": "program_name",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": ""
+                }
+              },
+              "frame": {
+                "title": "Active Enrollments by Program",
+                "showDescription": false
+              }
+            }
           },
-          "position": {"x": 0, "y": 2, "width": 6, "height": 4}
+          "position": {
+            "x": 0,
+            "y": 3,
+            "width": 6,
+            "height": 6
+          }
         },
         {
           "widget": {
             "name": "widget_program_completion_chart",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_program_performance", "fields": [{"name": "program_name", "expression": "`program_name`"}, {"name": "completion_rate_pct", "expression": "`completion_rate_pct`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "program_name", "scale": {"type": "categorical"}, "displayName": "Program"}, "y": {"fieldName": "completion_rate_pct", "scale": {"type": "quantitative"}, "displayName": "Completion Rate (%)"}}, "frame": {"title": "Completion Rate by Program", "showDescription": false}}
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_program_performance",
+                  "fields": [
+                    {
+                      "name": "program_name",
+                      "expression": "`program_name`"
+                    },
+                    {
+                      "name": "completion_rate_pct",
+                      "expression": "`completion_rate_pct`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "program_name",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Program"
+                },
+                "y": {
+                  "fieldName": "completion_rate_pct",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Completion Rate (%)"
+                }
+              },
+              "frame": {
+                "title": "Completion Rate by Program",
+                "showDescription": false
+              }
+            }
           },
-          "position": {"x": 6, "y": 2, "width": 6, "height": 4}
+          "position": {
+            "x": 6,
+            "y": 3,
+            "width": 6,
+            "height": 6
+          }
         },
         {
           "widget": {
             "name": "widget_program_outcomes_table",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_program_outcomes", "fields": [{"name": "program_name", "expression": "`program_name`"}, {"name": "assessment_type", "expression": "`assessment_type`"}, {"name": "members_assessed", "expression": "`members_assessed`"}, {"name": "avg_score", "expression": "`avg_score`"}, {"name": "low_risk_count", "expression": "`low_risk_count`"}, {"name": "high_risk_count", "expression": "`high_risk_count`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "table", "encodings": {"columns": [{"fieldName": "program_name", "displayName": "Program"}, {"fieldName": "assessment_type", "displayName": "Assessment"}, {"fieldName": "members_assessed", "displayName": "Members"}, {"fieldName": "avg_score", "displayName": "Avg Score"}, {"fieldName": "low_risk_count", "displayName": "Low Risk"}, {"fieldName": "high_risk_count", "displayName": "High Risk"}]}, "frame": {"title": "Program Outcomes by Assessment Type", "showDescription": false}}
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_program_outcomes",
+                  "fields": [
+                    {
+                      "name": "program_name",
+                      "expression": "`program_name`"
+                    },
+                    {
+                      "name": "assessment_type",
+                      "expression": "`assessment_type`"
+                    },
+                    {
+                      "name": "members_assessed",
+                      "expression": "`members_assessed`"
+                    },
+                    {
+                      "name": "avg_score",
+                      "expression": "`avg_score`"
+                    },
+                    {
+                      "name": "low_risk_count",
+                      "expression": "`low_risk_count`"
+                    },
+                    {
+                      "name": "high_risk_count",
+                      "expression": "`high_risk_count`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "program_name",
+                    "displayName": "Program"
+                  },
+                  {
+                    "fieldName": "assessment_type",
+                    "displayName": "Assessment"
+                  },
+                  {
+                    "fieldName": "members_assessed",
+                    "displayName": "Members"
+                  },
+                  {
+                    "fieldName": "avg_score",
+                    "displayName": "Avg Score"
+                  },
+                  {
+                    "fieldName": "low_risk_count",
+                    "displayName": "Low Risk"
+                  },
+                  {
+                    "fieldName": "high_risk_count",
+                    "displayName": "High Risk"
+                  }
+                ]
+              },
+              "frame": {
+                "title": "Program Outcomes by Assessment Type",
+                "showDescription": false
+              }
+            }
           },
-          "position": {"x": 0, "y": 6, "width": 6, "height": 4}
+          "position": {
+            "x": 0,
+            "y": 9,
+            "width": 12,
+            "height": 6
+          }
         },
         {
           "widget": {
             "name": "widget_case_manager_table",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_case_manager_productivity", "fields": [{"name": "case_manager_id", "expression": "`case_manager_id`"}, {"name": "total_cases", "expression": "`total_cases`"}, {"name": "open_cases", "expression": "`open_cases`"}, {"name": "avg_case_duration_days", "expression": "`avg_case_duration_days`"}, {"name": "avg_activities_per_case", "expression": "`avg_activities_per_case`"}, {"name": "assessment_completion_rate_pct", "expression": "`assessment_completion_rate_pct`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "table", "encodings": {"columns": [{"fieldName": "case_manager_id", "displayName": "Case Manager"}, {"fieldName": "total_cases", "displayName": "Total Cases"}, {"fieldName": "open_cases", "displayName": "Open"}, {"fieldName": "avg_case_duration_days", "displayName": "Avg Duration (d)"}, {"fieldName": "avg_activities_per_case", "displayName": "Avg Activities"}, {"fieldName": "assessment_completion_rate_pct", "displayName": "Assessment %"}]}, "frame": {"title": "Case Manager Productivity", "showDescription": false}}
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_case_manager_productivity",
+                  "fields": [
+                    {
+                      "name": "case_manager_id",
+                      "expression": "`case_manager_id`"
+                    },
+                    {
+                      "name": "total_cases",
+                      "expression": "`total_cases`"
+                    },
+                    {
+                      "name": "open_cases",
+                      "expression": "`open_cases`"
+                    },
+                    {
+                      "name": "avg_case_duration_days",
+                      "expression": "`avg_case_duration_days`"
+                    },
+                    {
+                      "name": "avg_activities_per_case",
+                      "expression": "`avg_activities_per_case`"
+                    },
+                    {
+                      "name": "assessment_completion_rate_pct",
+                      "expression": "`assessment_completion_rate_pct`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "case_manager_id",
+                    "displayName": "Case Manager"
+                  },
+                  {
+                    "fieldName": "total_cases",
+                    "displayName": "Total Cases"
+                  },
+                  {
+                    "fieldName": "open_cases",
+                    "displayName": "Open"
+                  },
+                  {
+                    "fieldName": "avg_case_duration_days",
+                    "displayName": "Avg Duration (d)"
+                  },
+                  {
+                    "fieldName": "avg_activities_per_case",
+                    "displayName": "Avg Activities"
+                  },
+                  {
+                    "fieldName": "assessment_completion_rate_pct",
+                    "displayName": "Assessment %"
+                  }
+                ]
+              },
+              "frame": {
+                "title": "Case Manager Productivity",
+                "showDescription": false
+              }
+            }
           },
-          "position": {"x": 6, "y": 6, "width": 6, "height": 4}
+          "position": {
+            "x": 0,
+            "y": 15,
+            "width": 12,
+            "height": 6
+          }
         }
       ]
     },
@@ -156,26 +539,240 @@
         {
           "widget": {
             "name": "widget_sdoh_prevalence_table",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_sdoh_prevalence", "fields": [{"name": "county", "expression": "`county`"}, {"name": "members_screened", "expression": "`members_screened`"}, {"name": "food_insecurity_pct", "expression": "`food_insecurity_pct`"}, {"name": "housing_instability_pct", "expression": "`housing_instability_pct`"}, {"name": "transportation_barrier_pct", "expression": "`transportation_barrier_pct`"}, {"name": "social_isolation_pct", "expression": "`social_isolation_pct`"}, {"name": "financial_strain_pct", "expression": "`financial_strain_pct`"}, {"name": "avg_composite_score", "expression": "`avg_composite_score`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "table", "encodings": {"columns": [{"fieldName": "county", "displayName": "County"}, {"fieldName": "members_screened", "displayName": "Screened"}, {"fieldName": "food_insecurity_pct", "displayName": "Food %"}, {"fieldName": "housing_instability_pct", "displayName": "Housing %"}, {"fieldName": "transportation_barrier_pct", "displayName": "Transport %"}, {"fieldName": "social_isolation_pct", "displayName": "Isolation %"}, {"fieldName": "financial_strain_pct", "displayName": "Financial %"}, {"fieldName": "avg_composite_score", "displayName": "Composite"}]}, "frame": {"title": "SDOH Prevalence by County", "showDescription": false}}
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_sdoh_prevalence",
+                  "fields": [
+                    {
+                      "name": "county",
+                      "expression": "`county`"
+                    },
+                    {
+                      "name": "members_screened",
+                      "expression": "`members_screened`"
+                    },
+                    {
+                      "name": "food_insecurity_pct",
+                      "expression": "`food_insecurity_pct`"
+                    },
+                    {
+                      "name": "housing_instability_pct",
+                      "expression": "`housing_instability_pct`"
+                    },
+                    {
+                      "name": "transportation_barrier_pct",
+                      "expression": "`transportation_barrier_pct`"
+                    },
+                    {
+                      "name": "social_isolation_pct",
+                      "expression": "`social_isolation_pct`"
+                    },
+                    {
+                      "name": "financial_strain_pct",
+                      "expression": "`financial_strain_pct`"
+                    },
+                    {
+                      "name": "avg_composite_score",
+                      "expression": "`avg_composite_score`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "county",
+                    "displayName": "County"
+                  },
+                  {
+                    "fieldName": "members_screened",
+                    "displayName": "Screened"
+                  },
+                  {
+                    "fieldName": "food_insecurity_pct",
+                    "displayName": "Food %"
+                  },
+                  {
+                    "fieldName": "housing_instability_pct",
+                    "displayName": "Housing %"
+                  },
+                  {
+                    "fieldName": "transportation_barrier_pct",
+                    "displayName": "Transport %"
+                  },
+                  {
+                    "fieldName": "social_isolation_pct",
+                    "displayName": "Isolation %"
+                  },
+                  {
+                    "fieldName": "financial_strain_pct",
+                    "displayName": "Financial %"
+                  },
+                  {
+                    "fieldName": "avg_composite_score",
+                    "displayName": "Composite"
+                  }
+                ]
+              },
+              "frame": {
+                "title": "SDOH Prevalence by County",
+                "showDescription": false
+              }
+            }
           },
-          "position": {"x": 0, "y": 0, "width": 12, "height": 5}
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 6
+          }
         },
         {
           "widget": {
             "name": "widget_sdoh_cost_impact",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_sdoh_cost_impact", "fields": [{"name": "sdoh_status", "expression": "`sdoh_status`"}, {"name": "member_count", "expression": "`member_count`"}, {"name": "avg_composite_score", "expression": "`avg_composite_score`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "sdoh_status", "scale": {"type": "categorical"}, "displayName": "SDOH Status"}, "y": {"fieldName": "member_count", "scale": {"type": "quantitative"}, "displayName": "Members"}}, "frame": {"title": "Members by SDOH Status", "showDescription": false}}
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_sdoh_cost_impact",
+                  "fields": [
+                    {
+                      "name": "sdoh_status",
+                      "expression": "`sdoh_status`"
+                    },
+                    {
+                      "name": "member_count",
+                      "expression": "`member_count`"
+                    },
+                    {
+                      "name": "avg_composite_score",
+                      "expression": "`avg_composite_score`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "sdoh_status",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "SDOH Status"
+                },
+                "y": {
+                  "fieldName": "member_count",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Members"
+                }
+              },
+              "frame": {
+                "title": "Members by SDOH Status",
+                "showDescription": false
+              }
+            }
           },
-          "position": {"x": 0, "y": 5, "width": 6, "height": 4}
+          "position": {
+            "x": 0,
+            "y": 6,
+            "width": 6,
+            "height": 5
+          }
         },
         {
           "widget": {
             "name": "widget_sdoh_referrals_table",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_sdoh_referrals", "fields": [{"name": "referral_type", "expression": "`referral_type`"}, {"name": "community_resource", "expression": "`community_resource`"}, {"name": "total_referrals", "expression": "`total_referrals`"}, {"name": "completed", "expression": "`completed`"}, {"name": "pending", "expression": "`pending`"}, {"name": "completion_rate_pct", "expression": "`completion_rate_pct`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "table", "encodings": {"columns": [{"fieldName": "referral_type", "displayName": "Type"}, {"fieldName": "community_resource", "displayName": "Resource"}, {"fieldName": "total_referrals", "displayName": "Total"}, {"fieldName": "completed", "displayName": "Completed"}, {"fieldName": "pending", "displayName": "Pending"}, {"fieldName": "completion_rate_pct", "displayName": "Rate (%)"}]}, "frame": {"title": "SDOH Referral Outcomes by Resource", "showDescription": false}}
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_sdoh_referrals",
+                  "fields": [
+                    {
+                      "name": "referral_type",
+                      "expression": "`referral_type`"
+                    },
+                    {
+                      "name": "community_resource",
+                      "expression": "`community_resource`"
+                    },
+                    {
+                      "name": "total_referrals",
+                      "expression": "`total_referrals`"
+                    },
+                    {
+                      "name": "completed",
+                      "expression": "`completed`"
+                    },
+                    {
+                      "name": "pending",
+                      "expression": "`pending`"
+                    },
+                    {
+                      "name": "completion_rate_pct",
+                      "expression": "`completion_rate_pct`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "referral_type",
+                    "displayName": "Type"
+                  },
+                  {
+                    "fieldName": "community_resource",
+                    "displayName": "Resource"
+                  },
+                  {
+                    "fieldName": "total_referrals",
+                    "displayName": "Total"
+                  },
+                  {
+                    "fieldName": "completed",
+                    "displayName": "Completed"
+                  },
+                  {
+                    "fieldName": "pending",
+                    "displayName": "Pending"
+                  },
+                  {
+                    "fieldName": "completion_rate_pct",
+                    "displayName": "Rate (%)"
+                  }
+                ]
+              },
+              "frame": {
+                "title": "SDOH Referral Outcomes by Resource",
+                "showDescription": false
+              }
+            }
           },
-          "position": {"x": 6, "y": 5, "width": 6, "height": 4}
+          "position": {
+            "x": 6,
+            "y": 6,
+            "width": 6,
+            "height": 5
+          }
         }
       ]
     },
@@ -186,34 +783,322 @@
         {
           "widget": {
             "name": "widget_toc_performance_table",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_toc_performance", "fields": [{"name": "discharge_type", "expression": "`discharge_type`"}, {"name": "readmission_risk_tier", "expression": "`readmission_risk_tier`"}, {"name": "total_episodes", "expression": "`total_episodes`"}, {"name": "call_48hr_completion_pct", "expression": "`call_48hr_completion_pct`"}, {"name": "pcp_7day_completion_pct", "expression": "`pcp_7day_completion_pct`"}, {"name": "med_rec_completion_pct", "expression": "`med_rec_completion_pct`"}, {"name": "avg_readmission_risk", "expression": "`avg_readmission_risk`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "table", "encodings": {"columns": [{"fieldName": "discharge_type", "displayName": "Discharge Type"}, {"fieldName": "readmission_risk_tier", "displayName": "Risk Tier"}, {"fieldName": "total_episodes", "displayName": "Episodes"}, {"fieldName": "call_48hr_completion_pct", "displayName": "48hr Call %"}, {"fieldName": "pcp_7day_completion_pct", "displayName": "7d PCP %"}, {"fieldName": "med_rec_completion_pct", "displayName": "Med Rec %"}, {"fieldName": "avg_readmission_risk", "displayName": "Avg Risk"}]}, "frame": {"title": "Transitions of Care — Follow-Up Completion Rates", "showDescription": false}}
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_toc_performance",
+                  "fields": [
+                    {
+                      "name": "discharge_type",
+                      "expression": "`discharge_type`"
+                    },
+                    {
+                      "name": "readmission_risk_tier",
+                      "expression": "`readmission_risk_tier`"
+                    },
+                    {
+                      "name": "total_episodes",
+                      "expression": "`total_episodes`"
+                    },
+                    {
+                      "name": "call_48hr_completion_pct",
+                      "expression": "`call_48hr_completion_pct`"
+                    },
+                    {
+                      "name": "pcp_7day_completion_pct",
+                      "expression": "`pcp_7day_completion_pct`"
+                    },
+                    {
+                      "name": "med_rec_completion_pct",
+                      "expression": "`med_rec_completion_pct`"
+                    },
+                    {
+                      "name": "avg_readmission_risk",
+                      "expression": "`avg_readmission_risk`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "discharge_type",
+                    "displayName": "Discharge Type"
+                  },
+                  {
+                    "fieldName": "readmission_risk_tier",
+                    "displayName": "Risk Tier"
+                  },
+                  {
+                    "fieldName": "total_episodes",
+                    "displayName": "Episodes"
+                  },
+                  {
+                    "fieldName": "call_48hr_completion_pct",
+                    "displayName": "48hr Call %"
+                  },
+                  {
+                    "fieldName": "pcp_7day_completion_pct",
+                    "displayName": "7d PCP %"
+                  },
+                  {
+                    "fieldName": "med_rec_completion_pct",
+                    "displayName": "Med Rec %"
+                  },
+                  {
+                    "fieldName": "avg_readmission_risk",
+                    "displayName": "Avg Risk"
+                  }
+                ]
+              },
+              "frame": {
+                "title": "Transitions of Care \u2014 Follow-Up Completion Rates",
+                "showDescription": false
+              }
+            }
           },
-          "position": {"x": 0, "y": 0, "width": 12, "height": 4}
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 5
+          }
         },
         {
           "widget": {
             "name": "widget_toc_barriers_chart",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_toc_barriers", "fields": [{"name": "barrier_type", "expression": "`barrier_type`"}, {"name": "total_occurrences", "expression": "`total_occurrences`"}, {"name": "resolution_rate_pct", "expression": "`resolution_rate_pct`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "barrier_type", "scale": {"type": "categorical"}, "displayName": "Barrier"}, "y": {"fieldName": "total_occurrences", "scale": {"type": "quantitative"}, "displayName": "Occurrences"}}, "frame": {"title": "TOC Barriers by Type", "showDescription": false}}
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_toc_barriers",
+                  "fields": [
+                    {
+                      "name": "barrier_type",
+                      "expression": "`barrier_type`"
+                    },
+                    {
+                      "name": "total_occurrences",
+                      "expression": "`total_occurrences`"
+                    },
+                    {
+                      "name": "resolution_rate_pct",
+                      "expression": "`resolution_rate_pct`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "barrier_type",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Barrier"
+                },
+                "y": {
+                  "fieldName": "total_occurrences",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Occurrences"
+                }
+              },
+              "frame": {
+                "title": "TOC Barriers by Type",
+                "showDescription": false
+              }
+            }
           },
-          "position": {"x": 0, "y": 4, "width": 6, "height": 4}
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 6,
+            "height": 5
+          }
         },
         {
           "widget": {
             "name": "widget_gap_closure_funnel",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_gap_closure_funnel", "fields": [{"name": "measure_name", "expression": "`measure_name`"}, {"name": "total_open_gaps", "expression": "`total_open_gaps`"}, {"name": "gaps_with_intervention", "expression": "`gaps_with_intervention`"}, {"name": "gaps_closed", "expression": "`gaps_closed`"}, {"name": "overall_closure_rate_pct", "expression": "`overall_closure_rate_pct`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "table", "encodings": {"columns": [{"fieldName": "measure_name", "displayName": "HEDIS Measure"}, {"fieldName": "total_open_gaps", "displayName": "Open"}, {"fieldName": "gaps_with_intervention", "displayName": "Intervened"}, {"fieldName": "gaps_closed", "displayName": "Closed"}, {"fieldName": "overall_closure_rate_pct", "displayName": "Closure %"}]}, "frame": {"title": "Care Gap Closure Funnel by HEDIS Measure", "showDescription": false}}
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_gap_closure_funnel",
+                  "fields": [
+                    {
+                      "name": "measure_name",
+                      "expression": "`measure_name`"
+                    },
+                    {
+                      "name": "total_open_gaps",
+                      "expression": "`total_open_gaps`"
+                    },
+                    {
+                      "name": "gaps_with_intervention",
+                      "expression": "`gaps_with_intervention`"
+                    },
+                    {
+                      "name": "gaps_closed",
+                      "expression": "`gaps_closed`"
+                    },
+                    {
+                      "name": "overall_closure_rate_pct",
+                      "expression": "`overall_closure_rate_pct`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "measure_name",
+                    "displayName": "HEDIS Measure"
+                  },
+                  {
+                    "fieldName": "total_open_gaps",
+                    "displayName": "Open"
+                  },
+                  {
+                    "fieldName": "gaps_with_intervention",
+                    "displayName": "Intervened"
+                  },
+                  {
+                    "fieldName": "gaps_closed",
+                    "displayName": "Closed"
+                  },
+                  {
+                    "fieldName": "overall_closure_rate_pct",
+                    "displayName": "Closure %"
+                  }
+                ]
+              },
+              "frame": {
+                "title": "Care Gap Closure Funnel by HEDIS Measure",
+                "showDescription": false
+              }
+            }
           },
-          "position": {"x": 6, "y": 4, "width": 6, "height": 4}
+          "position": {
+            "x": 6,
+            "y": 5,
+            "width": 6,
+            "height": 5
+          }
         },
         {
           "widget": {
             "name": "widget_gap_closure_rates_table",
-            "queries": [{"name": "main_query", "query": {"datasetName": "ds_gap_closure_rates", "fields": [{"name": "measure_name", "expression": "`measure_name`"}, {"name": "condition", "expression": "`condition`"}, {"name": "priority", "expression": "`priority`"}, {"name": "total_gaps", "expression": "`total_gaps`"}, {"name": "closed_gaps", "expression": "`closed_gaps`"}, {"name": "closure_rate_pct", "expression": "`closure_rate_pct`"}, {"name": "avg_days_to_close", "expression": "`avg_days_to_close`"}, {"name": "avg_interventions_per_gap", "expression": "`avg_interventions_per_gap`"}], "disaggregated": true}}],
-            "spec": {"version": 3, "widgetType": "table", "encodings": {"columns": [{"fieldName": "measure_name", "displayName": "Measure"}, {"fieldName": "condition", "displayName": "Condition"}, {"fieldName": "priority", "displayName": "Priority"}, {"fieldName": "total_gaps", "displayName": "Gaps"}, {"fieldName": "closed_gaps", "displayName": "Closed"}, {"fieldName": "closure_rate_pct", "displayName": "Rate %"}, {"fieldName": "avg_days_to_close", "displayName": "Avg Days"}, {"fieldName": "avg_interventions_per_gap", "displayName": "Avg Interventions"}]}, "frame": {"title": "Care Gap Closure Detail", "showDescription": false}}
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_gap_closure_rates",
+                  "fields": [
+                    {
+                      "name": "measure_name",
+                      "expression": "`measure_name`"
+                    },
+                    {
+                      "name": "condition",
+                      "expression": "`condition`"
+                    },
+                    {
+                      "name": "priority",
+                      "expression": "`priority`"
+                    },
+                    {
+                      "name": "total_gaps",
+                      "expression": "`total_gaps`"
+                    },
+                    {
+                      "name": "closed_gaps",
+                      "expression": "`closed_gaps`"
+                    },
+                    {
+                      "name": "closure_rate_pct",
+                      "expression": "`closure_rate_pct`"
+                    },
+                    {
+                      "name": "avg_days_to_close",
+                      "expression": "`avg_days_to_close`"
+                    },
+                    {
+                      "name": "avg_interventions_per_gap",
+                      "expression": "`avg_interventions_per_gap`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "measure_name",
+                    "displayName": "Measure"
+                  },
+                  {
+                    "fieldName": "condition",
+                    "displayName": "Condition"
+                  },
+                  {
+                    "fieldName": "priority",
+                    "displayName": "Priority"
+                  },
+                  {
+                    "fieldName": "total_gaps",
+                    "displayName": "Gaps"
+                  },
+                  {
+                    "fieldName": "closed_gaps",
+                    "displayName": "Closed"
+                  },
+                  {
+                    "fieldName": "closure_rate_pct",
+                    "displayName": "Rate %"
+                  },
+                  {
+                    "fieldName": "avg_days_to_close",
+                    "displayName": "Avg Days"
+                  },
+                  {
+                    "fieldName": "avg_interventions_per_gap",
+                    "displayName": "Avg Interventions"
+                  }
+                ]
+              },
+              "frame": {
+                "title": "Care Gap Closure Detail",
+                "showDescription": false
+              }
+            }
           },
-          "position": {"x": 0, "y": 8, "width": 12, "height": 4}
+          "position": {
+            "x": 0,
+            "y": 10,
+            "width": 12,
+            "height": 5
+          }
         }
       ]
     }

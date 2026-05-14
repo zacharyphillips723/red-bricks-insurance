@@ -50,13 +50,6 @@
       ]
     },
     {
-      "name": "ds_compliance_heatmap",
-      "displayName": "Compliance Heatmap (County x Specialty)",
-      "queryLines": [
-        "SELECT county_name, cms_specialty_type, pct_compliant, is_compliant, gap_members, telehealth_credit_applied FROM network.gold_network_adequacy_compliance ORDER BY county_name, cms_specialty_type"
-      ]
-    },
-    {
       "name": "ds_ghost_by_severity",
       "displayName": "Ghost Network by Severity",
       "queryLines": [
@@ -118,6 +111,48 @@
       "queryLines": [
         "SELECT county_type, COUNT(*) AS total_combos, SUM(CASE WHEN is_compliant THEN 1 ELSE 0 END) AS compliant, ROUND(SUM(CASE WHEN is_compliant THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS compliance_rate_pct, SUM(gap_members) AS gap_members FROM network.gold_network_adequacy_compliance GROUP BY county_type ORDER BY CASE county_type WHEN 'Large Metro' THEN 1 WHEN 'Metro' THEN 2 WHEN 'Micro' THEN 3 WHEN 'Rural' THEN 4 WHEN 'CEAC' THEN 5 END"
       ]
+    },
+    {
+      "name": "ds_compliance_split",
+      "displayName": "Compliance Split",
+      "queryLines": [
+        "SELECT CASE WHEN is_compliant THEN 'Compliant' ELSE 'Non-Compliant' END AS status, COUNT(*) AS combo_count, SUM(gap_members) AS gap_members FROM network.gold_network_adequacy_compliance GROUP BY CASE WHEN is_compliant THEN 'Compliant' ELSE 'Non-Compliant' END"
+      ]
+    },
+    {
+      "name": "ds_ghost_impact_summary",
+      "displayName": "Ghost Network Impact Summary",
+      "queryLines": [
+        "SELECT COUNT(*) AS total_flagged, SUM(impact_members) AS total_impact_members, SUM(CASE WHEN ghost_severity = 'High' THEN 1 ELSE 0 END) AS high_severity_count, ROUND(AVG(appointment_wait_days), 0) AS avg_wait_days FROM network.gold_ghost_network_flags WHERE is_ghost_flagged = TRUE"
+      ]
+    },
+    {
+      "name": "ds_ghost_by_specialty",
+      "displayName": "Ghost Providers by Specialty",
+      "queryLines": [
+        "SELECT specialty, COUNT(*) AS ghost_count, SUM(impact_members) AS impact_members FROM network.gold_ghost_network_flags WHERE is_ghost_flagged = TRUE GROUP BY specialty ORDER BY ghost_count DESC LIMIT 10"
+      ]
+    },
+    {
+      "name": "ds_leakage_totals",
+      "displayName": "Leakage Totals",
+      "queryLines": [
+        "SELECT SUM(total_oon_claims) AS total_oon_claims, SUM(total_oon_members) AS total_oon_members, COUNT(DISTINCT cms_specialty_type) AS affected_specialties, ROUND(SUM(total_oon_paid), 0) AS total_oon_paid FROM network.gold_leakage_summary"
+      ]
+    },
+    {
+      "name": "ds_gap_summary",
+      "displayName": "Gap Summary",
+      "queryLines": [
+        "SELECT COUNT(*) AS total_gaps, SUM(gap_members) AS total_gap_members, COUNT(DISTINCT county_name) AS affected_counties, COUNT(DISTINCT cms_specialty_type) AS affected_specialties FROM network.gold_network_gaps WHERE priority_rank <= 3"
+      ]
+    },
+    {
+      "name": "ds_recruitment_savings",
+      "displayName": "Recruitment Savings",
+      "queryLines": [
+        "SELECT ROUND(SUM(potential_savings), 0) AS total_potential_savings, COUNT(*) AS target_providers, SUM(members_served) AS total_members_served FROM network.gold_provider_recruitment_targets"
+      ]
     }
   ],
   "pages": [
@@ -128,172 +163,34 @@
         {
           "widget": {
             "name": "title",
-            "multilineTextboxSpec": {
-              "lines": [
-                "## Network Adequacy — CMS Compliance Dashboard"
-              ]
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_compliance_split",
+                  "fields": [
+                    { "name": "status", "expression": "`status`" },
+                    { "name": "combo_count", "expression": "`combo_count`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "pie",
+              "encodings": {
+                "angle": { "fieldName": "combo_count", "scale": { "type": "quantitative" }, "displayName": "County/Specialty Combos" },
+                "color": { "fieldName": "status", "scale": { "type": "categorical" }, "displayName": "Status" }
+              },
+              "frame": { "showTitle": true, "title": "Compliant vs Non-Compliant" }
             }
           },
-          "position": { "x": 0, "y": 0, "width": 6, "height": 1 }
+          "position": { "x": 0, "y": 0, "width": 3, "height": 3 }
         },
         {
           "widget": {
             "name": "subtitle",
-            "multilineTextboxSpec": {
-              "lines": [
-                "Real-time CMS network adequacy compliance monitoring for Red Bricks Insurance. Measures member access to 29 provider specialties and 13 facility types across all NC counties per 42 CFR 422.116. 90% of members must be within time/distance standards."
-              ]
-            }
-          },
-          "position": { "x": 0, "y": 1, "width": 6, "height": 1 }
-        },
-        {
-          "widget": {
-            "name": "kpi-compliance",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_overall_compliance",
-                  "fields": [{ "name": "overall_compliance_pct", "expression": "`overall_compliance_pct`" }],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "counter",
-              "encodings": {
-                "value": { "fieldName": "overall_compliance_pct", "displayName": "%" }
-              },
-              "frame": { "showTitle": true, "title": "Overall Compliance Rate" }
-            }
-          },
-          "position": { "x": 0, "y": 2, "width": 1, "height": 3 }
-        },
-        {
-          "widget": {
-            "name": "kpi-non-compliant",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_overall_compliance",
-                  "fields": [{ "name": "non_compliant_count", "expression": "`non_compliant_count`" }],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "counter",
-              "encodings": {
-                "value": { "fieldName": "non_compliant_count", "displayName": "Gaps" }
-              },
-              "frame": { "showTitle": true, "title": "Non-Compliant Combos" }
-            }
-          },
-          "position": { "x": 1, "y": 2, "width": 1, "height": 3 }
-        },
-        {
-          "widget": {
-            "name": "kpi-gap-members",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_total_gap_members",
-                  "fields": [{ "name": "total_gap_members", "expression": "`total_gap_members`" }],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "counter",
-              "encodings": {
-                "value": { "fieldName": "total_gap_members", "displayName": "Members" }
-              },
-              "frame": { "showTitle": true, "title": "Members Without Access" }
-            }
-          },
-          "position": { "x": 2, "y": 2, "width": 1, "height": 3 }
-        },
-        {
-          "widget": {
-            "name": "kpi-ghost-count",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_ghost_network_count",
-                  "fields": [{ "name": "ghost_count", "expression": "`ghost_count`" }],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "counter",
-              "encodings": {
-                "value": { "fieldName": "ghost_count", "displayName": "Providers" }
-              },
-              "frame": { "showTitle": true, "title": "Ghost Network Flags" }
-            }
-          },
-          "position": { "x": 3, "y": 2, "width": 1, "height": 3 }
-        },
-        {
-          "widget": {
-            "name": "kpi-leakage",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_total_leakage_cost",
-                  "fields": [{ "name": "total_leakage", "expression": "`total_leakage`" }],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "counter",
-              "encodings": {
-                "value": { "fieldName": "total_leakage", "displayName": "$" }
-              },
-              "frame": { "showTitle": true, "title": "OON Leakage Cost" }
-            }
-          },
-          "position": { "x": 4, "y": 2, "width": 1, "height": 3 }
-        },
-        {
-          "widget": {
-            "name": "kpi-telehealth",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_telehealth_credit_impact",
-                  "fields": [{ "name": "credit_applied_count", "expression": "`credit_applied_count`" }],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "counter",
-              "encodings": {
-                "value": { "fieldName": "credit_applied_count", "displayName": "Credits" }
-              },
-              "frame": { "showTitle": true, "title": "Telehealth Credits Applied" }
-            }
-          },
-          "position": { "x": 5, "y": 2, "width": 1, "height": 3 }
-        },
-        {
-          "widget": {
-            "name": "compliance-by-county-type",
             "queries": [
               {
                 "name": "main_query",
@@ -301,7 +198,6 @@
                   "datasetName": "ds_compliance_by_county_type",
                   "fields": [
                     { "name": "county_type", "expression": "`county_type`" },
-                    { "name": "compliance_rate_pct", "expression": "`compliance_rate_pct`" },
                     { "name": "gap_members", "expression": "`gap_members`" }
                   ],
                   "disaggregated": true
@@ -309,84 +205,107 @@
               }
             ],
             "spec": {
-              "version": 2,
+              "version": 3,
               "widgetType": "bar",
               "encodings": {
-                "x": { "fieldName": "county_type", "displayName": "County Type" },
-                "y": { "fieldName": "compliance_rate_pct", "displayName": "Compliance %" },
-                "color": { "fieldName": "county_type", "displayName": "County Type" }
+                "x": { "fieldName": "county_type", "scale": { "type": "categorical" }, "displayName": "County Type" },
+                "y": { "fieldName": "gap_members", "scale": { "type": "quantitative" }, "displayName": "Gap Members" },
+                "color": { "fieldName": "county_type", "scale": { "type": "categorical" }, "displayName": "" }
+              },
+              "frame": { "showTitle": true, "title": "Members Without Access by County Type" }
+            }
+          },
+          "position": { "x": 3, "y": 0, "width": 3, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "kpi-compliance",
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_overall_compliance", "fields": [{ "name": "overall_compliance_pct", "expression": "`overall_compliance_pct`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "overall_compliance_pct", "displayName": "%" } }, "frame": { "showTitle": true, "title": "Overall Compliance Rate" } }
+          },
+          "position": { "x": 0, "y": 3, "width": 1, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "kpi-non-compliant",
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_overall_compliance", "fields": [{ "name": "non_compliant_count", "expression": "`non_compliant_count`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "non_compliant_count", "displayName": "Gaps" } }, "frame": { "showTitle": true, "title": "Non-Compliant Combos" } }
+          },
+          "position": { "x": 1, "y": 3, "width": 1, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "kpi-gap-members",
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_total_gap_members", "fields": [{ "name": "total_gap_members", "expression": "`total_gap_members`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "total_gap_members", "displayName": "Members" } }, "frame": { "showTitle": true, "title": "Members Without Access" } }
+          },
+          "position": { "x": 2, "y": 3, "width": 1, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "kpi-ghost-count",
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_ghost_network_count", "fields": [{ "name": "ghost_count", "expression": "`ghost_count`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "ghost_count", "displayName": "Providers" } }, "frame": { "showTitle": true, "title": "Ghost Network Flags" } }
+          },
+          "position": { "x": 3, "y": 3, "width": 1, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "kpi-leakage",
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_total_leakage_cost", "fields": [{ "name": "total_leakage", "expression": "`total_leakage`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "total_leakage", "displayName": "$" } }, "frame": { "showTitle": true, "title": "OON Leakage Cost" } }
+          },
+          "position": { "x": 4, "y": 3, "width": 1, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "kpi-telehealth",
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_telehealth_credit_impact", "fields": [{ "name": "credit_applied_count", "expression": "`credit_applied_count`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "credit_applied_count", "displayName": "Credits" } }, "frame": { "showTitle": true, "title": "Telehealth Credits Applied" } }
+          },
+          "position": { "x": 5, "y": 3, "width": 1, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "compliance-by-county-type",
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_compliance_by_county_type", "fields": [{ "name": "county_type", "expression": "`county_type`" }, { "name": "compliance_rate_pct", "expression": "`compliance_rate_pct`" }], "disaggregated": true } }],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": { "fieldName": "county_type", "scale": { "type": "categorical" }, "displayName": "County Type" },
+                "y": { "fieldName": "compliance_rate_pct", "scale": { "type": "quantitative" }, "displayName": "Compliance %" },
+                "color": { "fieldName": "county_type", "scale": { "type": "categorical" }, "displayName": "" }
               },
               "frame": { "showTitle": true, "title": "Compliance Rate by County Type" }
             }
           },
-          "position": { "x": 0, "y": 5, "width": 3, "height": 5 }
+          "position": { "x": 0, "y": 6, "width": 3, "height": 5 }
         },
         {
           "widget": {
             "name": "compliance-by-specialty",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_compliance_by_specialty",
-                  "fields": [
-                    { "name": "cms_specialty_type", "expression": "`cms_specialty_type`" },
-                    { "name": "compliance_rate_pct", "expression": "`compliance_rate_pct`" },
-                    { "name": "total_gap_members", "expression": "`total_gap_members`" }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_compliance_by_specialty", "fields": [{ "name": "cms_specialty_type", "expression": "`cms_specialty_type`" }, { "name": "compliance_rate_pct", "expression": "`compliance_rate_pct`" }], "disaggregated": true } }],
             "spec": {
-              "version": 2,
+              "version": 3,
               "widgetType": "bar",
               "encodings": {
-                "x": { "fieldName": "compliance_rate_pct", "displayName": "Compliance %" },
-                "y": { "fieldName": "cms_specialty_type", "displayName": "Specialty", "sort": "ascending" }
+                "x": { "fieldName": "compliance_rate_pct", "scale": { "type": "quantitative" }, "displayName": "Compliance %" },
+                "y": { "fieldName": "cms_specialty_type", "scale": { "type": "categorical" }, "displayName": "Specialty" },
+                "color": { "fieldName": "cms_specialty_type", "scale": { "type": "categorical" }, "displayName": "" }
               },
               "frame": { "showTitle": true, "title": "Compliance Rate by CMS Specialty" }
             }
           },
-          "position": { "x": 3, "y": 5, "width": 3, "height": 5 }
+          "position": { "x": 3, "y": 6, "width": 3, "height": 5 }
         },
         {
           "widget": {
             "name": "county-compliance-table",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_compliance_by_county",
-                  "fields": [
-                    { "name": "county_name", "expression": "`county_name`" },
-                    { "name": "county_type", "expression": "`county_type`" },
-                    { "name": "compliant_specialties", "expression": "`compliant_specialties`" },
-                    { "name": "non_compliant_specialties", "expression": "`non_compliant_specialties`" },
-                    { "name": "compliance_rate_pct", "expression": "`compliance_rate_pct`" },
-                    { "name": "total_gap_members", "expression": "`total_gap_members`" }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "table",
-              "encodings": {
-                "columns": [
-                  { "fieldName": "county_name", "displayName": "County" },
-                  { "fieldName": "county_type", "displayName": "Type" },
-                  { "fieldName": "compliant_specialties", "displayName": "Compliant" },
-                  { "fieldName": "non_compliant_specialties", "displayName": "Non-Compliant" },
-                  { "fieldName": "compliance_rate_pct", "displayName": "Rate %" },
-                  { "fieldName": "total_gap_members", "displayName": "Gap Members" }
-                ]
-              },
-              "frame": { "showTitle": true, "title": "Compliance by County — Detail" }
-            }
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_compliance_by_county", "fields": [{ "name": "county_name", "expression": "`county_name`" }, { "name": "county_type", "expression": "`county_type`" }, { "name": "compliant_specialties", "expression": "`compliant_specialties`" }, { "name": "non_compliant_specialties", "expression": "`non_compliant_specialties`" }, { "name": "compliance_rate_pct", "expression": "`compliance_rate_pct`" }, { "name": "total_gap_members", "expression": "`total_gap_members`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "table", "encodings": { "columns": [{ "fieldName": "county_name", "displayName": "County" }, { "fieldName": "county_type", "displayName": "Type" }, { "fieldName": "compliant_specialties", "displayName": "Compliant" }, { "fieldName": "non_compliant_specialties", "displayName": "Non-Compliant" }, { "fieldName": "compliance_rate_pct", "displayName": "Rate %" }, { "fieldName": "total_gap_members", "displayName": "Gap Members" }] }, "frame": { "showTitle": true, "title": "Compliance by County — Detail" } }
           },
-          "position": { "x": 0, "y": 10, "width": 6, "height": 6 }
+          "position": { "x": 0, "y": 11, "width": 6, "height": 6 }
         }
       ]
     },
@@ -397,128 +316,93 @@
         {
           "widget": {
             "name": "ghost-title",
-            "multilineTextboxSpec": {
-              "lines": [
-                "## Ghost Network Detection — Provider Directory Integrity"
-              ]
-            }
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_ghost_impact_summary", "fields": [{ "name": "total_flagged", "expression": "`total_flagged`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "total_flagged", "displayName": "Providers" } }, "frame": { "showTitle": true, "title": "Total Ghost-Flagged Providers" } }
           },
-          "position": { "x": 0, "y": 0, "width": 6, "height": 1 }
+          "position": { "x": 0, "y": 0, "width": 1, "height": 3 }
         },
         {
           "widget": {
             "name": "ghost-subtitle",
-            "multilineTextboxSpec": {
-              "lines": [
-                "Multi-signal detection of directory listings that may not reflect actual provider availability. Signals include: no claims activity, not accepting patients, expired credentials, extreme wait times, and panel capacity."
-              ]
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_ghost_impact_summary", "fields": [{ "name": "total_impact_members", "expression": "`total_impact_members`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "total_impact_members", "displayName": "Members" } }, "frame": { "showTitle": true, "title": "Members Impacted" } }
+          },
+          "position": { "x": 1, "y": 0, "width": 1, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "ghost-kpi-high-severity",
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_ghost_impact_summary", "fields": [{ "name": "high_severity_count", "expression": "`high_severity_count`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "high_severity_count", "displayName": "Providers" } }, "frame": { "showTitle": true, "title": "High Severity" } }
+          },
+          "position": { "x": 2, "y": 0, "width": 1, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "ghost-kpi-avg-wait",
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_ghost_impact_summary", "fields": [{ "name": "avg_wait_days", "expression": "`avg_wait_days`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "avg_wait_days", "displayName": "Days" } }, "frame": { "showTitle": true, "title": "Avg Appointment Wait" } }
+          },
+          "position": { "x": 3, "y": 0, "width": 1, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "ghost-by-specialty",
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_ghost_by_specialty", "fields": [{ "name": "specialty", "expression": "`specialty`" }, { "name": "ghost_count", "expression": "`ghost_count`" }], "disaggregated": true } }],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": { "fieldName": "ghost_count", "scale": { "type": "quantitative" }, "displayName": "Flagged Providers" },
+                "y": { "fieldName": "specialty", "scale": { "type": "categorical" }, "displayName": "Specialty" },
+                "color": { "fieldName": "specialty", "scale": { "type": "categorical" }, "displayName": "" }
+              },
+              "frame": { "showTitle": true, "title": "Ghost Providers by Specialty (Top 10)" }
             }
           },
-          "position": { "x": 0, "y": 1, "width": 6, "height": 1 }
+          "position": { "x": 4, "y": 0, "width": 2, "height": 3 }
         },
         {
           "widget": {
             "name": "ghost-by-severity",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_ghost_by_severity",
-                  "fields": [
-                    { "name": "ghost_severity", "expression": "`ghost_severity`" },
-                    { "name": "provider_count", "expression": "`provider_count`" },
-                    { "name": "total_impact_members", "expression": "`total_impact_members`" }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_ghost_by_severity", "fields": [{ "name": "ghost_severity", "expression": "`ghost_severity`" }, { "name": "provider_count", "expression": "`provider_count`" }], "disaggregated": true } }],
             "spec": {
-              "version": 2,
+              "version": 3,
               "widgetType": "bar",
               "encodings": {
-                "x": { "fieldName": "ghost_severity", "displayName": "Severity" },
-                "y": { "fieldName": "provider_count", "displayName": "Providers" },
-                "color": { "fieldName": "ghost_severity", "displayName": "Severity" }
+                "x": { "fieldName": "ghost_severity", "scale": { "type": "categorical" }, "displayName": "Severity" },
+                "y": { "fieldName": "provider_count", "scale": { "type": "quantitative" }, "displayName": "Providers" },
+                "color": { "fieldName": "ghost_severity", "scale": { "type": "categorical" }, "displayName": "" }
               },
               "frame": { "showTitle": true, "title": "Flagged Providers by Severity" }
             }
           },
-          "position": { "x": 0, "y": 2, "width": 3, "height": 5 }
+          "position": { "x": 0, "y": 3, "width": 3, "height": 5 }
         },
         {
           "widget": {
             "name": "ghost-by-signal",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_ghost_by_signal",
-                  "fields": [
-                    { "name": "signal", "expression": "`signal`" },
-                    { "name": "count", "expression": "`count`" }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_ghost_by_signal", "fields": [{ "name": "signal", "expression": "`signal`" }, { "name": "count", "expression": "`count`" }], "disaggregated": true } }],
             "spec": {
-              "version": 2,
+              "version": 3,
               "widgetType": "bar",
               "encodings": {
-                "x": { "fieldName": "count", "displayName": "Providers" },
-                "y": { "fieldName": "signal", "displayName": "Signal Type", "sort": "descending" }
+                "x": { "fieldName": "count", "scale": { "type": "quantitative" }, "displayName": "Providers" },
+                "y": { "fieldName": "signal", "scale": { "type": "categorical" }, "displayName": "Signal Type" },
+                "color": { "fieldName": "signal", "scale": { "type": "categorical" }, "displayName": "" }
               },
               "frame": { "showTitle": true, "title": "Ghost Network Signal Breakdown" }
             }
           },
-          "position": { "x": 3, "y": 2, "width": 3, "height": 5 }
+          "position": { "x": 3, "y": 3, "width": 3, "height": 5 }
         },
         {
           "widget": {
             "name": "ghost-detail-table",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_ghost_providers",
-                  "fields": [
-                    { "name": "npi", "expression": "`npi`" },
-                    { "name": "provider_name", "expression": "`provider_name`" },
-                    { "name": "specialty", "expression": "`specialty`" },
-                    { "name": "county", "expression": "`county`" },
-                    { "name": "ghost_severity", "expression": "`ghost_severity`" },
-                    { "name": "ghost_signal_count", "expression": "`ghost_signal_count`" },
-                    { "name": "impact_members", "expression": "`impact_members`" },
-                    { "name": "credentialing_status", "expression": "`credentialing_status`" },
-                    { "name": "appointment_wait_days", "expression": "`appointment_wait_days`" },
-                    { "name": "last_claims_date", "expression": "`last_claims_date`" }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "table",
-              "encodings": {
-                "columns": [
-                  { "fieldName": "npi", "displayName": "NPI" },
-                  { "fieldName": "provider_name", "displayName": "Provider" },
-                  { "fieldName": "specialty", "displayName": "Specialty" },
-                  { "fieldName": "county", "displayName": "County" },
-                  { "fieldName": "ghost_severity", "displayName": "Severity" },
-                  { "fieldName": "ghost_signal_count", "displayName": "Signals" },
-                  { "fieldName": "impact_members", "displayName": "Impact Members" },
-                  { "fieldName": "credentialing_status", "displayName": "Credential" },
-                  { "fieldName": "appointment_wait_days", "displayName": "Wait (days)" },
-                  { "fieldName": "last_claims_date", "displayName": "Last Claim" }
-                ]
-              },
-              "frame": { "showTitle": true, "title": "Ghost Network — Provider Outreach Queue" }
-            }
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_ghost_providers", "fields": [{ "name": "npi", "expression": "`npi`" }, { "name": "provider_name", "expression": "`provider_name`" }, { "name": "specialty", "expression": "`specialty`" }, { "name": "county", "expression": "`county`" }, { "name": "ghost_severity", "expression": "`ghost_severity`" }, { "name": "ghost_signal_count", "expression": "`ghost_signal_count`" }, { "name": "impact_members", "expression": "`impact_members`" }, { "name": "credentialing_status", "expression": "`credentialing_status`" }, { "name": "appointment_wait_days", "expression": "`appointment_wait_days`" }, { "name": "last_claims_date", "expression": "`last_claims_date`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "table", "encodings": { "columns": [{ "fieldName": "npi", "displayName": "NPI" }, { "fieldName": "provider_name", "displayName": "Provider" }, { "fieldName": "specialty", "displayName": "Specialty" }, { "fieldName": "county", "displayName": "County" }, { "fieldName": "ghost_severity", "displayName": "Severity" }, { "fieldName": "ghost_signal_count", "displayName": "Signals" }, { "fieldName": "impact_members", "displayName": "Impact Members" }, { "fieldName": "credentialing_status", "displayName": "Credential" }, { "fieldName": "appointment_wait_days", "displayName": "Wait (days)" }, { "fieldName": "last_claims_date", "displayName": "Last Claim" }] }, "frame": { "showTitle": true, "title": "Ghost Network — Provider Outreach Queue" } }
           },
-          "position": { "x": 0, "y": 7, "width": 6, "height": 7 }
+          "position": { "x": 0, "y": 8, "width": 6, "height": 7 }
         }
       ]
     },
@@ -529,118 +413,83 @@
         {
           "widget": {
             "name": "leakage-title",
-            "multilineTextboxSpec": {
-              "lines": [
-                "## Out-of-Network Leakage Intelligence"
-              ]
-            }
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_leakage_totals", "fields": [{ "name": "total_oon_claims", "expression": "`total_oon_claims`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "total_oon_claims", "displayName": "Claims" } }, "frame": { "showTitle": true, "title": "Total OON Claims" } }
           },
-          "position": { "x": 0, "y": 0, "width": 6, "height": 1 }
+          "position": { "x": 0, "y": 0, "width": 1, "height": 3 }
         },
         {
           "widget": {
             "name": "leakage-subtitle",
-            "multilineTextboxSpec": {
-              "lines": [
-                "Quantifies the cost of out-of-network utilization by specialty, county, and root cause. Every OON claim is measured against the nearest in-network alternative to calculate the leakage cost differential."
-              ]
-            }
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_leakage_totals", "fields": [{ "name": "total_oon_members", "expression": "`total_oon_members`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "total_oon_members", "displayName": "Members" } }, "frame": { "showTitle": true, "title": "Members Using OON" } }
           },
-          "position": { "x": 0, "y": 1, "width": 6, "height": 1 }
+          "position": { "x": 1, "y": 0, "width": 1, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "leakage-kpi-cost",
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_total_leakage_cost", "fields": [{ "name": "total_leakage", "expression": "`total_leakage`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "total_leakage", "displayName": "$" } }, "frame": { "showTitle": true, "title": "Total Leakage Cost" } }
+          },
+          "position": { "x": 2, "y": 0, "width": 1, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "leakage-kpi-specialties",
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_leakage_totals", "fields": [{ "name": "affected_specialties", "expression": "`affected_specialties`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "affected_specialties", "displayName": "Specialties" } }, "frame": { "showTitle": true, "title": "Affected Specialties" } }
+          },
+          "position": { "x": 3, "y": 0, "width": 1, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "leakage-kpi-total-paid",
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_leakage_totals", "fields": [{ "name": "total_oon_paid", "expression": "`total_oon_paid`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "total_oon_paid", "displayName": "$" } }, "frame": { "showTitle": true, "title": "Total OON Paid" } }
+          },
+          "position": { "x": 4, "y": 0, "width": 2, "height": 3 }
         },
         {
           "widget": {
             "name": "leakage-by-specialty",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_leakage_by_specialty",
-                  "fields": [
-                    { "name": "cms_specialty_type", "expression": "`cms_specialty_type`" },
-                    { "name": "leakage_cost", "expression": "`leakage_cost`" },
-                    { "name": "total_claims", "expression": "`total_claims`" }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_leakage_by_specialty", "fields": [{ "name": "cms_specialty_type", "expression": "`cms_specialty_type`" }, { "name": "leakage_cost", "expression": "`leakage_cost`" }], "disaggregated": true } }],
             "spec": {
-              "version": 2,
+              "version": 3,
               "widgetType": "bar",
               "encodings": {
-                "x": { "fieldName": "leakage_cost", "displayName": "Leakage Cost ($)" },
-                "y": { "fieldName": "cms_specialty_type", "displayName": "Specialty", "sort": "descending" }
+                "x": { "fieldName": "leakage_cost", "scale": { "type": "quantitative" }, "displayName": "Leakage Cost ($)" },
+                "y": { "fieldName": "cms_specialty_type", "scale": { "type": "categorical" }, "displayName": "Specialty" },
+                "color": { "fieldName": "cms_specialty_type", "scale": { "type": "categorical" }, "displayName": "" }
               },
               "frame": { "showTitle": true, "title": "OON Leakage Cost by Specialty" }
             }
           },
-          "position": { "x": 0, "y": 2, "width": 3, "height": 5 }
+          "position": { "x": 0, "y": 3, "width": 3, "height": 5 }
         },
         {
           "widget": {
             "name": "leakage-by-reason",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_leakage_by_reason",
-                  "fields": [
-                    { "name": "leakage_reason", "expression": "`leakage_reason`" },
-                    { "name": "leakage_cost", "expression": "`leakage_cost`" },
-                    { "name": "total_claims", "expression": "`total_claims`" }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_leakage_by_reason", "fields": [{ "name": "leakage_reason", "expression": "`leakage_reason`" }, { "name": "leakage_cost", "expression": "`leakage_cost`" }], "disaggregated": true } }],
             "spec": {
-              "version": 2,
+              "version": 3,
               "widgetType": "pie",
               "encodings": {
-                "angle": { "fieldName": "leakage_cost", "displayName": "Cost ($)" },
-                "color": { "fieldName": "leakage_reason", "displayName": "Reason" }
+                "angle": { "fieldName": "leakage_cost", "scale": { "type": "quantitative" }, "displayName": "Cost ($)" },
+                "color": { "fieldName": "leakage_reason", "scale": { "type": "categorical" }, "displayName": "Reason" }
               },
               "frame": { "showTitle": true, "title": "Leakage by Root Cause" }
             }
           },
-          "position": { "x": 3, "y": 2, "width": 3, "height": 5 }
+          "position": { "x": 3, "y": 3, "width": 3, "height": 5 }
         },
         {
           "widget": {
             "name": "leakage-by-county",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_leakage_by_county",
-                  "fields": [
-                    { "name": "county_name", "expression": "`county_name`" },
-                    { "name": "county_type", "expression": "`county_type`" },
-                    { "name": "leakage_cost", "expression": "`leakage_cost`" },
-                    { "name": "total_claims", "expression": "`total_claims`" },
-                    { "name": "unique_members", "expression": "`unique_members`" }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "table",
-              "encodings": {
-                "columns": [
-                  { "fieldName": "county_name", "displayName": "County" },
-                  { "fieldName": "county_type", "displayName": "Type" },
-                  { "fieldName": "leakage_cost", "displayName": "Leakage Cost ($)" },
-                  { "fieldName": "total_claims", "displayName": "OON Claims" },
-                  { "fieldName": "unique_members", "displayName": "Members" }
-                ]
-              },
-              "frame": { "showTitle": true, "title": "OON Leakage by County" }
-            }
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_leakage_by_county", "fields": [{ "name": "county_name", "expression": "`county_name`" }, { "name": "county_type", "expression": "`county_type`" }, { "name": "leakage_cost", "expression": "`leakage_cost`" }, { "name": "total_claims", "expression": "`total_claims`" }, { "name": "unique_members", "expression": "`unique_members`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "table", "encodings": { "columns": [{ "fieldName": "county_name", "displayName": "County" }, { "fieldName": "county_type", "displayName": "Type" }, { "fieldName": "leakage_cost", "displayName": "Leakage Cost ($)" }, { "fieldName": "total_claims", "displayName": "OON Claims" }, { "fieldName": "unique_members", "displayName": "Members" }] }, "frame": { "showTitle": true, "title": "OON Leakage by County" } }
           },
-          "position": { "x": 0, "y": 7, "width": 6, "height": 5 }
+          "position": { "x": 0, "y": 8, "width": 6, "height": 5 }
         }
       ]
     },
@@ -651,112 +500,66 @@
         {
           "widget": {
             "name": "gaps-title",
-            "multilineTextboxSpec": {
-              "lines": [
-                "## Network Gaps & Provider Recruitment Targets"
-              ]
-            }
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_gap_summary", "fields": [{ "name": "total_gaps", "expression": "`total_gaps`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "total_gaps", "displayName": "Gaps" } }, "frame": { "showTitle": true, "title": "Priority Network Gaps" } }
           },
-          "position": { "x": 0, "y": 0, "width": 6, "height": 1 }
+          "position": { "x": 0, "y": 0, "width": 1, "height": 3 }
         },
         {
           "widget": {
             "name": "gaps-subtitle",
-            "multilineTextboxSpec": {
-              "lines": [
-                "Identifies non-compliant county/specialty combinations and ranks out-of-network providers by recruitment priority. Priority score combines leakage cost, member volume, and proximity — higher scores indicate greater ROI from contracting."
-              ]
-            }
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_gap_summary", "fields": [{ "name": "total_gap_members", "expression": "`total_gap_members`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "total_gap_members", "displayName": "Members" } }, "frame": { "showTitle": true, "title": "Members in Gap Areas" } }
           },
-          "position": { "x": 0, "y": 1, "width": 6, "height": 1 }
+          "position": { "x": 1, "y": 0, "width": 1, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "gaps-kpi-counties",
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_gap_summary", "fields": [{ "name": "affected_counties", "expression": "`affected_counties`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "affected_counties", "displayName": "Counties" } }, "frame": { "showTitle": true, "title": "Affected Counties" } }
+          },
+          "position": { "x": 2, "y": 0, "width": 1, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "gaps-kpi-savings",
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_recruitment_savings", "fields": [{ "name": "total_potential_savings", "expression": "`total_potential_savings`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "total_potential_savings", "displayName": "$" } }, "frame": { "showTitle": true, "title": "Potential Savings (Recruitment)" } }
+          },
+          "position": { "x": 3, "y": 0, "width": 1, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "gaps-kpi-targets",
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_recruitment_savings", "fields": [{ "name": "target_providers", "expression": "`target_providers`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "target_providers", "displayName": "Providers" } }, "frame": { "showTitle": true, "title": "Recruitment Targets" } }
+          },
+          "position": { "x": 4, "y": 0, "width": 1, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "gaps-kpi-members",
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_recruitment_savings", "fields": [{ "name": "total_members_served", "expression": "`total_members_served`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "total_members_served", "displayName": "Members" } }, "frame": { "showTitle": true, "title": "Members Served by Targets" } }
+          },
+          "position": { "x": 5, "y": 0, "width": 1, "height": 3 }
         },
         {
           "widget": {
             "name": "network-gaps-table",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_network_gaps",
-                  "fields": [
-                    { "name": "county_name", "expression": "`county_name`" },
-                    { "name": "county_type", "expression": "`county_type`" },
-                    { "name": "cms_specialty_type", "expression": "`cms_specialty_type`" },
-                    { "name": "compliance_pct", "expression": "`compliance_pct`" },
-                    { "name": "gap_members", "expression": "`gap_members`" },
-                    { "name": "gap_status", "expression": "`gap_status`" },
-                    { "name": "cms_threshold_miles", "expression": "`cms_threshold_miles`" },
-                    { "name": "avg_distance_mi", "expression": "`avg_distance_mi`" },
-                    { "name": "telehealth_credit_applied", "expression": "`telehealth_credit_applied`" }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "table",
-              "encodings": {
-                "columns": [
-                  { "fieldName": "county_name", "displayName": "County" },
-                  { "fieldName": "county_type", "displayName": "Type" },
-                  { "fieldName": "cms_specialty_type", "displayName": "Specialty" },
-                  { "fieldName": "compliance_pct", "displayName": "Compliance %" },
-                  { "fieldName": "gap_members", "displayName": "Gap Members" },
-                  { "fieldName": "gap_status", "displayName": "Status" },
-                  { "fieldName": "cms_threshold_miles", "displayName": "CMS Max (mi)" },
-                  { "fieldName": "avg_distance_mi", "displayName": "Avg Distance" },
-                  { "fieldName": "telehealth_credit_applied", "displayName": "Telehealth Credit" }
-                ]
-              },
-              "frame": { "showTitle": true, "title": "Network Gaps — Action Items" }
-            }
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_network_gaps", "fields": [{ "name": "county_name", "expression": "`county_name`" }, { "name": "county_type", "expression": "`county_type`" }, { "name": "cms_specialty_type", "expression": "`cms_specialty_type`" }, { "name": "compliance_pct", "expression": "`compliance_pct`" }, { "name": "gap_members", "expression": "`gap_members`" }, { "name": "gap_status", "expression": "`gap_status`" }, { "name": "cms_threshold_miles", "expression": "`cms_threshold_miles`" }, { "name": "avg_distance_mi", "expression": "`avg_distance_mi`" }, { "name": "telehealth_credit_applied", "expression": "`telehealth_credit_applied`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "table", "encodings": { "columns": [{ "fieldName": "county_name", "displayName": "County" }, { "fieldName": "county_type", "displayName": "Type" }, { "fieldName": "cms_specialty_type", "displayName": "Specialty" }, { "fieldName": "compliance_pct", "displayName": "Compliance %" }, { "fieldName": "gap_members", "displayName": "Gap Members" }, { "fieldName": "gap_status", "displayName": "Status" }, { "fieldName": "cms_threshold_miles", "displayName": "CMS Max (mi)" }, { "fieldName": "avg_distance_mi", "displayName": "Avg Distance" }, { "fieldName": "telehealth_credit_applied", "displayName": "Telehealth Credit" }] }, "frame": { "showTitle": true, "title": "Network Gaps — Action Items" } }
           },
-          "position": { "x": 0, "y": 2, "width": 6, "height": 6 }
+          "position": { "x": 0, "y": 3, "width": 6, "height": 6 }
         },
         {
           "widget": {
             "name": "recruitment-targets-table",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_recruitment_targets",
-                  "fields": [
-                    { "name": "rendering_provider_npi", "expression": "`rendering_provider_npi`" },
-                    { "name": "specialty", "expression": "`specialty`" },
-                    { "name": "county_name", "expression": "`county_name`" },
-                    { "name": "total_claims", "expression": "`total_claims`" },
-                    { "name": "total_paid", "expression": "`total_paid`" },
-                    { "name": "potential_savings", "expression": "`potential_savings`" },
-                    { "name": "members_served", "expression": "`members_served`" },
-                    { "name": "avg_distance", "expression": "`avg_distance`" },
-                    { "name": "priority_score", "expression": "`priority_score`" }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "table",
-              "encodings": {
-                "columns": [
-                  { "fieldName": "rendering_provider_npi", "displayName": "NPI" },
-                  { "fieldName": "specialty", "displayName": "Specialty" },
-                  { "fieldName": "county_name", "displayName": "County" },
-                  { "fieldName": "total_claims", "displayName": "OON Claims" },
-                  { "fieldName": "total_paid", "displayName": "Total Paid ($)" },
-                  { "fieldName": "potential_savings", "displayName": "Potential Savings ($)" },
-                  { "fieldName": "members_served", "displayName": "Members" },
-                  { "fieldName": "avg_distance", "displayName": "Avg Distance (mi)" },
-                  { "fieldName": "priority_score", "displayName": "Priority Score" }
-                ]
-              },
-              "frame": { "showTitle": true, "title": "Top 20 OON Providers — Recruitment Targets" }
-            }
+            "queries": [{ "name": "main_query", "query": { "datasetName": "ds_recruitment_targets", "fields": [{ "name": "rendering_provider_npi", "expression": "`rendering_provider_npi`" }, { "name": "specialty", "expression": "`specialty`" }, { "name": "county_name", "expression": "`county_name`" }, { "name": "total_claims", "expression": "`total_claims`" }, { "name": "total_paid", "expression": "`total_paid`" }, { "name": "potential_savings", "expression": "`potential_savings`" }, { "name": "members_served", "expression": "`members_served`" }, { "name": "avg_distance", "expression": "`avg_distance`" }, { "name": "priority_score", "expression": "`priority_score`" }], "disaggregated": true } }],
+            "spec": { "version": 2, "widgetType": "table", "encodings": { "columns": [{ "fieldName": "rendering_provider_npi", "displayName": "NPI" }, { "fieldName": "specialty", "displayName": "Specialty" }, { "fieldName": "county_name", "displayName": "County" }, { "fieldName": "total_claims", "displayName": "OON Claims" }, { "fieldName": "total_paid", "displayName": "Total Paid ($)" }, { "fieldName": "potential_savings", "displayName": "Potential Savings ($)" }, { "fieldName": "members_served", "displayName": "Members" }, { "fieldName": "avg_distance", "displayName": "Avg Distance (mi)" }, { "fieldName": "priority_score", "displayName": "Priority Score" }] }, "frame": { "showTitle": true, "title": "Top 20 OON Providers — Recruitment Targets" } }
           },
-          "position": { "x": 0, "y": 8, "width": 6, "height": 6 }
+          "position": { "x": 0, "y": 9, "width": 6, "height": 6 }
         }
       ]
     }

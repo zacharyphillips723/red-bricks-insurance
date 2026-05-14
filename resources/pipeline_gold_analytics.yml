@@ -28,6 +28,8 @@ resources:
             path: ../src/pipelines/gold_analytics/group_report_card.sql
         - file:
             path: ../src/pipelines/gold_analytics/fwa_analytics.sql
+        - file:
+            path: ../src/pipelines/gold_analytics/governance_views.sql
       channel: PREVIEW
       serverless: true
       development: true

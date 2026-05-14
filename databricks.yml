@@ -15,11 +15,11 @@ variables:
     lookup:
       warehouse: "Serverless Starter Warehouse"
   node_type_small:
-    description: Small node type (4 vCPU, 14GB) — Azure DS3_v2 or AWS m5.xlarge
-    default: Standard_DS3_v2
+    description: Small node type (4 vCPU, 14GB) — AWS m5.xlarge or Azure DS3_v2
+    default: m5.xlarge
   node_type_large:
-    description: Large node type (16 vCPU, 56GB) — Azure DS5_v2 or AWS m5.4xlarge
-    default: Standard_DS5_v2
+    description: Large node type (16 vCPU, 56GB) — AWS m5.4xlarge or Azure DS5_v2
+    default: m5.4xlarge
   num_patients:
     description: Number of Synthea patients to generate (1000 for quick demos, 5000 for full)
     default: "5000"
@@ -44,33 +44,24 @@ targets:
       profile: fe-vm-red-bricks-aws
     variables:
       catalog: red_bricks_insurance_catalog
-      node_type_small: m5.xlarge
-      node_type_large: m5.4xlarge
 
   dev-azure:
     mode: development
     workspace:
       profile: fe-vm-red-bricks-insurance
     variables:
-      warehouse_id: 781064a3466c0984
+      node_type_small: Standard_DS3_v2
+      node_type_large: Standard_DS5_v2
 
   e2-field-eng:
     mode: development
     workspace:
       profile: fe-demo-field-eng
-    variables:
-      warehouse_id: 03560442e95cb440
-      node_type_small: m5.xlarge
-      node_type_large: m5.4xlarge
 
   hls-financial:
     mode: development
     workspace:
       profile: hls-financial-foundation
-    variables:
-      warehouse_id: 8bfdf551dc136232
-      node_type_small: m5.xlarge
-      node_type_large: m5.4xlarge
 
   clinical-data-demo:
     mode: development
@@ -78,13 +69,8 @@ targets:
       profile: clinical-data-demo
     variables:
       catalog: clinical-data-demo
-      warehouse_id: f7b1c2ddb43ad1b0
-      node_type_small: m5.xlarge
-      node_type_large: m5.4xlarge
 
   prod:
     mode: production
     workspace:
       profile: fe-vm-red-bricks-insurance
-    variables:
-      warehouse_id: 781064a3466c0984

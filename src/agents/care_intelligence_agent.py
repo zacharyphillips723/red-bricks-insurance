@@ -1,4 +1,4 @@
-"""Care Intelligence Agent — MLflow ChatModel for Unity Catalog registration.
+"""Care Intelligence Agent v1 — MLflow ChatModel for Unity Catalog registration.
 
 This file defines the RAG agent as an mlflow.pyfunc.ChatModel so it can be:
   1. Logged via MLflow "models from code" (no serialization needed)
@@ -7,6 +7,16 @@ This file defines the RAG agent as an mlflow.pyfunc.ChatModel so it can be:
 
 The agent retrieves a member profile (gold_member_360) and relevant case note
 chunks (Vector Search), then synthesizes a response via Foundation Model API.
+
+A/B Testing Strategy:
+  - v1 (this file): Registered with alias "production" — narrative-style responses,
+    Llama 3.3 70B, 5 retrieval chunks, temperature 0.1
+  - v2 (care_intelligence_agent_v2.py): Registered with alias "champion" — SOAP-format
+    responses, Llama 4 Maverick, 10 chunks, temperature 0.05, benefit utilization context
+  - Both are evaluated side-by-side by evaluate_agents.py (clinical completeness,
+    citation quality, actionability, response structure)
+  - Neither file is dead code — both are deployed to UC and serve the agent
+    comparison dashboard
 """
 
 import json

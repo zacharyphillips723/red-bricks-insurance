@@ -1,181 +1,224 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Share2, Loader2, AlertTriangle, Users, DollarSign, FileText } from "lucide-react";
-import { api, type NetworkNode, type NetworkEdge, type NetworkGraphData } from "@/lib/api";
+import ForceGraph2D from "react-force-graph-2d";
+import { api, type NetworkNode, type NetworkGraphData } from "@/lib/api";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 
-// ---------------------------------------------------------------------------
-// Force-directed layout (pure JS, no D3)
-// ---------------------------------------------------------------------------
-
-interface LayoutNode extends NetworkNode {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
+interface GraphNode extends NetworkNode {
+  x?: number;
+  y?: number;
+  fx?: number;
+  fy?: number;
 }
 
-function runForceLayout(
-  nodes: NetworkNode[],
-  edges: NetworkEdge[],
-  width: number,
-  height: number,
-  iterations: number = 120,
-): LayoutNode[] {
-  const layoutNodes: LayoutNode[] = nodes.map((n, i) => ({
-    ...n,
-    x: width / 2 + (Math.cos(i * 2.399) * width * 0.35),
-    y: height / 2 + (Math.sin(i * 2.399) * height * 0.35),
-    vx: 0,
-    vy: 0,
-  }));
-
-  const nodeMap = new Map<string, LayoutNode>();
-  layoutNodes.forEach((n) => nodeMap.set(n.id, n));
-
-  const repulsion = 3000;
-  const attraction = 0.005;
-  const damping = 0.85;
-  const centerGravity = 0.01;
-
-  for (let iter = 0; iter < iterations; iter++) {
-    const temp = 1 - iter / iterations;
-
-    // Repulsion between all node pairs
-    for (let i = 0; i < layoutNodes.length; i++) {
-      for (let j = i + 1; j < layoutNodes.length; j++) {
-        const a = layoutNodes[i];
-        const b = layoutNodes[j];
-        const dx = a.x - b.x;
-        const dy = a.y - b.y;
-        const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
-        const force = (repulsion * temp) / (dist * dist);
-        const fx = (dx / dist) * force;
-        const fy = (dy / dist) * force;
-        a.vx += fx;
-        a.vy += fy;
-        b.vx -= fx;
-        b.vy -= fy;
-      }
-    }
-
-    // Attraction along edges
-    for (const edge of edges) {
-      const source = nodeMap.get(edge.source);
-      const target = nodeMap.get(edge.target);
-      if (!source || !target) continue;
-      const dx = target.x - source.x;
-      const dy = target.y - source.y;
-      const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
-      const force = dist * attraction * (1 + edge.weight * 0.1);
-      const fx = (dx / dist) * force;
-      const fy = (dy / dist) * force;
-      source.vx += fx;
-      source.vy += fy;
-      target.vx -= fx;
-      target.vy -= fy;
-    }
-
-    // Center gravity
-    for (const node of layoutNodes) {
-      node.vx += (width / 2 - node.x) * centerGravity;
-      node.vy += (height / 2 - node.y) * centerGravity;
-    }
-
-    // Apply velocities with damping
-    for (const node of layoutNodes) {
-      node.vx *= damping;
-      node.vy *= damping;
-      node.x += node.vx;
-      node.y += node.vy;
-      // Keep in bounds
-      node.x = Math.max(40, Math.min(width - 40, node.x));
-      node.y = Math.max(40, Math.min(height - 40, node.y));
-    }
-  }
-
-  return layoutNodes;
+interface GraphLink {
+  source: string | GraphNode;
+  target: string | GraphNode;
+  weight: number;
+  fraud_score?: number;
+  claim_count?: number;
 }
-
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
 
 export function NetworkGraph() {
   const [data, setData] = useState<NetworkGraphData | null>(null);
-  const [layoutNodes, setLayoutNodes] = useState<LayoutNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [hoveredNode, setHoveredNode] = useState<LayoutNode | null>(null);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
-  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
-  const svgRef = useRef<SVGSVGElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [dimensions, setDimensions] = useState({ width: 900, height: 600 });
+  const fgRef = useRef<any>(null);
 
-  const SVG_WIDTH = 900;
-  const SVG_HEIGHT = 600;
+  const hoveredNodeRef = useRef<GraphNode | null>(null);
+  const selectedProviderRef = useRef<string | null>(null);
+  selectedProviderRef.current = selectedProvider;
+
+  // Track whether the initial zoomToFit has fired
+  const didInitialFit = useRef(false);
 
   useEffect(() => {
     setLoading(true);
     setError("");
     api.getNetworkGraph()
-      .then((result) => {
-        setData(result);
-        if (result.nodes.length > 0) {
-          const nodes = runForceLayout(result.nodes, result.edges, SVG_WIDTH, SVG_HEIGHT);
-          setLayoutNodes(nodes);
-        }
-      })
+      .then(setData)
       .catch((err) => setError(String(err)))
       .finally(() => setLoading(false));
   }, []);
 
-  const handleNodeHover = useCallback((node: LayoutNode | null, e?: React.MouseEvent) => {
-    setHoveredNode(node);
-    if (e && node) {
-      const svg = svgRef.current;
-      if (svg) {
-        const rect = svg.getBoundingClientRect();
-        setTooltipPos({ x: e.clientX - rect.left + 12, y: e.clientY - rect.top - 10 });
-      }
-    }
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const obs = new ResizeObserver((entries) => {
+      const { width } = entries[0].contentRect;
+      setDimensions({ width, height: Math.max(550, width * 0.55) });
+    });
+    obs.observe(el);
+    return () => obs.disconnect();
   }, []);
 
-  const handleNodeClick = useCallback((node: LayoutNode) => {
+  // Build graph data ONCE from API response — never rebuild on selection change.
+  // Selection highlighting is handled purely in the paint functions via refs.
+  const graphData = useMemo(() => {
+    if (!data) return { nodes: [] as GraphNode[], links: [] as GraphLink[] };
+
+    const nodes: GraphNode[] = data.nodes.map((n) => ({ ...n }));
+    const links: GraphLink[] = data.edges.map((e) => ({
+      source: e.source,
+      target: e.target,
+      weight: e.weight,
+      fraud_score: e.fraud_score,
+      claim_count: e.claim_count,
+    }));
+
+    return { nodes, links };
+  }, [data]);
+
+  // Pre-compute adjacency for fast highlight lookup
+  const adjacency = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    if (!data) return map;
+    for (const e of data.edges) {
+      if (!map.has(e.source)) map.set(e.source, new Set());
+      if (!map.has(e.target)) map.set(e.target, new Set());
+      map.get(e.source)!.add(e.target);
+      map.get(e.target)!.add(e.source);
+    }
+    return map;
+  }, [data]);
+
+  const isConnected = useCallback((nodeId: string) => {
+    const sel = selectedProviderRef.current;
+    if (!sel) return true;
+    if (nodeId === sel) return true;
+    return adjacency.get(sel)?.has(nodeId) ?? false;
+  }, [adjacency]);
+
+  const nodeColorFn = useCallback((node: GraphNode) => {
+    if (node.type === "provider") {
+      if (node.risk_score > 0.7) return "#ef4444";
+      if (node.risk_score > 0.4) return "#f97316";
+      return "#fb923c";
+    }
+    return "#3b82f6";
+  }, []);
+
+  const paintNode = useCallback((node: GraphNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
+    // Base radius in graph-space units
+    const baseR = node.type === "provider" ? 5 + node.risk_score * 12 : 3 + (node.claim_count ?? 1) * 0.25;
+    // Scale radius so nodes visibly grow/shrink with zoom.
+    // The canvas transform already applies globalScale, but we add an extra
+    // sqrt(globalScale) factor so the size change is more perceptible.
+    const r = baseR * Math.sqrt(globalScale) / globalScale;
+    // Net visual radius on screen = r * globalScale (from canvas transform)
+    //   = baseR * sqrt(globalScale)
+    // So at 4x zoom, visual radius = baseR * 2  (double)
+    // At 0.25x zoom, visual radius = baseR * 0.5 (half)
+
+    const connected = isConnected(node.id);
+    const isSelected = selectedProviderRef.current === node.id;
+    const isHovered = hoveredNodeRef.current?.id === node.id;
+
+    ctx.globalAlpha = connected ? 1 : 0.1;
+
+    ctx.beginPath();
+    ctx.arc(node.x!, node.y!, r, 0, 2 * Math.PI);
+    ctx.fillStyle = nodeColorFn(node);
+    ctx.fill();
+
+    if (isHovered || isSelected) {
+      ctx.strokeStyle = "#1e293b";
+      ctx.lineWidth = 2.5 / globalScale;
+      ctx.stroke();
+    } else if (connected) {
+      ctx.strokeStyle = "rgba(255,255,255,0.8)";
+      ctx.lineWidth = 1.2 / globalScale;
+      ctx.stroke();
+    }
+
+    if (node.type === "provider" && globalScale > 0.7 && connected) {
+      const label = node.name.length > 18 ? node.name.slice(0, 16) + "\u2026" : node.name;
+      const fontSize = Math.max(10 / globalScale, 2);
+      ctx.font = `500 ${fontSize}px sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.fillStyle = "#475569";
+      ctx.fillText(label, node.x!, node.y! + r + 2 / globalScale);
+    }
+
+    ctx.globalAlpha = 1;
+  }, [nodeColorFn, isConnected]);
+
+  const linkColorFn = useCallback((link: GraphLink) => {
+    const sel = selectedProviderRef.current;
+    if (sel) {
+      const src = typeof link.source === "string" ? link.source : link.source.id;
+      const tgt = typeof link.target === "string" ? link.target : link.target.id;
+      if (src !== sel && tgt !== sel) return "rgba(148,163,184,0.04)";
+    }
+    const score = link.fraud_score;
+    if (score == null) return "rgba(148,163,184,0.35)";
+    if (score > 0.7) return "rgba(239,68,68,0.55)";
+    if (score > 0.4) return "rgba(245,158,11,0.45)";
+    return "rgba(34,197,94,0.35)";
+  }, []);
+
+  const linkWidthFn = useCallback((link: GraphLink) => {
+    const sel = selectedProviderRef.current;
+    if (sel) {
+      const src = typeof link.source === "string" ? link.source : link.source.id;
+      const tgt = typeof link.target === "string" ? link.target : link.target.id;
+      if (src !== sel && tgt !== sel) return 0.1;
+    }
+    return 0.5 + link.weight * 0.4;
+  }, []);
+
+  const handleNodeClick = useCallback((node: GraphNode) => {
     if (node.type === "provider") {
       setSelectedProvider((prev) => (prev === node.id ? null : node.id));
     }
   }, []);
 
-  // Filter edges/nodes by selected provider
-  const filteredEdges = data?.edges.filter((e) => {
-    if (!selectedProvider) return true;
-    return e.source === selectedProvider || e.target === selectedProvider;
-  }) ?? [];
+  const handleBackgroundClick = useCallback(() => {
+    setSelectedProvider(null);
+  }, []);
 
-  const connectedNodeIds = new Set<string>();
-  if (selectedProvider) {
-    connectedNodeIds.add(selectedProvider);
-    filteredEdges.forEach((e) => {
-      connectedNodeIds.add(e.source);
-      connectedNodeIds.add(e.target);
-    });
-  }
-
-  const nodeMap = new Map<string, LayoutNode>();
-  layoutNodes.forEach((n) => nodeMap.set(n.id, n));
-
-  const nodeRadius = (node: LayoutNode) => {
-    if (node.type === "provider") {
-      return 8 + node.risk_score * 16;
+  const handleNodeHover = useCallback((node: GraphNode | null) => {
+    hoveredNodeRef.current = node;
+    if (containerRef.current) {
+      containerRef.current.style.cursor = node?.type === "provider" ? "pointer" : node ? "default" : "grab";
     }
-    return 6 + (node.claim_count ?? 1) * 0.5;
-  };
+  }, []);
 
-  const edgeColor = (score?: number) => {
-    if (score == null) return "#94a3b8";
-    if (score > 0.7) return "#ef4444";
-    if (score > 0.4) return "#f59e0b";
-    return "#22c55e";
-  };
+  const handleEngineStop = useCallback(() => {
+    const gd = fgRef.current?.graphData?.();
+    if (gd?.nodes) {
+      gd.nodes.forEach((n: any) => { n.fx = n.x; n.fy = n.y; });
+    }
+    if (!didInitialFit.current) {
+      didInitialFit.current = true;
+      // Delay zoomToFit to ensure the canvas has rendered the first frame
+      setTimeout(() => fgRef.current?.zoomToFit(400, 50), 100);
+    }
+  }, []);
+
+  // Fallback: if onEngineStop doesn't fire in time, force zoomToFit after mount
+  useEffect(() => {
+    if (!data || loading) return;
+    const timer = setTimeout(() => {
+      if (!didInitialFit.current) {
+        didInitialFit.current = true;
+        fgRef.current?.zoomToFit(400, 50);
+      }
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [data, loading]);
+
+  const handleNodeDragEnd = useCallback((node: any) => {
+    node.fx = node.x;
+    node.fy = node.y;
+  }, []);
+
+  const nodeMap = new Map<string, NetworkNode>();
+  data?.nodes.forEach((n) => nodeMap.set(n.id, n));
 
   return (
     <div className="space-y-6">
@@ -194,7 +237,6 @@ export function NetworkGraph() {
 
       {data && !loading && (
         <>
-          {/* Summary stats */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="card p-4">
               <div className="flex items-center gap-2 text-xs text-gray-500 mb-1">
@@ -230,7 +272,6 @@ export function NetworkGraph() {
             </div>
           </div>
 
-          {/* Filter indicator */}
           {selectedProvider && (
             <div className="flex items-center gap-2 text-sm text-gray-600 bg-blue-50 rounded-lg px-4 py-2">
               <span>Filtering by provider: <strong>{nodeMap.get(selectedProvider)?.name ?? selectedProvider}</strong></span>
@@ -243,117 +284,87 @@ export function NetworkGraph() {
             </div>
           )}
 
-          {/* Network graph SVG */}
-          <div className="card p-4 relative">
-            <div className="flex items-center gap-4 mb-3 text-xs text-gray-500">
-              <div className="flex items-center gap-1">
-                <svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#ef4444" /></svg>
-                Provider (sized by risk)
+          <div className="card p-2 relative" ref={containerRef}>
+            <div className="flex items-center justify-between mb-2 px-2">
+              <div className="flex items-center gap-4 text-xs text-gray-500">
+                <div className="flex items-center gap-1">
+                  <svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#ef4444" /></svg>
+                  Provider (sized by risk)
+                </div>
+                <div className="flex items-center gap-1">
+                  <svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#3b82f6" /></svg>
+                  Member
+                </div>
+                <div className="flex items-center gap-1">
+                  <svg width="24" height="4"><line x1="0" y1="2" x2="24" y2="2" stroke="#ef4444" strokeWidth="2" /></svg>
+                  High fraud score
+                </div>
+                <div className="flex items-center gap-1">
+                  <svg width="24" height="4"><line x1="0" y1="2" x2="24" y2="2" stroke="#22c55e" strokeWidth="2" /></svg>
+                  Low fraud score
+                </div>
               </div>
-              <div className="flex items-center gap-1">
-                <svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#3b82f6" /></svg>
-                Member
-              </div>
-              <div className="flex items-center gap-1">
-                <svg width="24" height="4"><line x1="0" y1="2" x2="24" y2="2" stroke="#ef4444" strokeWidth="2" /></svg>
-                High fraud score
-              </div>
-              <div className="flex items-center gap-1">
-                <svg width="24" height="4"><line x1="0" y1="2" x2="24" y2="2" stroke="#22c55e" strokeWidth="2" /></svg>
-                Low fraud score
+              <div className="flex items-center gap-2 text-xs text-gray-500">
+                <span>Scroll to zoom, drag to pan</span>
+                <button
+                  onClick={() => fgRef.current?.zoomToFit(300, 40)}
+                  className="px-2 py-0.5 rounded bg-gray-100 hover:bg-gray-200 text-gray-600"
+                >
+                  Fit to view
+                </button>
               </div>
             </div>
 
-            <svg
-              ref={svgRef}
-              viewBox={`0 0 ${SVG_WIDTH} ${SVG_HEIGHT}`}
-              className="w-full border border-gray-100 rounded-lg bg-gray-50"
-              style={{ maxHeight: "600px" }}
-            >
-              {/* Edges */}
-              {filteredEdges.map((edge, i) => {
-                const source = nodeMap.get(edge.source);
-                const target = nodeMap.get(edge.target);
-                if (!source || !target) return null;
-                const opacity = selectedProvider
-                  ? 0.8
-                  : 0.3 + (edge.fraud_score ?? 0) * 0.5;
-                return (
-                  <line
-                    key={`edge-${i}`}
-                    x1={source.x}
-                    y1={source.y}
-                    x2={target.x}
-                    y2={target.y}
-                    stroke={edgeColor(edge.fraud_score)}
-                    strokeWidth={1 + edge.weight * 0.5}
-                    opacity={opacity}
-                  />
-                );
-              })}
-
-              {/* Nodes */}
-              {layoutNodes.map((node) => {
-                const isVisible = !selectedProvider || connectedNodeIds.has(node.id);
-                const r = nodeRadius(node);
-                const fillColor = node.type === "provider"
-                  ? (node.risk_score > 0.7 ? "#ef4444" : node.risk_score > 0.4 ? "#f97316" : "#fb923c")
-                  : "#3b82f6";
-                return (
-                  <g
-                    key={node.id}
-                    opacity={isVisible ? 1 : 0.15}
-                    style={{ cursor: node.type === "provider" ? "pointer" : "default" }}
-                    onMouseEnter={(e) => handleNodeHover(node, e)}
-                    onMouseLeave={() => handleNodeHover(null)}
-                    onClick={() => handleNodeClick(node)}
-                  >
-                    <circle
-                      cx={node.x}
-                      cy={node.y}
-                      r={r}
-                      fill={fillColor}
-                      stroke={hoveredNode?.id === node.id || selectedProvider === node.id ? "#1e293b" : "white"}
-                      strokeWidth={hoveredNode?.id === node.id || selectedProvider === node.id ? 2.5 : 1.5}
-                    />
-                    {r > 12 && (
-                      <text
-                        x={node.x}
-                        y={node.y + r + 12}
-                        textAnchor="middle"
-                        fontSize="9"
-                        fill="#475569"
-                        fontWeight="500"
-                      >
-                        {node.name.length > 16 ? node.name.slice(0, 14) + "..." : node.name}
-                      </text>
-                    )}
-                  </g>
-                );
-              })}
-            </svg>
-
-            {/* Tooltip */}
-            {hoveredNode && (
-              <div
-                className="absolute bg-white border border-gray-200 shadow-lg rounded-lg px-3 py-2 text-xs pointer-events-none z-10"
-                style={{ left: tooltipPos.x, top: tooltipPos.y }}
-              >
-                <div className="font-semibold text-databricks-dark">{hoveredNode.name}</div>
-                <div className="text-gray-500 capitalize">{hoveredNode.type}</div>
-                <div className="mt-1 space-y-0.5">
-                  <div>Risk Score: <strong>{(hoveredNode.risk_score * 100).toFixed(0)}%</strong></div>
-                  <div>Investigations: {hoveredNode.investigation_count}</div>
-                  {hoveredNode.claim_count != null && <div>Claims: {hoveredNode.claim_count}</div>}
-                  {hoveredNode.estimated_overpayment != null && (
-                    <div>Est. Overpayment: {formatCurrency(hoveredNode.estimated_overpayment)}</div>
-                  )}
-                </div>
-                {hoveredNode.type === "provider" && (
-                  <div className="text-blue-600 mt-1">Click to filter</div>
-                )}
-              </div>
-            )}
+            <div className="rounded-lg overflow-hidden bg-gray-50">
+              <ForceGraph2D
+                ref={fgRef}
+                graphData={graphData}
+                width={dimensions.width - 16}
+                height={dimensions.height}
+                nodeId="id"
+                nodeCanvasObject={paintNode}
+                nodePointerAreaPaint={(node: GraphNode, color: string, ctx: CanvasRenderingContext2D, globalScale: number) => {
+                  const baseR = node.type === "provider" ? 5 + node.risk_score * 12 : 4;
+                  const r = baseR * Math.sqrt(globalScale) / globalScale;
+                  ctx.beginPath();
+                  ctx.arc(node.x!, node.y!, r + 3 / globalScale, 0, 2 * Math.PI);
+                  ctx.fillStyle = color;
+                  ctx.fill();
+                }}
+                linkColor={linkColorFn}
+                linkWidth={linkWidthFn}
+                linkDirectionalParticles={0}
+                onNodeClick={handleNodeClick}
+                onBackgroundClick={handleBackgroundClick}
+                onNodeHover={handleNodeHover}
+                nodeLabel={(node: GraphNode) => {
+                  const lines = [
+                    `<strong>${node.name}</strong>`,
+                    `<em style="text-transform:capitalize">${node.type}</em>`,
+                    `Risk: ${(node.risk_score * 100).toFixed(0)}%`,
+                  ];
+                  if (node.investigation_count) lines.push(`Investigations: ${node.investigation_count}`);
+                  if (node.claim_count != null) lines.push(`Claims: ${node.claim_count}`);
+                  if (node.estimated_overpayment != null) lines.push(`Est. Overpayment: ${formatCurrency(node.estimated_overpayment)}`);
+                  if (node.type === "provider") lines.push(`<span style="color:#3b82f6">Click to highlight connections</span>`);
+                  return lines.join("<br/>");
+                }}
+                cooldownTicks={120}
+                cooldownTime={4000}
+                warmupTicks={30}
+                d3AlphaDecay={0.03}
+                d3VelocityDecay={0.35}
+                d3AlphaMin={0.001}
+                onEngineStop={handleEngineStop}
+                enableZoomInteraction={true}
+                enablePanInteraction={true}
+                enableNodeDrag={true}
+                onNodeDragEnd={handleNodeDragEnd}
+                backgroundColor="#f9fafb"
+                minZoom={0.2}
+                maxZoom={12}
+              />
+            </div>
           </div>
 
           {data.nodes.length === 0 && (
@@ -363,7 +374,7 @@ export function NetworkGraph() {
                 No network data available
               </h3>
               <p className="text-sm text-gray-500">
-                Network graphs are built from investigation and evidence data in Lakebase.
+                Network graphs are built from investigation and evidence data.
               </p>
             </div>
           )}

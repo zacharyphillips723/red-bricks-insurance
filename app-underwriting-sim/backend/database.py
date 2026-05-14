@@ -1,18 +1,23 @@
 """Lakebase Autoscaling database connection manager with OAuth token refresh.
 
-Same pattern as Command Center and FWA apps — SQLAlchemy async engine
-with automatic Databricks OAuth token injection.
+Canonical shared implementation — synced to each app's backend/ directory by
+sync_shared_backend.sh. Edit THIS file, then run the sync script.
+
+Each app's DAB resource config sets LAKEBASE_DATABASE_NAME via env vars,
+so the hardcoded default here is just a safety fallback.
 """
 
 import asyncio
+import logging
 import os
 import time
-import traceback
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Optional
 
-from sqlalchemy import event, text
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+logger = logging.getLogger("lakebase")
 
 
 class LakebaseConnection:
@@ -24,6 +29,7 @@ class LakebaseConnection:
         self._current_token: Optional[str] = None
         self._refresh_task: Optional[asyncio.Task] = None
         self._initialized = False
+        self._consecutive_refresh_failures = 0
 
     def _build_endpoint_path(self) -> str:
         project_id = os.environ.get("LAKEBASE_PROJECT_ID", "red-bricks-insurance")
@@ -49,7 +55,7 @@ class LakebaseConnection:
                 return ep.status.hosts.host
             if attempt < max_attempts:
                 wait = min(5 * attempt, 30)
-                print(f"[DB] Endpoint not ready (attempt {attempt}/{max_attempts}), retrying in {wait}s...")
+                logger.warning("Endpoint not ready (attempt %d/%d), retrying in %ds...", attempt, max_attempts, wait)
                 time.sleep(wait)
         raise RuntimeError(f"Endpoint {endpoint_path} did not become ready after {max_attempts} attempts")
 
@@ -60,18 +66,38 @@ class LakebaseConnection:
                 self._current_token = await asyncio.to_thread(
                     self._generate_token, endpoint_path
                 )
-                print("Lakebase token refreshed successfully")
-            except Exception as e:
-                print(f"Token refresh failed: {e}")
+                self._consecutive_refresh_failures = 0
+                logger.info("Lakebase token refreshed successfully")
+            except Exception:
+                self._consecutive_refresh_failures += 1
+                logger.exception(
+                    "Token refresh failed (consecutive failures: %d)",
+                    self._consecutive_refresh_failures,
+                )
+                if self._consecutive_refresh_failures >= 3:
+                    logger.error(
+                        "Token refresh failed %d consecutive times — "
+                        "database queries will fail when the current token expires. "
+                        "Attempting re-initialization...",
+                        self._consecutive_refresh_failures,
+                    )
+                    try:
+                        self._current_token = await asyncio.to_thread(
+                            self._generate_token, endpoint_path
+                        )
+                        self._consecutive_refresh_failures = 0
+                        logger.info("Re-initialization succeeded")
+                    except Exception:
+                        logger.exception("Re-initialization also failed")
 
     def initialize(self) -> None:
         """Initialize the database engine."""
         pg_url = os.environ.get("LAKEBASE_PG_URL")
 
-        print(f"[DB] LAKEBASE_PG_URL set: {bool(pg_url)}")
-        print(f"[DB] LAKEBASE_PROJECT_ID: {os.environ.get('LAKEBASE_PROJECT_ID', 'not set')}")
-        print(f"[DB] LAKEBASE_BRANCH: {os.environ.get('LAKEBASE_BRANCH', 'not set')}")
-        print(f"[DB] LAKEBASE_DATABASE_NAME: {os.environ.get('LAKEBASE_DATABASE_NAME', 'not set')}")
+        logger.info("LAKEBASE_PG_URL set: %s", bool(pg_url))
+        logger.info("LAKEBASE_PROJECT_ID: %s", os.environ.get("LAKEBASE_PROJECT_ID", "not set"))
+        logger.info("LAKEBASE_BRANCH: %s", os.environ.get("LAKEBASE_BRANCH", "not set"))
+        logger.info("LAKEBASE_DATABASE_NAME: %s", os.environ.get("LAKEBASE_DATABASE_NAME", "not set"))
 
         if pg_url:
             if pg_url.startswith("postgresql://"):
@@ -88,13 +114,16 @@ class LakebaseConnection:
             from databricks.sdk import WorkspaceClient
 
             endpoint_path = self._build_endpoint_path()
-            database_name = os.environ.get("LAKEBASE_DATABASE_NAME", "uw_sim")
+            database_name = os.environ.get("LAKEBASE_DATABASE_NAME", "red_bricks_alerts")
 
-            print(f"[DB] Using Databricks OAuth mode for endpoint '{endpoint_path}'")
+            logger.info("Using Databricks OAuth mode for endpoint '%s', database '%s'", endpoint_path, database_name)
 
             w = WorkspaceClient()
             host = self._get_host(endpoint_path)
-            username = os.environ.get("LAKEBASE_USERNAME", w.current_user.me().user_name)
+            username = os.environ.get(
+                "LAKEBASE_USERNAME", w.current_user.me().user_name
+            )
+            logger.info("Connecting as '%s' to '%s'", username, host)
 
             self._current_token = self._generate_token(endpoint_path)
 
@@ -119,7 +148,7 @@ class LakebaseConnection:
             self._engine, class_=AsyncSession, expire_on_commit=False
         )
         self._initialized = True
-        print("[DB] Underwriting simulation database engine initialized successfully")
+        logger.info("Database engine initialized successfully")
 
     def start_refresh(self) -> None:
         endpoint_path = self._build_endpoint_path()
@@ -137,6 +166,11 @@ class LakebaseConnection:
                 pass
         if self._engine:
             await self._engine.dispose()
+
+    @property
+    def is_healthy(self) -> bool:
+        """Returns False if token refresh has failed repeatedly."""
+        return self._consecutive_refresh_failures < 3
 
     @asynccontextmanager
     async def session(self) -> AsyncGenerator[AsyncSession, None]:

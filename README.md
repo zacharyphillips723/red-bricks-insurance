@@ -142,7 +142,7 @@ synthea_generation (ROOT — generates FHIR bundles + extracts demographics + as
       → deploy_app_source (deploys source code + starts compute for all 6 apps)
 ```
 
-A **refresh job** (`red_bricks_refresh`) runs the same DAG minus Synthea/FHIR/clinical — useful when only insurance data generation or downstream logic has changed. Both jobs include the `bootstrap_workspace` task, which automatically provisions Lakebase, discovers app service principals, grants UC + warehouse permissions, seeds alerts/investigations from gold tables, and seeds the PA review queue with reviewer assignments.
+The Synthea generation notebook **automatically skips** when FHIR bundles already exist in the volume (~5 second early exit), so re-running the full demo job is safe and fast for iterative development. The `bootstrap_workspace` task automatically provisions Lakebase, discovers app service principals, grants UC + warehouse permissions, seeds alerts/investigations from gold tables, and seeds the PA review queue with reviewer assignments.
 
 **Synthea as golden demographic source:** Synthea generates clinically realistic patients with names, DOBs, and addresses. These demographics flow INTO the insurance generators (members, enrollment), ensuring that searching for "Aaron Anderson" in FHIR returns the same person as in the member table. A lightweight `synthea_crosswalk` Delta table maps Synthea UUIDs to MBR IDs via JOIN in `bronze.sql`.
 
@@ -282,7 +282,7 @@ Clinical-focused application for care management teams:
   - **Care Plan** — AI-generated care plans with goals, interventions, milestones, timeline visualization
   - **Outreach Draft** — AI-generated personalized outreach scripts (phone, SMS, email) based on member profile and preferred communication; SMS channel enforces PHI-free messaging
   - **Cohort Builder** — Population cohort definition with demographic, clinical, and utilization filters; cohort analytics; save/load named cohorts to Lakebase
-  - **Patient Search (Genie)** — Natural language SQL exploration via embedded Genie space (iframe) with toggle between custom chat UI and embedded Genie mode
+  - **Patient Search (Genie)** — Natural language SQL exploration via Databricks Genie custom chat UI with suggested questions, conversation threading, and SQL preview
   - **Caseload** — Care manager workload dashboard with assignment tracking
 - **Agent Architecture**: Multi-agent supervisor with Route→Dispatch→Merge pattern (`agent_graph.py`). SSE token-by-token streaming. 4 specialist agents (Clinical, Financial, Care Management, Document) with UC function tool-calling (`agent_tools.py`). Parallel specialist dispatch with async streaming merge. Lakebase-backed conversation persistence (`conversation_store.py`)
 - **Config**: `app/app.yml`
@@ -310,9 +310,9 @@ SIU-focused application for fraud, waste, and abuse investigation:
 - **Pages**:
   - **Dashboard** — KPIs (total/open/critical/closed investigations), financial metrics (estimated overpayment, recovered, recovery rate), breakdowns by status/severity/type
   - **Investigation Queue** — filterable/searchable table with status, severity, type, investigator filters; sorted by severity + risk score
-  - **Investigation Detail** — full case view with key metrics, fraud types, agent chat panel, evidence list, immutable audit trail, and action sidebar (assign investigator, update status, add notes, record recovery)
+  - **Investigation Detail** — full case view with key metrics, fraud types, inline agent chat with styled markdown rendering, evidence list, immutable audit trail, and action sidebar (assign investigator, update status, add notes, record recovery)
   - **Provider Analysis** — NPI search with risk scorecard, metrics grid (18 metrics), ML model predictions table, rules-based flagged claims table, provider network graph showing referral patterns and ring detection
-  - **Network Graph** — Interactive provider referral network visualization showing connections between providers flagged for billing rings, unusual referral patterns, and cross-referral anomalies
+  - **Network Graph** — Interactive fraud network graph (canvas-based, `react-force-graph-2d`) showing provider→member connections from Unity Catalog `gold_fwa_claim_flags`. Zoom-responsive node sizing, click-to-highlight provider neighborhoods, drag-to-pan, scroll-to-zoom, auto-fit on load. Provider nodes sized by risk score; member nodes from real flagged claims data; edges colored by fraud score
   - **FWA Agent** — standalone AI agent chat with `[INV-XXXX]`/`[PRV-NPI]` prefix targeting; the agent dynamically queries Unity Catalog tables via tool-calling
   - **Genie Search** — natural language SQL exploration over FWA gold tables
   - **Caseload** — investigator capacity dashboard with utilization bars
@@ -483,7 +483,6 @@ red-bricks-insurance/
 │   └── static/                       #   Built frontend output
 ├── resources/
 │   ├── full_demo_job.yml             # End-to-end orchestration (37 tasks)
-│   ├── refresh_demo_job.yml          # Refresh without Synthea (data gen → all downstream)
 │   ├── adt_feed_job.yml              # Scheduled ADT event generation (every 3 hours)
 │   ├── data_generation_job.yml       # Standalone data generation
 │   ├── dashboard.yml                 # Analytics dashboard
@@ -727,27 +726,27 @@ On a fresh workspace, Lakebase instances and app database resources create a chi
 databricks bundle deploy --target my-workspace --var="catalog=my_catalog"
 
 # Run the job — setup_lakebase creates databases inside the new instances
-databricks bundle run red_bricks_refresh --target my-workspace --var="catalog=my_catalog"
+databricks bundle run red_bricks_full_demo --target my-workspace --var="catalog=my_catalog"
 # Wait for setup_lakebase task to succeed, then cancel the run
 
 # Phase 2: Uncomment `database` resources in app YAMLs, redeploy
 # (Terraform adds DB resources + security labels to apps)
 databricks bundle deploy --target my-workspace --var="catalog=my_catalog"
 
-# Now run the full pipeline
-databricks bundle run red_bricks_refresh --target my-workspace --var="catalog=my_catalog"
+# Now run the full pipeline (Synthea auto-skips if data already exists)
+databricks bundle run red_bricks_full_demo --target my-workspace --var="catalog=my_catalog"
 ```
 
 > **Subsequent deploys** don't need two phases — the databases already exist from the first run.
 
-**4. Dashboard catalog replacement** — Lakeview dashboard JSON files hardcode SQL catalog references and don't support `${var.catalog}` interpolation. Use `prepare.sh` before deploying to a non-default catalog:
+**4. Dashboard preparation** — Lakeview dashboard JSON files hardcode SQL catalog references and workspace IDs (no `${var.*}` interpolation in dashboard SQL). Use `prepare.sh` before deploying to a non-default workspace:
 
 ```bash
-./prepare.sh my_catalog_name    # replaces red_bricks_insurance in dashboard JSONs
+./prepare.sh my_catalog_name --profile my-cli-profile   # replaces catalog + auto-detects workspace_id
 databricks bundle deploy --target my-workspace --var="catalog=my_catalog_name"
 ```
 
-> Running `./prepare.sh` with no arguments (or `./prepare.sh red_bricks_insurance`) is a no-op.
+> Running `./prepare.sh` with no arguments (or `./prepare.sh red_bricks_insurance`) is a no-op for catalog. The `--profile` flag reads `workspace_id` from `~/.databrickscfg` (written by `databricks auth login`) to scope the System Tables dashboard to the correct workspace.
 
 **5. Pipeline automation** — the job runs end-to-end and automatically:
 - Creates Lakebase databases + DDL schemas (`setup_lakebase` task)
@@ -814,11 +813,8 @@ databricks bundle deploy --target e2-field-eng
 databricks bundle deploy --target hls-financial --var="catalog=hls_financial_foundation_catalog"
 
 # --- End-to-end demo (synthea → data gen → all pipelines → agents → eval → app deploy) ---
-# NOTE: Requires classic compute for Synthea. Use refresh job on serverless-only workspaces.
+# Synthea auto-skips if FHIR bundles already exist (~5s early exit), so this is safe to re-run.
 databricks bundle run red_bricks_full_demo --target e2-field-eng
-
-# --- Refresh without Synthea (data gen → pipelines → analytics → agents → app deploy) ---
-databricks bundle run red_bricks_refresh --target hls-financial --var="catalog=hls_financial_foundation_catalog"
 
 # --- Individual components ---
 databricks bundle run red_bricks_data_generation   # Just generate insurance data
@@ -996,6 +992,25 @@ All grants in `bootstrap_workspace` use the SP's `service_principal_client_id` (
 - REST API permissions (warehouse, serving endpoints, vector search)
 
 On Azure, the vector search endpoint permissions API requires the **endpoint UUID** (not name) in the URL path. Bootstrap dynamically resolves this via the VS endpoint API.
+
+### System Tables Dashboard — Hardcoded Workspace ID
+
+The System Tables (Billing & Audit) dashboard queries `system.billing.usage` and `system.access.audit`, which are account-level tables containing data for all workspaces. To scope the dashboard to the current workspace, queries filter by `workspace_id`. However, **Databricks SQL has no `current_workspace_id()` function** — there is no built-in way to dynamically resolve the workspace ID from within a SQL query. The available context functions (`current_catalog()`, `current_schema()`, `current_user()`, `current_metastore()`) do not include workspace identity.
+
+The dashboard JSON hardcodes the workspace ID (`7474660722665158`). When deploying to a different workspace, `prepare.sh` auto-detects the workspace ID from your CLI profile:
+
+```bash
+./prepare.sh my_catalog --profile my-cli-profile   # reads workspace_id from ~/.databrickscfg
+databricks bundle deploy --target dev --var="catalog=my_catalog"
+```
+
+The `workspace_id` field is written to `~/.databrickscfg` automatically by `databricks auth login`. You can also pass it explicitly:
+
+```bash
+./prepare.sh my_catalog 1234567890123456   # explicit workspace_id
+```
+
+If neither `--profile` nor a numeric ID is provided, the existing value is left unchanged.
 
 ### `AutoCaptureConfigInput` Is Deprecated
 

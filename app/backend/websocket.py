@@ -19,11 +19,14 @@ class NotificationManager:
     def __init__(self):
         self._connections: list[WebSocket] = []
         self._lock = asyncio.Lock()
+        self._ping_task: asyncio.Task | None = None
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         async with self._lock:
             self._connections.append(websocket)
+            if self._ping_task is None or self._ping_task.done():
+                self._ping_task = asyncio.create_task(self._ping_loop())
         print(f"[WS] Client connected. Total: {len(self._connections)}")
 
     async def disconnect(self, websocket: WebSocket):
@@ -31,6 +34,22 @@ class NotificationManager:
             if websocket in self._connections:
                 self._connections.remove(websocket)
         print(f"[WS] Client disconnected. Total: {len(self._connections)}")
+
+    async def _ping_loop(self):
+        """Send periodic pings to keep connections alive through the LB."""
+        while True:
+            await asyncio.sleep(30)
+            async with self._lock:
+                if not self._connections:
+                    return
+                stale = []
+                for ws in self._connections:
+                    try:
+                        await ws.send_text('{"type":"ping"}')
+                    except Exception:
+                        stale.append(ws)
+                for ws in stale:
+                    self._connections.remove(ws)
 
     async def broadcast(self, event_type: str, data: dict[str, Any]):
         """Broadcast a notification to all connected clients."""

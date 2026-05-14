@@ -1,14 +1,14 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Red Bricks Insurance — Register Care Intelligence Agent in Unity Catalog
+# MAGIC # Red Bricks Insurance — Register Care Intelligence Agent v1 in Unity Catalog
 # MAGIC
 # MAGIC This notebook:
 # MAGIC 1. **Validates** all RAG agent components (Vector Search, Member 360, Foundation Model API)
-# MAGIC 2. **Logs** the Care Intelligence Agent as an MLflow ChatModel using "models from code"
-# MAGIC 3. **Registers** it in Unity Catalog for governance, versioning, evaluation, and A/B testing
+# MAGIC 2. **Logs** the Care Intelligence Agent v1 as an MLflow ChatModel using "models from code"
+# MAGIC 3. **Registers** it in Unity Catalog with `production` alias for A/B evaluation against v2 (`champion`)
 # MAGIC
-# MAGIC The agent runs in the FastAPI backend for the live app, but the UC-registered version
-# MAGIC enables MLflow evaluation, model comparison, and future Model Serving deployment.
+# MAGIC **A/B Testing:** v1 (this notebook) registers with alias `production`. v2 (deploy_agent_v2.py)
+# MAGIC registers with alias `champion`. Both are evaluated by evaluate_agents.py.
 
 # COMMAND ----------
 

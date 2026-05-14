@@ -2,6 +2,7 @@
 
 import json
 import random
+import threading
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -11,6 +12,17 @@ from ..helpers import random_date_between, weighted_choice
 
 fake = Faker()
 Faker.seed(42)
+
+# Thread-local Faker instances for parallel document generation.
+# Faker is not thread-safe; sharing the module-level `fake` across
+# ThreadPoolExecutor workers causes race conditions.
+_faker_local = threading.local()
+
+
+def _get_faker() -> Faker:
+    if not hasattr(_faker_local, "instance"):
+        _faker_local.instance = Faker()
+    return _faker_local.instance
 
 # ---------------------------------------------------------------------------
 # Clinical templates for realistic case notes
@@ -293,15 +305,15 @@ def _generate_single_doc(args: tuple) -> Dict[str, Any]:
     if doc_type == "case_note":
         text_content = _generate_case_note_text(mid, primary_dx, name, doc_date)
         title = "Clinical Case Note"
-        author = f"Dr. {Faker().last_name()}"
+        author = f"Dr. {_get_faker().last_name()}"
     elif doc_type == "call_transcript":
         text_content = _generate_call_transcript_text(mid, name, doc_date)
         title = "Outreach Call Transcript"
-        author = f"{Faker().first_name()} {Faker().last_name()}"
+        author = f"{_get_faker().first_name()} {_get_faker().last_name()}"
     else:
         text_content = _generate_claims_summary_text(mid, name, member_claims, doc_date)
         title = "Claims Summary Report"
-        author = f"{Faker().first_name()} {Faker().last_name()}"
+        author = f"{_get_faker().first_name()} {_get_faker().last_name()}"
 
     pdf_bytes = _build_pdf_bytes(text_content, title)
 

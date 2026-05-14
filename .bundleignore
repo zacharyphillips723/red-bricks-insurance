@@ -1,3 +1,9 @@
+# Exclude Python bytecode caches from bundle upload
+**/__pycache__/
+
+# Shared backend library — canonical source only, synced to each app at build time
+lib/
+
 # Exclude frontend source and node_modules — pre-built static assets are in app/static/
 app/frontend/node_modules/
 app/frontend/src/
@@ -32,3 +38,21 @@ app-underwriting-sim/frontend/*.json
 app-underwriting-sim/frontend/*.ts
 app-underwriting-sim/frontend/*.js
 app-underwriting-sim/frontend/*.html
+
+# Exclude Network Adequacy frontend source/node_modules — pre-built assets in app-network-adequacy/static/
+app-network-adequacy/frontend/node_modules/
+app-network-adequacy/frontend/dist/
+app-network-adequacy/frontend/src/
+app-network-adequacy/frontend/*.json
+app-network-adequacy/frontend/*.ts
+app-network-adequacy/frontend/*.js
+app-network-adequacy/frontend/*.html
+
+# Exclude Prior Auth frontend source/node_modules — pre-built assets in app-prior-auth/static/
+app-prior-auth/frontend/node_modules/
+app-prior-auth/frontend/dist/
+app-prior-auth/frontend/src/
+app-prior-auth/frontend/*.json
+app-prior-auth/frontend/*.ts
+app-prior-auth/frontend/*.js
+app-prior-auth/frontend/*.html

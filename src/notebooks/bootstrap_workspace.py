@@ -23,7 +23,7 @@
 # MAGIC
 # MAGIC ### Prerequisites:
 # MAGIC - `databricks bundle deploy` has been run (apps exist in workspace)
-# MAGIC - Gold tables are populated (run `red_bricks_refresh` job first, then run this)
+# MAGIC - Gold tables are populated (run `red_bricks_full_demo` job first, then run this)
 # MAGIC - Or run Steps 1-4 before gold tables exist, then re-run Step 5 after pipelines complete
 
 # COMMAND ----------

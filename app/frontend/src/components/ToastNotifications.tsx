@@ -3,7 +3,7 @@
  * Renders in the top-right corner with auto-dismiss after 8 seconds.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { X, Bell, UserCheck, RefreshCw, AlertTriangle } from "lucide-react";
 import type { Notification } from "@/lib/useNotifications";
 
@@ -64,14 +64,22 @@ function Toast({
 }) {
   const [exiting, setExiting] = useState(false);
   const { title, body, icon, color } = formatNotification(notification);
+  const onDismissRef = useRef(onDismiss);
+  onDismissRef.current = onDismiss;
 
   useEffect(() => {
     const timer = setTimeout(() => {
       setExiting(true);
-      setTimeout(onDismiss, 300);
+      setTimeout(() => onDismissRef.current(), 300);
     }, 8000);
     return () => clearTimeout(timer);
-  }, [onDismiss]);
+  }, []);
+
+  const handleDismiss = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setExiting(true);
+    setTimeout(() => onDismissRef.current(), 150);
+  };
 
   return (
     <div
@@ -92,11 +100,8 @@ function Toast({
         </p>
       </div>
       <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onDismiss();
-        }}
-        className="text-gray-400 hover:text-gray-600"
+        onClick={handleDismiss}
+        className="text-gray-400 hover:text-gray-600 p-1 -m-1"
       >
         <X className="w-4 h-4" />
       </button>

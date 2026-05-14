@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Sidebar } from "@/components/Sidebar";
 import { Dashboard } from "@/pages/Dashboard";
 import { InvestigationQueue } from "@/pages/InvestigationQueue";
@@ -7,10 +8,11 @@ import { ProviderAnalysis } from "@/pages/ProviderAnalysis";
 import { AgentChat } from "@/pages/AgentChat";
 import { CaseloadView } from "@/pages/CaseloadView";
 import { NetworkGraph } from "@/pages/NetworkGraph";
+import { useHashRouter } from "@/lib/useHashRouter";
 import { api } from "@/lib/api";
 
 export default function App() {
-  const [page, setPage] = useState("dashboard");
+  const [page, setPage] = useHashRouter("dashboard");
   const [selectedInvId, setSelectedInvId] = useState<string | null>(null);
   const [selectedNpi, setSelectedNpi] = useState<string | null>(null);
   const [openCount, setOpenCount] = useState(0);
@@ -70,16 +72,18 @@ export default function App() {
   };
 
   return (
-    <div className="flex min-h-screen">
-      <Sidebar
-        activePage={
-          page === "investigation-detail" ? "investigations" :
-          page === "provider-detail" ? "providers" : page
-        }
-        onNavigate={setPage}
-        openCount={openCount}
-      />
-      <main className="flex-1 p-8 overflow-y-auto">{renderPage()}</main>
-    </div>
+    <ErrorBoundary>
+      <div className="flex min-h-screen">
+        <Sidebar
+          activePage={
+            page === "investigation-detail" ? "investigations" :
+            page === "provider-detail" ? "providers" : page
+          }
+          onNavigate={setPage}
+          openCount={openCount}
+        />
+        <main className="flex-1 p-8 overflow-y-auto">{renderPage()}</main>
+      </div>
+    </ErrorBoundary>
   );
 }

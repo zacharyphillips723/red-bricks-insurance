@@ -1,0 +1,200 @@
+{
+  "datasets": [
+    {
+      "name": "ds_spend_summary",
+      "displayName": "Workspace Spend Summary (30d)",
+      "queryLines": [
+        "SELECT ROUND(SUM(usage_quantity), 0) AS total_dbus, COUNT(DISTINCT usage_date) AS active_days, COUNT(DISTINCT sku_name) AS sku_count FROM system.billing.usage WHERE usage_date >= CURRENT_DATE() - INTERVAL 30 DAYS AND workspace_id = 7474660722665158"
+      ]
+    },
+    {
+      "name": "ds_daily_spend",
+      "displayName": "Daily DBU Spend (30d)",
+      "queryLines": [
+        "SELECT u.usage_date, CASE WHEN u.sku_name LIKE '%SERVERLESS_SQL%' THEN 'SQL Warehouse' WHEN u.sku_name LIKE '%JOBS_SERVERLESS%' THEN 'Jobs' WHEN u.sku_name LIKE '%ALL_PURPOSE_SERVERLESS%' THEN 'Interactive Compute' WHEN u.sku_name LIKE '%REAL_TIME_INFERENCE%' OR u.sku_name LIKE '%MODEL_SERVING%' THEN 'Model Serving' WHEN u.sku_name LIKE '%DLT%' OR u.sku_name LIKE '%DATABASE_SERVERLESS%' THEN 'Pipelines / Lakebase' ELSE 'Other' END AS workload_type, ROUND(SUM(u.usage_quantity), 0) AS total_dbus, ROUND(SUM(u.usage_quantity * lp.pricing.default), 2) AS estimated_cost_usd FROM system.billing.usage u LEFT JOIN system.billing.list_prices lp ON u.sku_name = lp.sku_name AND u.cloud = lp.cloud AND u.usage_date BETWEEN lp.price_start_time AND COALESCE(lp.price_end_time, '2099-12-31') WHERE u.usage_date >= CURRENT_DATE() - INTERVAL 30 DAYS AND u.workspace_id = 7474660722665158 GROUP BY u.usage_date, workload_type ORDER BY u.usage_date"
+      ]
+    },
+    {
+      "name": "ds_spend_by_workload",
+      "displayName": "DBU Consumption by Workload",
+      "queryLines": [
+        "SELECT CASE WHEN sku_name LIKE '%SERVERLESS_SQL%' THEN 'SQL Warehouse' WHEN sku_name LIKE '%JOBS_SERVERLESS%' THEN 'Jobs' WHEN sku_name LIKE '%ALL_PURPOSE_SERVERLESS%' THEN 'Interactive Compute' WHEN sku_name LIKE '%REAL_TIME_INFERENCE%' OR sku_name LIKE '%MODEL_SERVING%' THEN 'Model Serving' WHEN sku_name LIKE '%DLT%' OR sku_name LIKE '%DATABASE_SERVERLESS%' THEN 'Pipelines / Lakebase' WHEN sku_name LIKE '%STORAGE%' THEN 'Storage' ELSE 'Other' END AS workload_type, ROUND(SUM(usage_quantity), 0) AS total_dbus FROM system.billing.usage WHERE usage_date >= CURRENT_DATE() - INTERVAL 30 DAYS AND workspace_id = 7474660722665158 GROUP BY workload_type ORDER BY total_dbus DESC"
+      ]
+    },
+    {
+      "name": "ds_serverless_split",
+      "displayName": "Serverless vs Classic (30d)",
+      "queryLines": [
+        "SELECT CASE WHEN sku_name LIKE '%SERVERLESS%' THEN 'Serverless' ELSE 'Classic / Other' END AS compute_type, ROUND(SUM(usage_quantity), 0) AS total_dbus FROM system.billing.usage WHERE usage_date >= CURRENT_DATE() - INTERVAL 30 DAYS AND workspace_id = 7474660722665158 GROUP BY compute_type ORDER BY total_dbus DESC"
+      ]
+    },
+    {
+      "name": "ds_warehouse_usage",
+      "displayName": "SQL Warehouse Usage (7d)",
+      "queryLines": [
+        "SELECT usage_date, ROUND(SUM(usage_quantity), 1) AS dbus FROM system.billing.usage WHERE usage_date >= CURRENT_DATE() - INTERVAL 7 DAYS AND workspace_id = 7474660722665158 AND sku_name LIKE '%SQL%' GROUP BY usage_date ORDER BY usage_date"
+      ]
+    },
+    {
+      "name": "ds_pipeline_usage",
+      "displayName": "Pipeline & Jobs DBU (7d)",
+      "queryLines": [
+        "SELECT usage_date, CASE WHEN sku_name LIKE '%JOBS%' THEN 'Jobs' WHEN sku_name LIKE '%DLT%' OR sku_name LIKE '%DATABASE_SERVERLESS%' THEN 'Pipelines / Lakebase' ELSE 'Other' END AS workload_type, ROUND(SUM(usage_quantity), 1) AS total_dbus FROM system.billing.usage WHERE usage_date >= CURRENT_DATE() - INTERVAL 7 DAYS AND workspace_id = 7474660722665158 AND (sku_name LIKE '%JOBS%' OR sku_name LIKE '%DLT%' OR sku_name LIKE '%DATABASE_SERVERLESS%') GROUP BY usage_date, workload_type ORDER BY usage_date"
+      ]
+    },
+    {
+      "name": "ds_audit_summary",
+      "displayName": "Audit Summary (7d)",
+      "queryLines": [
+        "SELECT COUNT(*) AS total_events, COUNT(DISTINCT user_identity.email) AS unique_users, COUNT(DISTINCT action_name) AS unique_actions, COUNT(DISTINCT service_name) AS services_used FROM system.access.audit WHERE event_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS AND workspace_id = 7474660722665158"
+      ]
+    },
+    {
+      "name": "ds_audit_logins",
+      "displayName": "Login Activity (7d)",
+      "queryLines": [
+        "SELECT DATE(event_time) AS login_date, COUNT(*) AS login_count, COUNT(DISTINCT user_identity.email) AS unique_users FROM system.access.audit WHERE action_name IN ('login', 'tokenLogin', 'oidcLogin') AND event_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS AND workspace_id = 7474660722665158 GROUP BY login_date ORDER BY login_date"
+      ]
+    },
+    {
+      "name": "ds_top_services",
+      "displayName": "Top Services by Event Count (7d)",
+      "queryLines": [
+        "SELECT service_name, COUNT(*) AS event_count FROM system.access.audit WHERE event_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS AND workspace_id = 7474660722665158 GROUP BY service_name ORDER BY event_count DESC LIMIT 10"
+      ]
+    },
+    {
+      "name": "ds_sql_activity",
+      "displayName": "SQL Query Activity (7d)",
+      "queryLines": [
+        "SELECT DATE(event_time) AS query_date, COUNT(*) AS query_count, COUNT(DISTINCT user_identity.email) AS unique_users FROM system.access.audit WHERE event_time >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS AND workspace_id = 7474660722665158 AND service_name = 'databrickssql' AND action_name = 'commandFinish' GROUP BY query_date ORDER BY query_date"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "page_billing",
+      "displayName": "Billing & FinOps",
+      "layout": [
+        {
+          "widget": {
+            "name": "widget_total_dbus",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_spend_summary", "fields": [{"name": "total_dbus", "expression": "`total_dbus`"}], "disaggregated": true}}],
+            "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "total_dbus", "displayName": "Total DBUs (30d)"}}, "frame": {"showTitle": true, "title": "Total DBUs (30d)"}}
+          },
+          "position": {"x": 0, "y": 0, "width": 2, "height": 2}
+        },
+        {
+          "widget": {
+            "name": "widget_active_days",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_spend_summary", "fields": [{"name": "active_days", "expression": "`active_days`"}], "disaggregated": true}}],
+            "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "active_days", "displayName": "Active Days"}}, "frame": {"showTitle": true, "title": "Active Days"}}
+          },
+          "position": {"x": 2, "y": 0, "width": 2, "height": 2}
+        },
+        {
+          "widget": {
+            "name": "widget_sku_count",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_spend_summary", "fields": [{"name": "sku_count", "expression": "`sku_count`"}], "disaggregated": true}}],
+            "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "sku_count", "displayName": "SKU Types"}}, "frame": {"showTitle": true, "title": "SKU Types"}}
+          },
+          "position": {"x": 4, "y": 0, "width": 2, "height": 2}
+        },
+        {
+          "widget": {
+            "name": "widget_daily_spend_trend",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_daily_spend", "fields": [{"name": "usage_date", "expression": "`usage_date`"}, {"name": "total_dbus", "expression": "`total_dbus`"}, {"name": "workload_type", "expression": "`workload_type`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "usage_date", "scale": {"type": "temporal"}, "displayName": "Date"}, "y": {"fieldName": "total_dbus", "scale": {"type": "quantitative"}, "displayName": "DBUs"}, "color": {"fieldName": "workload_type", "scale": {"type": "categorical"}, "displayName": "Workload"}}, "frame": {"showTitle": true, "title": "Daily DBU Spend by Workload (30d)"}}
+          },
+          "position": {"x": 0, "y": 2, "width": 6, "height": 4}
+        },
+        {
+          "widget": {
+            "name": "widget_spend_by_workload",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_spend_by_workload", "fields": [{"name": "workload_type", "expression": "`workload_type`"}, {"name": "total_dbus", "expression": "`total_dbus`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "total_dbus", "scale": {"type": "quantitative"}, "displayName": "Total DBUs"}, "y": {"fieldName": "workload_type", "scale": {"type": "categorical"}, "displayName": "Workload Type"}}, "frame": {"showTitle": true, "title": "DBU by Workload Type (30d)"}}
+          },
+          "position": {"x": 0, "y": 6, "width": 3, "height": 4}
+        },
+        {
+          "widget": {
+            "name": "widget_serverless_split",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_serverless_split", "fields": [{"name": "compute_type", "expression": "`compute_type`"}, {"name": "total_dbus", "expression": "`total_dbus`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "pie", "encodings": {"angle": {"fieldName": "total_dbus", "displayName": "DBUs"}, "color": {"fieldName": "compute_type", "scale": {"type": "categorical"}, "displayName": "Compute Type"}}, "frame": {"showTitle": true, "title": "Serverless vs Classic (30d)"}}
+          },
+          "position": {"x": 3, "y": 6, "width": 3, "height": 4}
+        },
+        {
+          "widget": {
+            "name": "widget_warehouse_usage",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_warehouse_usage", "fields": [{"name": "usage_date", "expression": "`usage_date`"}, {"name": "dbus", "expression": "`dbus`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "usage_date", "scale": {"type": "temporal"}, "displayName": "Date"}, "y": {"fieldName": "dbus", "scale": {"type": "quantitative"}, "displayName": "DBUs"}}, "frame": {"showTitle": true, "title": "SQL Warehouse DBUs (7d)"}}
+          },
+          "position": {"x": 0, "y": 10, "width": 3, "height": 4}
+        },
+        {
+          "widget": {
+            "name": "widget_pipeline_dbus",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_pipeline_usage", "fields": [{"name": "usage_date", "expression": "`usage_date`"}, {"name": "total_dbus", "expression": "`total_dbus`"}, {"name": "workload_type", "expression": "`workload_type`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "usage_date", "scale": {"type": "temporal"}, "displayName": "Date"}, "y": {"fieldName": "total_dbus", "scale": {"type": "quantitative"}, "displayName": "DBUs"}, "color": {"fieldName": "workload_type", "scale": {"type": "categorical"}, "displayName": "Workload"}}, "frame": {"showTitle": true, "title": "Pipeline & Jobs DBUs (7d)"}}
+          },
+          "position": {"x": 3, "y": 10, "width": 3, "height": 4}
+        }
+      ]
+    },
+    {
+      "name": "page_audit",
+      "displayName": "Access & Audit",
+      "layout": [
+        {
+          "widget": {
+            "name": "widget_audit_total_events",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_audit_summary", "fields": [{"name": "total_events", "expression": "`total_events`"}], "disaggregated": true}}],
+            "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "total_events", "displayName": "Audit Events (7d)"}}, "frame": {"showTitle": true, "title": "Audit Events (7d)"}}
+          },
+          "position": {"x": 0, "y": 0, "width": 2, "height": 2}
+        },
+        {
+          "widget": {
+            "name": "widget_audit_unique_users",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_audit_summary", "fields": [{"name": "unique_users", "expression": "`unique_users`"}], "disaggregated": true}}],
+            "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "unique_users", "displayName": "Unique Users (7d)"}}, "frame": {"showTitle": true, "title": "Unique Users (7d)"}}
+          },
+          "position": {"x": 2, "y": 0, "width": 2, "height": 2}
+        },
+        {
+          "widget": {
+            "name": "widget_audit_services",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_audit_summary", "fields": [{"name": "services_used", "expression": "`services_used`"}], "disaggregated": true}}],
+            "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "services_used", "displayName": "Services Used"}}, "frame": {"showTitle": true, "title": "Services Used"}}
+          },
+          "position": {"x": 4, "y": 0, "width": 2, "height": 2}
+        },
+        {
+          "widget": {
+            "name": "widget_login_trend",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_audit_logins", "fields": [{"name": "login_date", "expression": "`login_date`"}, {"name": "login_count", "expression": "`login_count`"}, {"name": "unique_users", "expression": "`unique_users`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "login_date", "scale": {"type": "temporal"}, "displayName": "Date"}, "y": {"fieldName": "login_count", "scale": {"type": "quantitative"}, "displayName": "Logins"}}, "frame": {"showTitle": true, "title": "Login Activity (7d)"}}
+          },
+          "position": {"x": 0, "y": 2, "width": 6, "height": 4}
+        },
+        {
+          "widget": {
+            "name": "widget_top_services",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_top_services", "fields": [{"name": "service_name", "expression": "`service_name`"}, {"name": "event_count", "expression": "`event_count`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "event_count", "scale": {"type": "quantitative"}, "displayName": "Events"}, "y": {"fieldName": "service_name", "scale": {"type": "categorical"}, "displayName": "Service"}}, "frame": {"showTitle": true, "title": "Top Services (7d)"}}
+          },
+          "position": {"x": 0, "y": 6, "width": 6, "height": 4}
+        },
+        {
+          "widget": {
+            "name": "widget_sql_activity",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_sql_activity", "fields": [{"name": "query_date", "expression": "`query_date`"}, {"name": "query_count", "expression": "`query_count`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "query_date", "scale": {"type": "temporal"}, "displayName": "Date"}, "y": {"fieldName": "query_count", "scale": {"type": "quantitative"}, "displayName": "Queries"}}, "frame": {"showTitle": true, "title": "SQL Query Activity (7d)"}}
+          },
+          "position": {"x": 0, "y": 10, "width": 6, "height": 4}
+        }
+      ]
+    }
+  ]
+}

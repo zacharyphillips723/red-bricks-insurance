@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import Sidebar from "./components/Sidebar";
 import Dashboard from "./pages/Dashboard";
 import SimulationBuilder from "./pages/SimulationBuilder";
@@ -7,12 +8,13 @@ import SimulationHistory from "./pages/SimulationHistory";
 import Agent from "./pages/Agent";
 import RateBuildup from "./pages/RateBuildup";
 import RiskPool from "./pages/RiskPool";
+import { useHashRouter } from "./lib/useHashRouter";
 import { api } from "./lib/api";
 
 type Page = "dashboard" | "builder" | "comparison" | "history" | "agent" | "rate-buildup" | "risk-pool";
 
 export default function App() {
-  const [page, setPage] = useState<Page>("dashboard");
+  const [page, setPage] = useHashRouter<Page>("dashboard");
   const [savedCount, setSavedCount] = useState(0);
 
   const refreshSavedCount = () => {
@@ -32,23 +34,25 @@ export default function App() {
   };
 
   return (
-    <div className="flex min-h-screen">
-      <Sidebar currentPage={page} onNavigate={setPage} savedCount={savedCount} />
-      <main className="flex-1 overflow-auto">
-        {page === "dashboard" && (
-          <Dashboard onNavigateToBuilder={navigateToBuilder} />
-        )}
-        {page === "builder" && (
-          <SimulationBuilder onSaved={refreshSavedCount} />
-        )}
-        {page === "rate-buildup" && <RateBuildup />}
-        {page === "risk-pool" && <RiskPool />}
-        {page === "comparison" && <ScenarioComparison />}
-        {page === "history" && (
-          <SimulationHistory onCountChange={setSavedCount} />
-        )}
-        {page === "agent" && <Agent />}
-      </main>
-    </div>
+    <ErrorBoundary>
+      <div className="flex min-h-screen">
+        <Sidebar currentPage={page} onNavigate={setPage} savedCount={savedCount} />
+        <main className="flex-1 overflow-auto">
+          {page === "dashboard" && (
+            <Dashboard onNavigateToBuilder={navigateToBuilder} />
+          )}
+          {page === "builder" && (
+            <SimulationBuilder onSaved={refreshSavedCount} />
+          )}
+          {page === "rate-buildup" && <RateBuildup />}
+          {page === "risk-pool" && <RiskPool />}
+          {page === "comparison" && <ScenarioComparison />}
+          {page === "history" && (
+            <SimulationHistory onCountChange={setSavedCount} />
+          )}
+          {page === "agent" && <Agent />}
+        </main>
+      </div>
+    </ErrorBoundary>
   );
 }
