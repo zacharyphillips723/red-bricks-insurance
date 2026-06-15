@@ -1,8 +1,9 @@
-import { useState, useRef } from "react";
-import { Bot, Send, Loader2, Sparkles } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { Bot, Send, Loader2, Sparkles, ChevronDown, ChevronUp, Shield, Network, Database, Brain, FileText } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import { api } from "@/lib/api";
+import type { PolicyChunk } from "@/lib/api";
 
 const mdComponents: Components = {
   h2: ({ children }) => (
@@ -36,6 +37,102 @@ interface ChatEntry {
   question: string;
   answer: string;
   sources: Record<string, unknown>[];
+  modelUsed?: string;
+  policyChunks?: PolicyChunk[];
+}
+
+function FwaClassificationBadge({ answer }: { answer: string }) {
+  const upper = answer.toUpperCase();
+  if (upper.includes('"FRAUD"') || upper.includes("CLASSIFICATION: FRAUD") || /\*\*FRAUD\*\*/.test(answer))
+    return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-800">Fraud</span>;
+  if (upper.includes('"WASTE"') || upper.includes("CLASSIFICATION: WASTE") || /\*\*WASTE\*\*/.test(answer))
+    return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-amber-100 text-amber-800">Waste</span>;
+  if (upper.includes('"ABUSE"') || upper.includes("CLASSIFICATION: ABUSE") || /\*\*ABUSE\*\*/.test(answer))
+    return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-orange-100 text-orange-800">Abuse</span>;
+  return null;
+}
+
+function PolicyContextPanel({ answer, policyChunks }: { answer: string; policyChunks?: PolicyChunk[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const hasPolicySection = answer.toUpperCase().includes("POLICY COMPLIANCE");
+  const hasChunks = policyChunks && policyChunks.length > 0;
+  if (!hasPolicySection && !hasChunks) return null;
+
+  return (
+    <div className="mt-3 border border-blue-200 rounded-lg bg-blue-50">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center justify-between px-4 py-2 text-sm font-medium text-blue-800"
+      >
+        <span className="flex items-center gap-2">
+          <Shield className="w-4 h-4" />
+          Retrieved Policy Context
+          <FwaClassificationBadge answer={answer} />
+          {hasChunks && (
+            <span className="text-xs font-normal text-blue-600">
+              ({policyChunks.length} {policyChunks.length === 1 ? "chunk" : "chunks"} from Vector Search)
+            </span>
+          )}
+        </span>
+        {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+      </button>
+      {expanded && (
+        <div className="px-4 pb-3 space-y-3">
+          {hasChunks ? (
+            policyChunks.map((chunk, i) => (
+              <div key={chunk.chunk_id || i} className="bg-white rounded-md border border-blue-100 p-3">
+                <div className="flex items-center gap-2 mb-1">
+                  <FileText className="w-3.5 h-3.5 text-blue-600" />
+                  <span className="text-xs font-semibold text-blue-900">{chunk.policy_name}</span>
+                  {chunk.service_category && (
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">
+                      {chunk.service_category}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-gray-700 whitespace-pre-wrap leading-relaxed">
+                  {chunk.chunk_text.length > 600
+                    ? chunk.chunk_text.slice(0, 600) + "..."
+                    : chunk.chunk_text}
+                </p>
+                <div className="mt-1 text-[10px] text-gray-400 font-mono">{chunk.chunk_id}</div>
+              </div>
+            ))
+          ) : (
+            <p className="text-xs text-blue-700 italic">
+              No raw policy chunks available — the agent's policy analysis is embedded in the response above.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AgentArchitectureBadge({ sources }: { sources: Record<string, unknown>[] }) {
+  const src = sources[0];
+  if (!src || src.type !== "supervisor_agent") return null;
+
+  const genieQuestions = (src.genie_questions as number) || 0;
+  const geminiTables = (src.gemini_tables_queried as number) || 0;
+  const geminiTools = (src.gemini_tools_used as string[]) || [];
+
+  return (
+    <div className="mb-3 flex flex-wrap gap-2">
+      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium bg-purple-50 text-purple-700 border border-purple-200">
+        <Network className="w-3 h-3" />
+        Supervisor (Llama 4 Maverick)
+      </span>
+      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium bg-green-50 text-green-700 border border-green-200">
+        <Database className="w-3 h-3" />
+        Genie ({genieQuestions} {genieQuestions === 1 ? "query" : "queries"})
+      </span>
+      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200">
+        <Brain className="w-3 h-3" />
+        Gemini Analyst ({geminiTables} tables, {geminiTools.length} tools)
+      </span>
+    </div>
+  );
 }
 
 export function AgentChat() {
@@ -51,7 +148,6 @@ export function AgentChat() {
     setLoading(true);
     setQuestion("");
 
-    // Parse target from [XXX-YYYY] prefix if present
     let targetId: string | undefined;
     let targetType: string | undefined;
     let cleanQuestion = text;
@@ -69,7 +165,6 @@ export function AgentChat() {
         targetType = "provider";
       }
     } else {
-      // Also detect bare INV-XXXX or 10-digit NPI at start of input (without brackets)
       const invMatch = text.match(/^(INV-\d+)\s+(.*)/i);
       const npiMatch = text.match(/^(\d{10})\s+(.*)/);
       if (invMatch) {
@@ -85,7 +180,7 @@ export function AgentChat() {
 
     try {
       const result = await api.queryAgent(cleanQuestion || text, targetId, targetType);
-      setHistory((prev) => [...prev, { question: text, answer: result.answer, sources: result.sources }]);
+      setHistory((prev) => [...prev, { question: text, answer: result.answer, sources: result.sources, modelUsed: result.model_used, policyChunks: result.policy_chunks }]);
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
     } catch (err) {
       setHistory((prev) => [...prev, { question: text, answer: `Error: ${err}`, sources: [] }]);
@@ -101,8 +196,8 @@ export function AgentChat() {
           <Bot className="w-6 h-6 text-databricks-red" /> FWA Investigation Agent
         </h2>
         <p className="text-sm text-gray-500 mt-1">
-          Ask questions about investigations, providers, or fraud patterns.
-          Use [INV-XXXX] or [PRV-NPI] prefix to target specific entities.
+          Supervisor agent routes to <strong>Genie</strong> (structured claims SQL) and{" "}
+          <strong>Gemini 2.5 Pro</strong> (medical policy RAG) in parallel, then synthesizes a unified briefing.
         </p>
       </div>
 
@@ -111,12 +206,25 @@ export function AgentChat() {
           <div className="card p-8 text-center">
             <Sparkles className="w-12 h-12 text-databricks-red mx-auto mb-4 opacity-50" />
             <h3 className="text-lg font-semibold text-databricks-dark mb-2">
-              AI-powered FWA investigation assistant
+              Multi-Agent FWA Investigation System
             </h3>
-            <p className="text-sm text-gray-500 mb-6">
-              The agent dynamically queries Unity Catalog tables, retrieves ML model predictions,
-              and synthesizes structured investigation briefings.
+            <p className="text-sm text-gray-500 mb-4">
+              Your question is routed to two specialized sub-agents in parallel:
             </p>
+            <div className="flex justify-center gap-4 mb-6">
+              <div className="text-left p-3 rounded-lg border border-green-200 bg-green-50 max-w-xs">
+                <div className="flex items-center gap-2 text-sm font-semibold text-green-800 mb-1">
+                  <Database className="w-4 h-4" /> Genie (NL-to-SQL)
+                </div>
+                <p className="text-xs text-green-700">Queries structured claims data — billing totals, procedure distributions, denial rates</p>
+              </div>
+              <div className="text-left p-3 rounded-lg border border-blue-200 bg-blue-50 max-w-xs">
+                <div className="flex items-center gap-2 text-sm font-semibold text-blue-800 mb-1">
+                  <Brain className="w-4 h-4" /> Gemini 2.5 Pro (Tool-Calling)
+                </div>
+                <p className="text-xs text-blue-700">Searches medical policies via Vector Search, analyzes compliance, classifies Fraud/Waste/Abuse</p>
+              </div>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-2xl mx-auto">
               {SUGGESTED.map((q) => (
                 <button
@@ -141,22 +249,44 @@ export function AgentChat() {
               </div>
             </div>
             <div className="card p-5">
+              <AgentArchitectureBadge sources={entry.sources} />
+              {entry.modelUsed && (
+                <div className="mb-2 flex items-center gap-2">
+                  <FwaClassificationBadge answer={entry.answer} />
+                </div>
+              )}
               <div className="text-sm text-gray-700">
                 <ReactMarkdown components={mdComponents}>{entry.answer}</ReactMarkdown>
               </div>
-              {entry.sources.length > 0 && (
-                <div className="mt-3 pt-3 border-t border-gray-100 text-xs text-gray-400">
-                  Sources: {entry.sources.map((s) => JSON.stringify(s)).join(", ")}
-                </div>
-              )}
+              <PolicyContextPanel answer={entry.answer} policyChunks={entry.policyChunks} />
             </div>
           </div>
         ))}
 
         {loading && (
-          <div className="card p-6 flex items-center gap-3">
-            <Loader2 className="w-5 h-5 text-databricks-red animate-spin" />
-            <span className="text-sm text-gray-500">Agent is querying data and generating analysis...</span>
+          <div className="card p-6">
+            <div className="flex items-center gap-3 mb-3">
+              <Loader2 className="w-5 h-5 text-databricks-red animate-spin" />
+              <span className="text-sm font-medium text-databricks-dark">Supervisor coordinating sub-agents...</span>
+            </div>
+            <div className="flex gap-3">
+              <div className="flex-1 p-2 rounded-md bg-green-50 border border-green-200">
+                <div className="flex items-center gap-1 text-xs text-green-700">
+                  <Database className="w-3 h-3" />
+                  <span className="font-medium">Genie</span>
+                  <Loader2 className="w-3 h-3 animate-spin ml-auto" />
+                </div>
+                <p className="text-xs text-green-600 mt-1">Querying claims data...</p>
+              </div>
+              <div className="flex-1 p-2 rounded-md bg-blue-50 border border-blue-200">
+                <div className="flex items-center gap-1 text-xs text-blue-700">
+                  <Brain className="w-3 h-3" />
+                  <span className="font-medium">Gemini Analyst</span>
+                  <Loader2 className="w-3 h-3 animate-spin ml-auto" />
+                </div>
+                <p className="text-xs text-blue-600 mt-1">Analyzing policies &amp; compliance...</p>
+              </div>
+            </div>
           </div>
         )}
 

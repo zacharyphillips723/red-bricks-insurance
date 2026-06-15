@@ -1,0 +1,30 @@
+resources:
+  jobs:
+    fwa_automl:
+      name: "[${bundle.target}] Red Bricks Insurance — FWA AutoML (Classic Compute)"
+
+      job_clusters:
+        - job_cluster_key: classic_ml
+          new_cluster:
+            spark_version: 16.2.x-ml-scala2.12
+            node_type_id: ${var.node_type_small}
+            num_workers: 1
+            autoscale:
+              min_workers: 1
+              max_workers: 4
+            aws_attributes:
+              ebs_volume_count: 1
+              ebs_volume_size: 100
+              ebs_volume_type: GENERAL_PURPOSE_SSD
+
+      tasks:
+        - task_key: train_fwa_model_automl
+          job_cluster_key: classic_ml
+          notebook_task:
+            notebook_path: ../../src/notebooks/train_fwa_model_automl.py
+            base_parameters:
+              catalog: ${var.catalog}
+
+      tags:
+        project: red-bricks-insurance
+        domain: fwa_mlops

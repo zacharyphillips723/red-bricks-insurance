@@ -1,0 +1,17 @@
+resources:
+  jobs:
+    deploy_fwa_supervisor_agent:
+      name: "[${bundle.target}] Red Bricks Insurance — Deploy FWA Supervisor Agent"
+      tasks:
+        - task_key: deploy_agent
+          notebook_task:
+            notebook_path: ../src/notebooks/deploy_fwa_supervisor_agent.py
+            base_parameters:
+              catalog: ${var.catalog}
+              warehouse_id: ${var.warehouse_id}
+              lakebase_project_id: ${var.lakebase_project_id}
+              genie_space_id: "auto"
+
+      tags:
+        project: red-bricks-insurance
+        domain: fwa_agent

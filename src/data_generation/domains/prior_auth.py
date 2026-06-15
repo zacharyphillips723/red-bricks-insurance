@@ -39,12 +39,60 @@ for pol in POLICIES:
 
 # Weights by service category (relative frequency of PA requests)
 _CATEGORY_WEIGHTS = {
+    # Original 6 high-volume clinical categories
     "diabetes_management": 20,
     "cardiovascular": 18,
     "orthopedic": 15,
     "behavioral_health": 15,
     "specialty_pharmacy": 18,
     "diagnostic_imaging": 14,
+    # Policies 007-020: clinical specialties
+    "pulmonary": 12,
+    "gastroenterology": 10,
+    "nephrology": 8,
+    "hypertension": 14,
+    "lipid_management": 10,
+    "endocrinology_thyroid": 6,
+    "sleep_medicine": 5,
+    "evaluation_management": 20,
+    "preventive_care": 16,
+    "laboratory": 14,
+    "emergency_services": 12,
+    "general_surgery": 8,
+    "obstetrics": 10,
+    "ophthalmology": 8,
+    # Policies 021-035: specialty & pharmacy
+    "oncology": 10,
+    "urology": 6,
+    "dermatology": 8,
+    "pain_management": 10,
+    "rehabilitation": 12,
+    "durable_medical_equipment": 8,
+    "telehealth": 14,
+    "substance_use": 8,
+    "anticoagulation": 6,
+    "antihypertensive_pharmacy": 8,
+    "gi_pharmacy": 6,
+    "psychopharmacology": 8,
+    "trauma_orthopedic": 5,
+    "critical_care": 4,
+    "respiratory_pharmacy": 8,
+    # Policies 036-050: billing/FWA/operational
+    "billing_compliance": 10,
+    "coding_compliance": 10,
+    "utilization_management": 8,
+    "modifier_compliance": 6,
+    "pharmacy_quantity": 8,
+    "pediatrics": 12,
+    "network_management": 6,
+    "prior_auth_process": 4,
+    "appeals_process": 4,
+    "coordination_benefits": 6,
+    "inpatient_management": 8,
+    "genetic_testing": 5,
+    "provider_integrity": 4,
+    "pharmacy_integrity": 4,
+    "member_integrity": 3,
 }
 
 # ---------------------------------------------------------------------------
@@ -121,6 +169,181 @@ _CLINICAL_SUMMARIES = {
         "Failed {weeks_conservative}wk conservative management. Requesting {procedure}. {extra}",
         "{age}yo with {dx_desc}. {clinical_concern}. Prior imaging: {prior_imaging}. "
         "Requesting {procedure} for further evaluation. {extra}",
+    ],
+    "pulmonary": [
+        "{age}yo with COPD, FEV1 {ef}% predicted. On triple inhaler therapy x {months}mo. "
+        "Requesting {procedure} for worsening dyspnea. {extra}",
+    ],
+    "gastroenterology": [
+        "Patient with {dx_desc}. Persistent GI symptoms x {duration}mo despite PPI therapy. "
+        "Requesting {procedure}. {extra}",
+    ],
+    "nephrology": [
+        "CKD stage {num_trials} patient, eGFR {ef} mL/min. On ACEi/ARB and phosphate binder. "
+        "Requesting {procedure}. {extra}",
+    ],
+    "hypertension": [
+        "Resistant hypertension on {num_trials}-drug regimen. Average BP {bmi}/90. "
+        "Requesting {procedure} to assess secondary causes. {extra}",
+    ],
+    "lipid_management": [
+        "Patient with familial hypercholesterolemia. LDL {bmi} mg/dL despite max-dose statin + ezetimibe. "
+        "Requesting {procedure}. {extra}",
+    ],
+    "endocrinology_thyroid": [
+        "Thyroid nodule {duration}cm, TIRADS {num_trials}. TSH within normal limits. "
+        "Requesting {procedure} for further evaluation. {extra}",
+    ],
+    "sleep_medicine": [
+        "Suspected OSA with ESS score {phq9}, BMI {bmi}. "
+        "Requesting {procedure} for diagnostic evaluation. {extra}",
+    ],
+    "evaluation_management": [
+        "{age}yo presenting for {dx_desc}. Complexity: {pt_response} MDM. "
+        "Requesting {procedure} level authorization. {extra}",
+    ],
+    "preventive_care": [
+        "{age}yo due for routine {procedure}. Last screening: {duration} months ago. "
+        "USPSTF-recommended interval met. {extra}",
+    ],
+    "laboratory": [
+        "Monitoring for {dx_desc}. Last labs {duration} weeks ago. "
+        "Requesting {procedure} per clinical protocol. {extra}",
+    ],
+    "emergency_services": [
+        "{age}yo presenting to ED with {symptom}. Triage level {num_trials}. "
+        "Requesting {procedure}. Prudent layperson standard applies. {extra}",
+    ],
+    "general_surgery": [
+        "Patient with acute {dx_desc}. Conservative management failed x {duration} days. "
+        "Requesting {procedure}. Surgical consult confirms indication. {extra}",
+    ],
+    "obstetrics": [
+        "{age}yo G{num_trials}P{med2_weeks} at {months} weeks gestation. {dx_desc}. "
+        "Requesting {procedure}. {extra}",
+    ],
+    "ophthalmology": [
+        "Visual acuity {ef}/200 OD. {dx_desc} confirmed on exam. "
+        "Requesting {procedure}. Conservative management exhausted. {extra}",
+    ],
+    "oncology": [
+        "Stage {num_trials} {dx_desc}. Status post {failed_tx}. Restaging shows {stress_result}. "
+        "Requesting {procedure}. {extra}",
+    ],
+    "urology": [
+        "{age}yo with {dx_desc}. PSA {bmi} ng/mL. IPSS score {phq9}. "
+        "Requesting {procedure}. {extra}",
+    ],
+    "dermatology": [
+        "Moderate-to-severe {dx_desc}. BSA {bsa}%. Failed topical therapy x {duration}mo. "
+        "Requesting {procedure}. {extra}",
+    ],
+    "pain_management": [
+        "Chronic {dx_desc} x {duration} months. VAS pain score {gad7}/10. Failed PT and oral analgesics. "
+        "Requesting {procedure}. {extra}",
+    ],
+    "rehabilitation": [
+        "Post-{dx_desc}. Functional limitations: {limitations}. "
+        "Requesting {procedure}, {pt_sessions} sessions over {pt_weeks} weeks. {extra}",
+    ],
+    "durable_medical_equipment": [
+        "Patient with {dx_desc} requiring {procedure}. Mobility assessment confirms medical necessity. "
+        "Home evaluation completed. {extra}",
+    ],
+    "telehealth": [
+        "{age}yo established patient with {dx_desc}. Requesting {procedure} via telehealth. "
+        "Patient in rural area, {duration} miles from nearest specialist. {extra}",
+    ],
+    "substance_use": [
+        "Patient with {dx_desc}. AUDIT-C score {phq9}. Current use pattern: {activity}. "
+        "Requesting {procedure} for treatment initiation. {extra}",
+    ],
+    "anticoagulation": [
+        "Patient with {dx_desc} requiring anticoagulation. CHA2DS2-VASc score {num_trials}. "
+        "Requesting {procedure}. {extra}",
+    ],
+    "antihypertensive_pharmacy": [
+        "Hypertension on {num_trials}-drug regimen with inadequate control. "
+        "Requesting {procedure} as step-up therapy. {extra}",
+    ],
+    "gi_pharmacy": [
+        "GERD on PPI x {duration}mo. Requesting {procedure} for long-term management review. {extra}",
+    ],
+    "psychopharmacology": [
+        "{dx_desc}, PHQ-9 {phq9}. Failed {num_trials} SSRI trial(s). "
+        "Requesting {procedure} as next-line therapy. {extra}",
+    ],
+    "trauma_orthopedic": [
+        "{age}yo with acute {dx_desc} from {symptom}. X-ray confirms fracture. "
+        "Requesting {procedure}. {extra}",
+    ],
+    "critical_care": [
+        "ICU day {num_trials}. {dx_desc} with {stress_result}. "
+        "Requesting {procedure} per critical care protocol. {extra}",
+    ],
+    "respiratory_pharmacy": [
+        "Asthma, ACT score {phq9}. On Step {num_trials} therapy with {months} exacerbations/year. "
+        "Requesting {procedure}. {extra}",
+    ],
+    "billing_compliance": [
+        "Claim flagged: {procedure}. Same member/date/provider combination detected. "
+        "Review for duplicate billing per policy. {extra}",
+    ],
+    "coding_compliance": [
+        "Claim flagged: {procedure}. CCI edit detected — bundled codes billed separately. "
+        "Review for unbundling per coding policy. {extra}",
+    ],
+    "utilization_management": [
+        "Provider billing {procedure} at {num_trials}x expected frequency for specialty. "
+        "UM review initiated per utilization policy. {extra}",
+    ],
+    "modifier_compliance": [
+        "Modifier 25 appended to {procedure} with same-day procedure. "
+        "Review for appropriate modifier usage per policy. {extra}",
+    ],
+    "pharmacy_quantity": [
+        "Refill requested {duration} days early for {procedure}. "
+        "Quantity limit review per pharmacy policy. {extra}",
+    ],
+    "pediatrics": [
+        "{age}yo pediatric patient due for {procedure}. "
+        "Well-child visit and developmental screening per AAP schedule. {extra}",
+    ],
+    "network_management": [
+        "OON authorization request for {procedure}. Nearest in-network provider {duration} miles away. "
+        "Network adequacy review initiated. {extra}",
+    ],
+    "prior_auth_process": [
+        "PA request for {procedure}. Submitted {duration} days before service date. "
+        "Reviewing per CMS-0057-F timeline requirements. {extra}",
+    ],
+    "appeals_process": [
+        "Appeal filed for denied {procedure}. Original denial reason: {dx_desc}. "
+        "Additional documentation submitted for review. {extra}",
+    ],
+    "coordination_benefits": [
+        "COB review for {procedure}. Member has {num_trials} active coverage plans. "
+        "Primary/secondary determination required. {extra}",
+    ],
+    "inpatient_management": [
+        "Inpatient day {num_trials} for {dx_desc}. DRG assignment under review. "
+        "Requesting continued stay authorization for {procedure}. {extra}",
+    ],
+    "genetic_testing": [
+        "Family history of {dx_desc}. Genetic counseling completed. "
+        "Requesting {procedure}. Meets NCCN criteria for testing. {extra}",
+    ],
+    "provider_integrity": [
+        "Provider credentialing review triggered for {procedure}. "
+        "Unusual billing pattern detected across {num_trials} claims. {extra}",
+    ],
+    "pharmacy_integrity": [
+        "Prescription pattern review: {procedure}. Generic-to-brand switch detected "
+        "without clinical justification. {extra}",
+    ],
+    "member_integrity": [
+        "Member utilization review: {procedure} across {num_trials} providers in {duration} days. "
+        "Potential doctor shopping pattern flagged. {extra}",
     ],
 }
 

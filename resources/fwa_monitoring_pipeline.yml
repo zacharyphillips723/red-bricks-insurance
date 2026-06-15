@@ -1,0 +1,18 @@
+resources:
+  pipelines:
+    fwa_monitoring_pipeline:
+      name: "[${bundle.target}] Red Bricks — FWA Monitoring Pipeline"
+      catalog: ${var.catalog}
+      target: inference
+      channel: PREVIEW
+      continuous: false
+      development: false
+      serverless: true
+      libraries:
+        - notebook:
+            path: ../src/notebooks/fwa_monitoring_pipeline.py
+      configuration:
+        "pipeline.catalog": ${var.catalog}
+      tags:
+        project: red-bricks-insurance
+        domain: fwa_mlops

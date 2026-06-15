@@ -93,10 +93,17 @@ GENIE_SPACE_ID = _genie if _genie not in _SENTINEL else _auto_detect_genie_space
 )
 
 LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT") or "databricks-llama-4-maverick"
+GEMINI_ENDPOINT = os.environ.get("GEMINI_ENDPOINT") or "databricks-gemini-2-5-pro"
 FWA_MODEL_ENDPOINT = os.environ.get("FWA_MODEL_ENDPOINT") or "fwa-fraud-scorer"
+
+VS_INDEX_NAME = os.environ.get("VS_INDEX_NAME", f"{UC_CATALOG}.prior_auth.medical_policy_vs_index")
+GATEWAY_MODELS = os.environ.get("GATEWAY_MODELS", f"{LLM_ENDPOINT},{GEMINI_ENDPOINT}").split(",")
 
 print(f"[env_config] SQL_WAREHOUSE_ID={SQL_WAREHOUSE_ID}")
 print(f"[env_config] UC_CATALOG={UC_CATALOG}")
 print(f"[env_config] GENIE_SPACE_ID={GENIE_SPACE_ID}")
 print(f"[env_config] LLM_ENDPOINT={LLM_ENDPOINT}")
+print(f"[env_config] GEMINI_ENDPOINT={GEMINI_ENDPOINT}")
 print(f"[env_config] FWA_MODEL_ENDPOINT={FWA_MODEL_ENDPOINT}")
+print(f"[env_config] VS_INDEX_NAME={VS_INDEX_NAME}")
+print(f"[env_config] GATEWAY_MODELS={GATEWAY_MODELS}")

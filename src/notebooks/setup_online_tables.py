@@ -21,7 +21,7 @@
 
 # COMMAND ----------
 
-dbutils.widgets.text("catalog", "red_bricks_insurance", "Catalog")
+dbutils.widgets.text("catalog", "red_bricks_insurance_catalog", "Catalog")
 dbutils.widgets.text("lakebase_project_id", "red-bricks-insurance", "Lakebase Project ID")
 catalog = dbutils.widgets.get("catalog")
 lakebase_project_id = dbutils.widgets.get("lakebase_project_id")

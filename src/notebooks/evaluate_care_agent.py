@@ -19,13 +19,16 @@
 
 # COMMAND ----------
 
-dbutils.widgets.text("catalog", "red_bricks_insurance", "Catalog")
+dbutils.widgets.text("catalog", "red_bricks_insurance_catalog", "Catalog")
 
 catalog = dbutils.widgets.get("catalog")
 catalog_sql = f"`{catalog}`"
 
 AGENT_MODEL = f"{catalog}.analytics.care_intelligence_agent_v2"
-EVAL_EXPERIMENT = f"/Shared/red-bricks-insurance/care-agent-evaluation"
+
+# Use current user's workspace path (avoids /Shared directory needing to exist)
+_user = dbutils.notebook.entry_point.getDbutils().notebook().getContext().userName().get()
+EVAL_EXPERIMENT = f"/Users/{_user}/care-agent-evaluation"
 
 print(f"Agent Model:     {AGENT_MODEL}")
 print(f"Eval Experiment: {EVAL_EXPERIMENT}")

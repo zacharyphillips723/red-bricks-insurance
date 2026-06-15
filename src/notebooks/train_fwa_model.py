@@ -2,22 +2,33 @@
 # MAGIC %md
 # MAGIC # Red Bricks Insurance — FWA Fraud Scoring Model
 # MAGIC
-# MAGIC Trains a claim-level fraud scoring model using **XGBoost** with MLflow experiment tracking.
-# MAGIC Demonstrates the full MLOps lifecycle:
-# MAGIC 1. **Feature engineering** — claim-level + provider-level + member-level features
-# MAGIC 2. **XGBoost training** — stratified cross-validation, hyperparameter grid search
-# MAGIC 3. **MLflow experiment** — all runs logged with metrics, parameters, artifacts
-# MAGIC 4. **Unity Catalog registration** — best model registered with `production` alias
-# MAGIC 5. **Batch inference** — score all claims, write predictions table
-# MAGIC 6. **Model serving** — serverless endpoint with inference table logging
+# MAGIC Trains a claim-level fraud scoring model using **XGBoost** with MLflow experiment tracking
+# MAGIC and **pyfunc model** for probability-based serving.
 # MAGIC
-# MAGIC ### Why XGBoost (not AutoML)?
-# MAGIC AutoML uses `PERSIST TABLE` internally which is not supported on serverless compute.
-# MAGIC Manual training gives full control and works on any compute type.
+# MAGIC ### MLOps Lifecycle
+# MAGIC 1. **Feature engineering** — claim-level + provider-level + member-level features
+# MAGIC 2. **Feature Store registration** — `fe.create_table()` with primary key for lineage tracking
+# MAGIC 3. **XGBoost training** — stratified cross-validation, hyperparameter grid search
+# MAGIC 4. **SHAP** — feature importance visualization logged to MLflow
+# MAGIC 5. **`mlflow.pyfunc.log_model()`** — registers pyfunc wrapper returning probabilities
+# MAGIC 6. **Batch scoring** — `predict_proba()` writes to analytics tables for downstream consumers
+# MAGIC 7. **Model alias** — `@champion` alias in Unity Catalog
+# MAGIC
+# MAGIC ### Post-Training Manual Steps
+# MAGIC After this notebook completes (as part of the automated job), follow these steps:
+# MAGIC 1. **Create serving endpoint** in the Serving UI:
+# MAGIC    - Entity: `{catalog}.analytics.fwa_scoring_model@champion`
+# MAGIC    - Workload size: Small, scale-to-zero enabled
+# MAGIC    - **Enable inference tables** (required for monitoring pipeline)
+# MAGIC 2. **Run `fwa_batch_scoring.py`** — sends 500 claims to the endpoint
+# MAGIC 3. **Wait ~1hr** for inference table materialization
+# MAGIC 4. **Trigger `fwa_monitoring_pipeline`** DLT pipeline (parses payload → monitoring input)
+# MAGIC 5. **Run `fwa_backfill_monitoring.py`** — seeds 7 days of synthetic prediction data
+# MAGIC 6. **Run `fwa_model_monitoring.py`** — creates Lakehouse Monitor + governance audit
 
 # COMMAND ----------
 
-dbutils.widgets.text("catalog", "red_bricks_insurance", "Catalog")
+dbutils.widgets.text("catalog", "red_bricks_insurance_catalog", "Catalog")
 
 catalog = dbutils.widgets.get("catalog")
 catalog_sql = f"`{catalog}`"  # SQL-safe quoting (handles hyphens in catalog names)
@@ -27,6 +38,18 @@ CLAIMS_SCHEMA = "claims"
 MEMBERS_SCHEMA = "members"
 ANALYTICS_SCHEMA = "analytics"
 MODEL_NAME = f"{catalog}.{ANALYTICS_SCHEMA}.fwa_scoring_model"
+
+FEATURE_COLS = [
+    "billed_amount", "allowed_amount", "paid_amount", "billed_to_allowed_ratio",
+    "member_responsibility", "copay", "coinsurance", "deductible",
+    "payment_lag_days", "service_day_of_week", "diagnosis_code_count",
+    "provider_total_claims", "provider_avg_billed", "provider_e5_visit_pct",
+    "provider_denial_rate", "provider_unique_members",
+    "provider_billed_to_allowed_ratio", "provider_fwa_signal_count",
+    "provider_composite_risk_score",
+    "member_total_claims", "member_unique_providers", "member_unique_diagnoses",
+    "member_risk_score",
+]
 
 print(f"Catalog: {catalog}")
 print(f"Model:   {MODEL_NAME}")
@@ -91,15 +114,14 @@ provider_features AS (
 member_features AS (
   SELECT
     m.member_id,
-    e.line_of_business AS member_lob,
-    e.risk_score AS member_risk_score,
+    MAX(e.risk_score) AS member_risk_score,
     COUNT(DISTINCT c2.claim_id) AS member_total_claims,
     COUNT(DISTINCT c2.rendering_provider_npi) AS member_unique_providers,
     COUNT(DISTINCT c2.primary_diagnosis_code) AS member_unique_diagnoses
   FROM {catalog_sql}.{MEMBERS_SCHEMA}.silver_members m
   LEFT JOIN {catalog_sql}.{MEMBERS_SCHEMA}.silver_enrollment e ON m.member_id = e.member_id
   LEFT JOIN {catalog_sql}.{CLAIMS_SCHEMA}.silver_claims_medical c2 ON m.member_id = c2.member_id
-  GROUP BY m.member_id, e.line_of_business, e.risk_score
+  GROUP BY m.member_id
 ),
 
 -- Labels: 1 if claim has a fraud signal with score >= 0.5
@@ -111,43 +133,46 @@ labels AS (
 
 SELECT
   cf.claim_id,
-  -- Claim-level features
-  cf.billed_amount,
-  cf.allowed_amount,
-  cf.paid_amount,
-  cf.billed_to_allowed_ratio,
-  cf.member_responsibility,
-  cf.copay,
-  cf.coinsurance,
-  cf.deductible,
-  cf.payment_lag_days,
-  cf.service_day_of_week,
-  cf.diagnosis_code_count,
+  -- Claim-level features (all DOUBLE to match XGBoost/MLflow model signature)
+  CAST(cf.billed_amount AS DOUBLE) AS billed_amount,
+  CAST(cf.allowed_amount AS DOUBLE) AS allowed_amount,
+  CAST(cf.paid_amount AS DOUBLE) AS paid_amount,
+  CAST(cf.billed_to_allowed_ratio AS DOUBLE) AS billed_to_allowed_ratio,
+  CAST(cf.member_responsibility AS DOUBLE) AS member_responsibility,
+  CAST(cf.copay AS DOUBLE) AS copay,
+  CAST(cf.coinsurance AS DOUBLE) AS coinsurance,
+  CAST(cf.deductible AS DOUBLE) AS deductible,
+  CAST(cf.payment_lag_days AS DOUBLE) AS payment_lag_days,
+  CAST(cf.service_day_of_week AS DOUBLE) AS service_day_of_week,
+  CAST(cf.diagnosis_code_count AS DOUBLE) AS diagnosis_code_count,
 
   -- Provider-level features
-  COALESCE(pf.provider_total_claims, 0) AS provider_total_claims,
-  COALESCE(pf.provider_avg_billed, 0) AS provider_avg_billed,
-  COALESCE(pf.provider_e5_visit_pct, 0) AS provider_e5_visit_pct,
-  COALESCE(pf.provider_denial_rate, 0) AS provider_denial_rate,
-  COALESCE(pf.provider_unique_members, 0) AS provider_unique_members,
-  COALESCE(pf.provider_billed_to_allowed_ratio, 0) AS provider_billed_to_allowed_ratio,
-  COALESCE(pf.provider_fwa_signal_count, 0) AS provider_fwa_signal_count,
-  COALESCE(pf.provider_composite_risk_score, 0) AS provider_composite_risk_score,
+  CAST(COALESCE(pf.provider_total_claims, 0) AS DOUBLE) AS provider_total_claims,
+  CAST(COALESCE(pf.provider_avg_billed, 0) AS DOUBLE) AS provider_avg_billed,
+  CAST(COALESCE(pf.provider_e5_visit_pct, 0) AS DOUBLE) AS provider_e5_visit_pct,
+  CAST(COALESCE(pf.provider_denial_rate, 0) AS DOUBLE) AS provider_denial_rate,
+  CAST(COALESCE(pf.provider_unique_members, 0) AS DOUBLE) AS provider_unique_members,
+  CAST(COALESCE(pf.provider_billed_to_allowed_ratio, 0) AS DOUBLE) AS provider_billed_to_allowed_ratio,
+  CAST(COALESCE(pf.provider_fwa_signal_count, 0) AS DOUBLE) AS provider_fwa_signal_count,
+  CAST(COALESCE(pf.provider_composite_risk_score, 0) AS DOUBLE) AS provider_composite_risk_score,
 
   -- Member-level features
-  COALESCE(mf.member_total_claims, 0) AS member_total_claims,
-  COALESCE(mf.member_unique_providers, 0) AS member_unique_providers,
-  COALESCE(mf.member_unique_diagnoses, 0) AS member_unique_diagnoses,
-  COALESCE(mf.member_risk_score, 1.0) AS member_risk_score,
+  CAST(COALESCE(mf.member_total_claims, 0) AS DOUBLE) AS member_total_claims,
+  CAST(COALESCE(mf.member_unique_providers, 0) AS DOUBLE) AS member_unique_providers,
+  CAST(COALESCE(mf.member_unique_diagnoses, 0) AS DOUBLE) AS member_unique_diagnoses,
+  CAST(COALESCE(mf.member_risk_score, 1.0) AS DOUBLE) AS member_risk_score,
 
   -- Label
-  COALESCE(l.is_fraud, 0) AS is_fraud
+  CAST(COALESCE(l.is_fraud, 0) AS DOUBLE) AS is_fraud
 
 FROM claim_features cf
 LEFT JOIN provider_features pf ON cf.rendering_provider_npi = pf.provider_npi
 LEFT JOIN member_features mf ON cf.member_id = mf.member_id
 LEFT JOIN labels l ON cf.claim_id = l.claim_id
 """)
+
+# Dedup to one row per claim_id (service-line fan-out from silver_claims_medical)
+feature_df = feature_df.dropDuplicates(["claim_id"])
 
 # Count stats before writing
 total = feature_df.count()
@@ -157,14 +182,35 @@ print(f"Feature table: {total:,} rows, {fraud_count:,} fraud ({fraud_count/total
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Save Feature Table
+# MAGIC ## Register Feature Table in Unity Catalog
+# MAGIC
+# MAGIC Use the **Feature Engineering client** to register the feature table in Unity Catalog.
+# MAGIC This gives us:
+# MAGIC - **Feature lineage** — UC tracks which models consume which features
+# MAGIC - **Feature discovery** — table is tagged and searchable as a feature table in UC
 
 # COMMAND ----------
 
-# Write feature table to Unity Catalog
-feature_table_name = f"{catalog_sql}.{ANALYTICS_SCHEMA}.fwa_training_features"
-feature_df.write.mode("overwrite").saveAsTable(feature_table_name)
-print(f"Feature table written to: {feature_table_name}")
+from databricks.feature_engineering import FeatureEngineeringClient
+
+fe = FeatureEngineeringClient()
+
+feature_table_name = f"{catalog}.{ANALYTICS_SCHEMA}.fwa_training_features"
+
+# Drop and recreate to ensure clean PK constraint (idempotent for demo reruns)
+spark.sql(f"DROP TABLE IF EXISTS {feature_table_name}")
+
+fe.create_table(
+    name=feature_table_name,
+    primary_keys=["claim_id"],
+    df=feature_df,
+    description=(
+        "FWA fraud scoring features: claim-level billing patterns, "
+        "provider risk indicators, and member behavioral signals. "
+        "Primary key: claim_id. Label: is_fraud."
+    ),
+)
+print(f"Feature table created: {feature_table_name}")
 
 # COMMAND ----------
 
@@ -172,8 +218,8 @@ print(f"Feature table written to: {feature_table_name}")
 # MAGIC ## Train XGBoost Classifier with MLflow
 # MAGIC
 # MAGIC Manual training with:
-# MAGIC - Stratified 5-fold cross-validation
-# MAGIC - Hyperparameter grid search
+# MAGIC - Stratified 3-fold cross-validation
+# MAGIC - Hyperparameter grid search (2 combos for job speed)
 # MAGIC - MLflow autologging for all metrics, parameters, and artifacts
 # MAGIC - SHAP feature importance plots
 
@@ -205,6 +251,7 @@ except Exception:
     pass
 experiment_path = f"/Users/{_user}/{catalog}_fwa_fraud_scorer"
 mlflow.set_experiment(experiment_path)
+mlflow.set_registry_uri("databricks-uc")
 print(f"MLflow experiment: {experiment_path}")
 
 # COMMAND ----------
@@ -263,7 +310,7 @@ for combo in grid_combos:
             tree_method="hist",
         )
 
-        # 5-fold stratified cross-validation
+        # 3-fold stratified cross-validation
         cv_results = cross_validate(
             model, X, y, cv=cv,
             scoring=["f1", "roc_auc", "precision", "recall"],
@@ -298,7 +345,7 @@ print(f"\nBest: {best_params} → AUC={best_auc:.4f}")
 
 # COMMAND ----------
 
-with mlflow.start_run(run_name="xgb_final_best") as final_run:
+with mlflow.start_run(run_name="xgb_final_champion") as final_run:
     final_model = XGBClassifier(
         **best_params,
         scale_pos_weight=scale_pos_weight,
@@ -331,40 +378,69 @@ with mlflow.start_run(run_name="xgb_final_best") as final_run:
     cm_dict = {"tn": int(cm[0, 0]), "fp": int(cm[0, 1]), "fn": int(cm[1, 0]), "tp": int(cm[1, 1])}
     mlflow.log_dict(cm_dict, "confusion_matrix.json")
 
-    # Log the model with input example for signature
+    # SHAP feature importance plot
+    try:
+        import shap
+        explainer = shap.TreeExplainer(final_model)
+        shap_sample = pd.DataFrame(X[:500], columns=feature_cols)
+        shap_values = explainer.shap_values(shap_sample)
+        fig = shap.summary_plot(shap_values, shap_sample, show=False)
+        import matplotlib.pyplot as plt
+        plt.tight_layout()
+        plt.savefig("/tmp/shap_summary.png", dpi=150, bbox_inches="tight")
+        mlflow.log_artifact("/tmp/shap_summary.png")
+        plt.close()
+        print("SHAP summary plot logged to MLflow")
+    except Exception as e:
+        print(f"SHAP plot skipped: {e}")
+
+    # Log model with a pyfunc wrapper that returns probabilities (not class labels)
     input_example = pd.DataFrame([X[0]], columns=feature_cols)
-    mlflow.xgboost.log_model(
-        final_model,
+
+    class FraudProbaModel(mlflow.pyfunc.PythonModel):
+        def __init__(self, xgb_model):
+            self.xgb_model = xgb_model
+
+        def predict(self, context, model_input, params=None):
+            if isinstance(model_input, pd.DataFrame):
+                numeric_cols = model_input.select_dtypes(include="number").columns
+                proba = self.xgb_model.predict_proba(model_input[numeric_cols].values)[:, 1]
+            else:
+                proba = self.xgb_model.predict_proba(model_input)[:, 1]
+            return proba.tolist()
+
+    mlflow.pyfunc.log_model(
         artifact_path="model",
+        python_model=FraudProbaModel(final_model),
         input_example=input_example,
         registered_model_name=MODEL_NAME,
+        pip_requirements=["xgboost==3.1.1", "pandas>=2.0,<3.0", "numpy", "scikit-learn"],
     )
 
     best_final_run_id = final_run.info.run_id
-    print(f"Final model logged: run_id={best_final_run_id}")
-    print(f"  F1={train_metrics['train_f1']:.4f}  AUC={train_metrics['train_auc_roc']:.4f}")
-    print(f"  Precision={train_metrics['train_precision']:.4f}  Recall={train_metrics['train_recall']:.4f}")
+    print(f"\nFinal model logged: run_id={best_final_run_id}")
+    for k, v in train_metrics.items():
+        print(f"  {k}: {v:.4f}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Register Best Model in Unity Catalog
+# MAGIC ## Register Best Model — `@champion` Alias
 
 # COMMAND ----------
 
 from mlflow import MlflowClient
 
-mlflow.set_registry_uri("databricks-uc")
 client = MlflowClient()
 
 # Get the latest version that was just registered via log_model
 model_versions = client.search_model_versions(f"name='{MODEL_NAME}'")
 latest_version = max(model_versions, key=lambda v: int(v.version))
 
-# Set production alias
+# Set champion alias
 client.set_registered_model_alias(
     name=MODEL_NAME,
-    alias="production",
+    alias="champion",
     version=latest_version.version,
 )
 
@@ -372,8 +448,8 @@ client.set_registered_model_alias(
 client.update_registered_model(
     name=MODEL_NAME,
     description=(
-        "FWA fraud scoring model trained with XGBoost. "
-        "Binary classifier predicting fraud probability for medical claims. "
+        "FWA fraud scoring model (XGBoost pyfunc). "
+        "Binary classifier returning fraud probability for medical claims. "
         f"Best CV AUC-ROC: {best_auc:.4f}. "
         f"Best params: {best_params}. "
         "Features include claim-level billing patterns, provider risk indicators, "
@@ -383,108 +459,62 @@ client.update_registered_model(
 
 print(f"Registered model: {MODEL_NAME}")
 print(f"Version:          {latest_version.version}")
-print(f"Alias:            production -> v{latest_version.version}")
+print(f"Alias:            @champion -> v{latest_version.version}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Summary
-
-# COMMAND ----------
-
-print("=" * 70)
-print("FWA FRAUD SCORING MODEL — TRAINING COMPLETE")
-print("=" * 70)
-print(f"  Model Name:    {MODEL_NAME}")
-print(f"  Version:       {latest_version.version}")
-print(f"  Alias:         production -> v{latest_version.version}")
-print(f"  Run ID:        {best_final_run_id}")
-print()
-print(f"  Training Results:")
-print(f"    Algorithm:        XGBoost")
-print(f"    Best CV AUC:      {best_auc:.4f}")
-print(f"    F1 Score:         {train_metrics['train_f1']:.4f}")
-print(f"    AUC-ROC:          {train_metrics['train_auc_roc']:.4f}")
-print(f"    Precision:        {train_metrics['train_precision']:.4f}")
-print(f"    Recall:           {train_metrics['train_recall']:.4f}")
-print(f"    Grid Combos:      {len(grid_combos)}")
-print(f"    Best Params:      {best_params}")
-print()
-print(f"  Feature Table:  {feature_table_name}")
-print(f"  Training Data:  {total:,} claims, {fraud_count:,} fraud ({fraud_count/total:.2%})")
-print()
-print("  Next steps:")
-print("    - Review MLflow experiment for run comparison")
-print("    - Check feature_importance.json artifact")
-print("    - Batch inference predictions written for agent and app")
-print("    - Model serving endpoint deployed")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Batch Inference — Write Predictions to Inference Table
+# MAGIC ## Batch Inference — Write Predictions to Analytics Tables
 # MAGIC
 # MAGIC Score all medical claims with the trained model and write predictions
-# MAGIC to a Delta table. This serves as the inference table for:
-# MAGIC - The FWA Investigation Agent (references ML scores in analysis)
-# MAGIC - The FWA Investigation Portal (shows ML confidence per claim)
-# MAGIC - Gold analytics (gold_fwa_model_scores materialized view)
+# MAGIC to Delta tables. These serve as downstream consumers:
+# MAGIC - `analytics.fwa_ml_predictions` → consumed by `gold_fwa_model_scores` MV
+# MAGIC - `analytics.fwa_model_inference` → consumed by FWA Investigation Agent + dashboard
 
 # COMMAND ----------
 
-import mlflow.pyfunc
-
-# Load the registered production model
-prod_model = mlflow.pyfunc.load_model(f"models:/{MODEL_NAME}@production")
-
-# Read the feature table (exclude label and claim_id for prediction)
-inference_df = spark.table(feature_table_name)
-
-# Convert to pandas for model prediction
-inference_pd = inference_df.select("claim_id", *feature_cols).toPandas()
-inference_pd[feature_cols] = inference_pd[feature_cols].astype("float64")
-
-# Run batch prediction — get probabilities
-try:
-    probabilities = prod_model._model_impl.predict_proba(inference_pd[feature_cols])
-    inference_pd["ml_fraud_probability"] = probabilities[:, 1]
-    print("Using predict_proba for fraud probabilities")
-except (AttributeError, Exception):
-    predictions = prod_model.predict(inference_pd[feature_cols])
-    inference_pd["ml_fraud_probability"] = predictions
-    print("Using raw predict output (may be binary labels)")
-
-inference_pd["ml_risk_tier"] = inference_pd["ml_fraud_probability"].apply(
-    lambda p: "High" if p >= 0.7 else ("Medium" if p >= 0.4 else "Low")
-)
-
-# --- Write Phase 2 predictions table (standalone, used by gold MV) ---
+from pyspark.sql import functions as F
 from datetime import datetime
 
-predictions_table_name = f"{catalog_sql}.{ANALYTICS_SCHEMA}.fwa_ml_predictions"
-predictions_table_sql = f"{catalog_sql}.{ANALYTICS_SCHEMA}.fwa_ml_predictions"
-predictions_pd = inference_pd[["claim_id", "ml_fraud_probability", "ml_risk_tier"]].copy()
-predictions_pd["model_version"] = str(latest_version.version)
-predictions_pd["scored_at"] = datetime.utcnow().isoformat()
+# Score using the in-memory final_model directly (no fe.score_batch needed)
+features_pdf = feature_df.select(["claim_id"] + feature_cols).toPandas()
+probabilities = final_model.predict_proba(features_pdf[feature_cols].values)[:, 1]
 
-predictions_pd["ml_fraud_probability"] = predictions_pd["ml_fraud_probability"].astype(float)
-predictions_spark_df = spark.createDataFrame(predictions_pd)
-predictions_spark_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(predictions_table_name)
+# Build scored pandas DataFrame
+scored_pdf = pd.DataFrame({
+    "claim_id": features_pdf["claim_id"],
+    "ml_fraud_probability": probabilities,
+})
+scored_pdf["ml_risk_tier"] = scored_pdf["ml_fraud_probability"].apply(
+    lambda p: "High" if p >= 0.7 else ("Medium" if p >= 0.4 else "Low")
+)
+scored_pdf["model_version"] = str(latest_version.version)
+scored_pdf["scored_at"] = datetime.utcnow().isoformat()
+
+scored_sdf = spark.createDataFrame(scored_pdf)
+
+# --- Write predictions table (standalone, used by gold MV) ---
+predictions_table_name = f"{catalog_sql}.{ANALYTICS_SCHEMA}.fwa_ml_predictions"
+
+predictions_df = scored_sdf.select(
+    "claim_id", "ml_fraud_probability", "ml_risk_tier", "model_version", "scored_at"
+)
+predictions_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(predictions_table_name)
 
 pred_count = spark.table(predictions_table_name).count()
-high_risk_pred = spark.sql(f"SELECT COUNT(*) FROM {predictions_table_sql} WHERE ml_risk_tier = 'High'").collect()[0][0]
-med_risk_pred = spark.sql(f"SELECT COUNT(*) FROM {predictions_table_sql} WHERE ml_risk_tier = 'Medium'").collect()[0][0]
-print(f"\nPredictions table written: {predictions_table_name}")
+high_risk_pred = spark.sql(f"SELECT COUNT(*) FROM {predictions_table_name} WHERE ml_risk_tier = 'High'").collect()[0][0]
+med_risk_pred = spark.sql(f"SELECT COUNT(*) FROM {predictions_table_name} WHERE ml_risk_tier = 'Medium'").collect()[0][0]
+print(f"Predictions table written: {predictions_table_name}")
 print(f"  Total scored claims: {pred_count:,}")
 print(f"  High risk (>=0.7):   {high_risk_pred:,}")
 print(f"  Medium risk (0.4-0.7): {med_risk_pred:,}")
 print(f"  Model version:       {latest_version.version}")
 
 # --- Also write the full inference table with claim context ---
-inference_result_df = spark.createDataFrame(inference_pd[["claim_id", "ml_fraud_probability", "ml_risk_tier"]])
-
 inference_table_name = f"{catalog_sql}.{ANALYTICS_SCHEMA}.fwa_model_inference"
-inference_with_context = inference_result_df.join(
+inference_result_sdf = scored_sdf.select("claim_id", "ml_fraud_probability", "ml_risk_tier")
+
+inference_with_context = inference_result_sdf.join(
     spark.sql(f"""
         SELECT c.claim_id, c.member_id, c.rendering_provider_npi AS provider_npi,
                c.claim_type, c.procedure_code, c.billed_amount, c.allowed_amount,
@@ -508,90 +538,41 @@ print(f"  High risk (>=0.7):   {high_risk:,}")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Deploy Model Serving Endpoint (with Inference Table Logging)
-# MAGIC
-# MAGIC Creates a serverless model serving endpoint with inference table logging
-# MAGIC enabled. This allows real-time scoring from the app and automatically
-# MAGIC logs all predictions to a Unity Catalog inference table.
+# MAGIC ## Summary
 
 # COMMAND ----------
 
-from databricks.sdk import WorkspaceClient
-from databricks.sdk.service.serving import (
-    EndpointCoreConfigInput,
-    ServedEntityInput,
-)
-import time
-
-w = WorkspaceClient()
-
-endpoint_name = "fwa-fraud-scorer"
-
-# Wait for the model version to be READY in Unity Catalog before creating the endpoint.
-# After log_model + set_alias, the version may still be in PENDING_REGISTRATION state.
-print(f"Waiting for model version {latest_version.version} to be READY in UC...")
-_max_wait = 300  # 5 minutes
-_start = time.time()
-while time.time() - _start < _max_wait:
-    _mv = client.get_model_version(MODEL_NAME, latest_version.version)
-    _status = getattr(_mv, "status", None) or "UNKNOWN"
-    if _status == "READY":
-        print(f"  Model version {latest_version.version} is READY.")
-        break
-    print(f"  Status: {_status} — waiting 10s...")
-    time.sleep(10)
-else:
-    print(f"  WARNING: Model version still not READY after {_max_wait}s. Attempting endpoint creation anyway.")
-
-# Create or update the serving endpoint
-# NOTE: Legacy auto_capture_config (inference tables) is deprecated.
-# Use AI Gateway inference tables instead if payload logging is needed.
-_endpoint_created = False
-for _attempt in range(3):
-    try:
-        w.serving_endpoints.create(
-            name=endpoint_name,
-            config=EndpointCoreConfigInput(
-                served_entities=[
-                    ServedEntityInput(
-                        entity_name=MODEL_NAME,
-                        entity_version=latest_version.version,
-                        workload_size="Small",
-                        scale_to_zero_enabled=True,
-                    ),
-                ],
-            ),
-        )
-        print(f"Serving endpoint '{endpoint_name}' created.")
-        _endpoint_created = True
-        break
-    except Exception as e:
-        _err = str(e)
-        if "already exists" in _err.lower():
-            print(f"Serving endpoint '{endpoint_name}' already exists — updating config...")
-            try:
-                w.serving_endpoints.update_config(
-                    name=endpoint_name,
-                    served_entities=[
-                        ServedEntityInput(
-                            entity_name=MODEL_NAME,
-                            entity_version=latest_version.version,
-                            workload_size="Small",
-                            scale_to_zero_enabled=True,
-                        ),
-                    ],
-                )
-                print(f"  Endpoint updated to model version {latest_version.version}")
-                _endpoint_created = True
-            except Exception as e2:
-                print(f"  Endpoint update also failed: {e2}")
-            break
-        else:
-            print(f"  Attempt {_attempt + 1}/3 — endpoint creation failed: {_err}")
-            if _attempt < 2:
-                time.sleep(15)
-
-if not _endpoint_created:
-    print(f"\nWARNING: Serving endpoint '{endpoint_name}' could not be created.")
-    print(f"  Batch inference table ({predictions_table_name}) is available as fallback.")
-    print(f"  To create manually: Workspace > Serving > New Endpoint > model={MODEL_NAME}")
+print("=" * 70)
+print("FWA FRAUD SCORING MODEL — TRAINING COMPLETE")
+print("=" * 70)
+print(f"  Model Name:    {MODEL_NAME}")
+print(f"  Version:       {latest_version.version}")
+print(f"  Alias:         @champion -> v{latest_version.version}")
+print(f"  Run ID:        {best_final_run_id}")
+print()
+print(f"  Training Results:")
+print(f"    Algorithm:        XGBoost (pyfunc wrapper)")
+print(f"    Best CV AUC:      {best_auc:.4f}")
+print(f"    F1 Score:         {train_metrics['train_f1']:.4f}")
+print(f"    AUC-ROC:          {train_metrics['train_auc_roc']:.4f}")
+print(f"    Precision:        {train_metrics['train_precision']:.4f}")
+print(f"    Recall:           {train_metrics['train_recall']:.4f}")
+print(f"    Grid Combos:      {len(grid_combos)}")
+print(f"    Best Params:      {best_params}")
+print()
+print(f"  Feature Table:  {feature_table_name}")
+print(f"  Training Data:  {total:,} claims, {fraud_count:,} fraud ({fraud_count/total:.2%})")
+print()
+print("  Batch Predictions:")
+print(f"    {predictions_table_name}")
+print(f"    {inference_table_name}")
+print()
+print("  Next steps (MANUAL):")
+print("    1. Create serving endpoint in UI:")
+print(f"       Entity: {MODEL_NAME}@champion")
+print("       Size: Small, scale-to-zero, enable inference tables")
+print("    2. Run fwa_batch_scoring.py (500 claims → endpoint)")
+print("    3. Wait ~1hr for inference table materialization")
+print("    4. Trigger fwa_monitoring_pipeline DLT pipeline")
+print("    5. Run fwa_backfill_monitoring.py (seed 7 days)")
+print("    6. Run fwa_model_monitoring.py (Lakehouse Monitor + governance)")

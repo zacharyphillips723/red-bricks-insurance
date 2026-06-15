@@ -8,6 +8,8 @@ import { ProviderAnalysis } from "@/pages/ProviderAnalysis";
 import { AgentChat } from "@/pages/AgentChat";
 import { CaseloadView } from "@/pages/CaseloadView";
 import { NetworkGraph } from "@/pages/NetworkGraph";
+import { GenieSearch } from "@/pages/GenieSearch";
+import { ObservabilityPage } from "@/pages/ObservabilityPage";
 import { useHashRouter } from "@/lib/useHashRouter";
 import { api } from "@/lib/api";
 
@@ -64,6 +66,10 @@ export default function App() {
         return <NetworkGraph />;
       case "agent":
         return <AgentChat />;
+      case "genie":
+        return <GenieSearch />;
+      case "observability":
+        return <ObservabilityPage />;
       case "caseload":
         return <CaseloadView />;
       default:

@@ -11,6 +11,10 @@ resources:
           - --host=0.0.0.0
           - --port=8000
         env:
+          - name: AGENT_MODE
+            value: endpoint
+          - name: FWA_AGENT_ENDPOINT
+            value: fwa-supervisor-agent
           - name: LAKEBASE_PROJECT_ID
             value: ${var.lakebase_project_id}
           - name: LAKEBASE_DATABASE_NAME
@@ -23,17 +27,33 @@ resources:
             value: ${var.warehouse_id}
           - name: LLM_ENDPOINT
             value: databricks-llama-4-maverick
+          - name: GEMINI_ENDPOINT
+            value: databricks-gemini-2-5-pro
           - name: UC_CATALOG
             value: ${var.catalog}
           - name: UC_SCHEMA
             value: fwa
           - name: FWA_MODEL_ENDPOINT
             value: fwa-fraud-scorer
+          - name: VS_INDEX_NAME
+            value: ${var.catalog}.prior_auth.medical_policy_vs_index
+          - name: GATEWAY_MODELS
+            value: databricks-llama-4-maverick,databricks-gemini-2-5-pro
+          - name: MLFLOW_TRACKING_URI
+            value: databricks
+          - name: MLFLOW_EXPERIMENT_NAME
+            value: /Shared/red-bricks-fwa-agent-traces
       resources:
-        # fwa-fraud-scorer serving endpoint is created at runtime by train_fwa_model task.
-        # The app's service principal gets CAN_QUERY via bootstrap_workspace grants.
+        # NOTE: fwa-supervisor-agent is NOT listed here because it doesn't exist
+        # at deploy time — it's created by the deploy_fwa_agent job task.
+        # The app SP gets CAN_QUERY via bootstrap_workspace.py at runtime instead.
         - name: llm-endpoint
           serving_endpoint:
             name: databricks-llama-4-maverick
             permission: CAN_QUERY
+        - name: gemini-endpoint
+          serving_endpoint:
+            name: databricks-gemini-2-5-pro
+            permission: CAN_QUERY
+        # fwa-fraud-scorer serving endpoint is created at runtime by train_fwa_model task.
         # Lakebase — SP access granted by bootstrap script (DAB doesn't support Autoscaling resource blocks yet)

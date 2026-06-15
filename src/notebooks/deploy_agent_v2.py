@@ -21,7 +21,7 @@
 
 import os
 
-dbutils.widgets.text("catalog", "red_bricks_insurance", "Catalog")
+dbutils.widgets.text("catalog", "red_bricks_insurance_catalog", "Catalog")
 dbutils.widgets.text("warehouse_id", "", "SQL Warehouse ID (auto-detect if empty)")
 
 catalog = dbutils.widgets.get("catalog")
@@ -72,16 +72,28 @@ headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json
 
 # COMMAND ----------
 
-idx_info = requests.get(
-    f"{host}/api/2.0/vector-search/indexes/{VS_INDEX_NAME}", headers=headers
-).json()
-idx_status = idx_info.get("status", {})
-print(f"Index: {VS_INDEX_NAME}")
-print(f"  State: {idx_status.get('detailed_state')}")
-print(f"  Ready: {idx_status.get('ready')}")
-print(f"  Rows:  {idx_status.get('indexed_row_count')}")
+import time as _time
 
-assert idx_status.get("ready"), f"Index not ready: {idx_status}"
+print(f"Waiting for Vector Search index '{VS_INDEX_NAME}' to be ONLINE...")
+_vs_ready = False
+for _attempt in range(90):  # Up to 15 minutes
+    idx_info = requests.get(
+        f"{host}/api/2.0/vector-search/indexes/{VS_INDEX_NAME}", headers=headers
+    ).json()
+    idx_status = idx_info.get("status", {})
+    ready = idx_status.get("ready", False)
+    detailed = idx_status.get("detailed_state", "UNKNOWN")
+    row_count = idx_status.get("indexed_row_count", 0)
+
+    if _attempt % 6 == 0 or ready:
+        print(f"  [{_attempt*10}s] state={detailed}, ready={ready}, rows={row_count}")
+
+    if ready:
+        _vs_ready = True
+        break
+    _time.sleep(10)
+
+assert _vs_ready, f"Index not ready after 15 min: {idx_status}"
 print("PASS: Vector Search index is ONLINE")
 
 # COMMAND ----------

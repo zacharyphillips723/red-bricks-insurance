@@ -31,6 +31,7 @@ ALLOWED_SCHEMAS = [
     "providers",
     "pharmacy",
     "benefits",
+    "prior_auth",
 ]
 
 # Tool definitions for the Foundation Model API function-calling interface
@@ -97,6 +98,58 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_medical_policies",
+            "description": (
+                "Search Red Bricks Insurance medical policies using semantic similarity. "
+                "Returns relevant policy sections with citations (policy name, rule ID, rule type, "
+                "procedure codes, and full policy text). Use this to determine if a provider's "
+                "billing practices comply with company medical policy. Always search policies before "
+                "classifying a finding as Fraud, Waste, or Abuse."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural language query describing the billing practice or policy question.",
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "Number of policy sections to retrieve (default 5).",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "classify_fwa_type",
+            "description": (
+                "Classify an FWA finding as Fraud, Waste, or Abuse based on claim evidence and "
+                "retrieved medical policy context. Returns a structured classification with confidence "
+                "score, reasoning, and policy citations."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "claim_summary": {
+                        "type": "string",
+                        "description": "Summary of the claim or billing pattern being evaluated.",
+                    },
+                    "policy_context": {
+                        "type": "string",
+                        "description": "Relevant medical policy sections retrieved from search_medical_policies.",
+                    },
+                },
+                "required": ["claim_summary", "policy_context"],
+            },
+        },
+    },
 ]
 
 MAX_TOOL_ROUNDS = 6
@@ -126,6 +179,13 @@ class FWAInvestigationAgent(ChatModel):
         "## EVIDENCE ANALYSIS\n"
         "Detailed analysis of billing patterns, anomalies, and red flags. Compare against peer "
         "benchmarks where available. Reference both rules-based flags AND ML model scores.\n\n"
+        "## POLICY COMPLIANCE ANALYSIS\n"
+        "When investigating a flagged claim, ALWAYS search medical policies to determine if "
+        "billing violates company policy. Classify each finding as:\n"
+        "- **Fraud**: Intentional deception for financial gain\n"
+        "- **Waste**: Overutilization without intent to deceive\n"
+        "- **Abuse**: Billing inconsistent with accepted medical/business standards\n"
+        "Cite specific policy names, rule types, and procedure codes.\n\n"
         "## RISK ASSESSMENT\n"
         "Provide a risk rating: **Critical** / **High** / **Medium** / **Low**\n"
         "Justify the rating based on financial exposure, pattern severity, and confidence level. "
@@ -149,6 +209,7 @@ class FWAInvestigationAgent(ChatModel):
         self.warehouse_id = os.environ.get("SQL_WAREHOUSE_ID") or self._auto_detect_warehouse()
 
         self.llm_endpoint = os.environ.get("LLM_ENDPOINT") or "databricks-llama-4-maverick"
+        self.vs_index_name = os.environ.get("VS_INDEX_NAME") or f"{self.catalog}.prior_auth.medical_policy_vs_index"
 
     def _auto_detect_warehouse(self) -> str:
         """Auto-detect a SQL warehouse when none is configured."""
@@ -162,6 +223,7 @@ class FWAInvestigationAgent(ChatModel):
             pass
         return ""
 
+    @mlflow.trace(span_type="AGENT", name="fwa_investigation_agent")
     def predict(
         self, context, messages: List[ChatMessage], params: Optional[ChatParams] = None
     ) -> ChatCompletionResponse:
@@ -308,6 +370,10 @@ class FWAInvestigationAgent(ChatModel):
             return self._tool_query_uc_table(tool_args)
         elif tool_name == "list_table_columns":
             return self._tool_list_table_columns(tool_args)
+        elif tool_name == "search_medical_policies":
+            return self._tool_search_medical_policies(tool_args)
+        elif tool_name == "classify_fwa_type":
+            return self._tool_classify_fwa_type(tool_args)
         else:
             return json.dumps({"error": f"Unknown tool: {tool_name}"})
 
@@ -377,6 +443,73 @@ class FWAInvestigationAgent(ChatModel):
             return json.dumps({"table": table_name, "columns": rows}, default=str)
         except Exception as e:
             return json.dumps({"error": f"Could not describe table: {str(e)}"})
+
+    def _tool_search_medical_policies(self, args: dict) -> str:
+        """Search medical policies via Vector Search REST API."""
+        query = args.get("query", "").strip()
+        top_k = args.get("top_k", 5)
+        if not query:
+            return json.dumps({"error": "Query is required."})
+        print(f"[FWA Agent] Searching medical policies: {query[:100]}")
+        try:
+            vs_result = self.w.api_client.do(
+                "POST",
+                f"/api/2.0/vector-search/indexes/{self.vs_index_name}/query",
+                body={
+                    "query_text": query,
+                    "columns": [
+                        "chunk_id", "policy_name", "service_category",
+                        "chunk_text",
+                    ],
+                    "num_results": top_k,
+                },
+            )
+            data_array = vs_result.get("result", {}).get("data_array", [])
+            columns = vs_result.get("manifest", {}).get("columns", [])
+            col_names = [c.get("name", f"col_{i}") for i, c in enumerate(columns)]
+            policies = [dict(zip(col_names, row)) for row in data_array]
+            return json.dumps({"policies": policies, "result_count": len(policies)}, default=str)
+        except Exception as e:
+            print(f"[FWA Agent] VS search error: {e}")
+            return json.dumps({"error": f"Policy search failed: {str(e)}", "policies": []})
+
+    def _tool_classify_fwa_type(self, args: dict) -> str:
+        """Classify a finding as Fraud, Waste, or Abuse using the LLM."""
+        claim_summary = args.get("claim_summary", "")
+        policy_context = args.get("policy_context", "")
+        if not claim_summary:
+            return json.dumps({"error": "claim_summary is required."})
+        print(f"[FWA Agent] Classifying FWA type: {claim_summary[:80]}")
+        try:
+            classification_prompt = (
+                "You are an FWA classification specialist. Based on the claim evidence and medical policy "
+                "context below, classify the finding.\n\n"
+                f"## Claim Summary\n{claim_summary}\n\n"
+                f"## Relevant Medical Policies\n{policy_context}\n\n"
+                "Respond with ONLY a JSON object:\n"
+                '{"classification": "Fraud"|"Waste"|"Abuse"|"No Violation", '
+                '"confidence": 0.0-1.0, '
+                '"reasoning": "brief explanation", '
+                '"policy_citations": ["policy name — rule type — procedure codes"]}'
+            )
+            resp = self.w.api_client.do(
+                "POST",
+                f"/serving-endpoints/{self.llm_endpoint}/invocations",
+                body={
+                    "messages": [{"role": "user", "content": classification_prompt}],
+                    "max_tokens": 500,
+                    "temperature": 0.0,
+                },
+            )
+            content = resp.get("choices", [{}])[0].get("message", {}).get("content", "{}")
+            try:
+                clean = content.strip().removeprefix("```json").removesuffix("```").strip()
+                result = json.loads(clean)
+            except json.JSONDecodeError:
+                result = {"classification": "Unknown", "confidence": 0.0, "reasoning": content, "policy_citations": []}
+            return json.dumps(result, default=str)
+        except Exception as e:
+            return json.dumps({"error": f"Classification failed: {str(e)}"})
 
     def _execute_sql(self, sql: str, params: list = None) -> list[dict]:
         """Execute SQL via Statement Execution API."""

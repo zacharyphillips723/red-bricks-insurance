@@ -63,6 +63,13 @@ def ask_genie(question_in: GenieQuestionIn) -> GenieResponseOut:
         w = WorkspaceClient()
         space_id = GENIE_SPACE_ID
 
+        if not space_id:
+            return GenieResponseOut(
+                conversation_id="",
+                message_id="",
+                description="Genie space not configured. Run the bootstrap_workspace job to create Genie spaces and grant app permissions, then restart the app.",
+            )
+
         print(f"[Genie] Asking: {question_in.question[:80]}...")
         print(f"[Genie] Space ID: {space_id}, Warehouse: {SQL_WAREHOUSE_ID}")
 

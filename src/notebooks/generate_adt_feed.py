@@ -15,7 +15,7 @@
 
 # COMMAND ----------
 
-dbutils.widgets.text("catalog", "red_bricks_insurance", "Catalog")
+dbutils.widgets.text("catalog", "red_bricks_insurance_catalog", "Catalog")
 dbutils.widgets.text("events_per_batch", "15", "Events per batch")
 dbutils.widgets.text("lakebase_project_id", "red-bricks-insurance", "Lakebase Project ID")
 

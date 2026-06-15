@@ -5,6 +5,8 @@ import {
   Bot,
   ShieldAlert,
   Share2,
+  Activity,
+  Search,
 } from "lucide-react";
 
 const navItems = [
@@ -13,6 +15,8 @@ const navItems = [
   { id: "providers", label: "Provider Analysis", icon: ShieldAlert },
   { id: "network", label: "Network Graph", icon: Share2 },
   { id: "agent", label: "FWA Agent", icon: Bot },
+  { id: "genie", label: "Genie Search", icon: Search },
+  { id: "observability", label: "Observability", icon: Activity },
   { id: "caseload", label: "Caseload", icon: Users },
 ];
 

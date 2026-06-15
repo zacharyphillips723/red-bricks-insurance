@@ -108,7 +108,7 @@ Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB
 
 ## Pipeline DAG
 
-The full demo job (`red_bricks_full_demo`) orchestrates 37 tasks:
+The full demo job (`red_bricks_full_demo`) orchestrates 42 tasks:
 
 ```
 synthea_generation (ROOT — generates FHIR bundles + extracts demographics + assigns MBR IDs)
@@ -124,6 +124,8 @@ synthea_generation (ROOT — generates FHIR bundles + extracts demographics + as
   → gold_analytics_pipeline (depends on all domain pipelines + member months + fwa_pipeline + network_adequacy_pipeline)
       → create_metric_views (governed semantic layer + FWA risk metrics)
   → train_fwa_model (depends on fwa_pipeline + gold_analytics — XGBoost fraud scorer)
+  → setup_medical_policy_vs (depends on data_generation + prior_auth_pipeline — medical policy Vector Search index for FWA agent RAG)
+  → setup_ai_gateway (ROOT — AI Gateway external model endpoints, runs in parallel with no dependencies)
   → train_pa_model (depends on prior_auth_pipeline — XGBoost 3-tier auto-adjudication model)
       → pa_model_governance (bias monitoring, drift detection, audit trail)
   → parse_medical_policies (depends on prior_auth_pipeline — LLM-based policy PDF extraction)
@@ -131,12 +133,14 @@ synthea_generation (ROOT — generates FHIR bundles + extracts demographics + as
       → deploy_member_agent (v1)
       → deploy_agent_v2 (v2 with benefits)
       → deploy_group_sales_agent (Sales Coach for group reporting)
-      → deploy_fwa_agent (FWA Investigation agent with tool-calling)
+      → deploy_fwa_agent (depends on gold_analytics + fwa + train_fwa_model + setup_medical_policy_vs — FWA Investigation agent with tool-calling + medical policy RAG)
       → deploy_pa_agent (PA Review agent with clinical review tool-calling)
           → evaluate_agents (v1 vs v2 vs sales coach comparison)
           → evaluate_care_agent (MLflow GenAI evaluation: groundedness, relevance, safety, clinical completeness, actionability, HIPAA compliance)
+          → evaluate_fwa_agent (depends on deploy_fwa_agent + setup_ai_gateway — multi-model FWA agent evaluation across AI Gateway endpoints)
+              → materialize_traces (writes MLflow traces to Unity Catalog Delta tables for SQL queryability)
   → setup_uc_governance (depends on gold_analytics + members — row filters, column masks on PHI tables)
-  → bootstrap_workspace (depends on gold_analytics + create_metric_views + create_uc_tools + fwa_pipeline + network_adequacy_pipeline + prior_auth_pipeline + train_fwa_model + setup_uc_governance)
+  → bootstrap_workspace (depends on gold_analytics + create_metric_views + create_uc_tools + fwa_pipeline + deploy_fwa_agent + network_adequacy_pipeline + prior_auth_pipeline + setup_uc_governance)
       — Creates Lakebase instances, applies UC/warehouse grants for app SPs, seeds operational data,
         seeds PA reviewer staff and review queue, creates Genie spaces (including Network Analytics)
       → deploy_app_source (deploys source code + starts compute for all 6 apps)
@@ -225,7 +229,9 @@ Each domain has its own SDP pipeline with bronze → silver → gold tables:
 **FWA Analytics:** `gold_fwa_network_analysis` (provider referral ring detection), `gold_fwa_member_risk` (member-level fraud indicators: doctor shopping, pharmacy abuse), `gold_fwa_ai_classification` (AI-generated investigation narratives for top signals), `gold_fwa_model_scores` (AutoML model batch scoring of all claims)
 
 **ML Models:**
-- **FWA Fraud Scorer** — XGBoost claim-level fraud scorer (`fwa_scoring_model`), trained with 5-fold stratified CV and hyperparameter tuning, registered in Unity Catalog. Served via `fwa-fraud-scorer` endpoint with inference table logging. Predictions written to `analytics.fwa_model_inference`. An AutoML alternative (`train_fwa_model_automl.py`) is also available.
+- **FWA Fraud Scorer** — XGBoost claim-level fraud scorer (`fwa_scoring_model`), trained with 5-fold stratified CV and hyperparameter tuning, registered in Unity Catalog. Served via `fwa-fraud-scorer` endpoint with AI Gateway inference table logging. Predictions written to `analytics.fwa_model_inference`. An AutoML alternative (`train_fwa_model_automl.py`) is also available. SHAP explainability generates feature importance plots logged to MLflow.
+- **AI Gateway** — External model endpoints provisioned by `setup_ai_gateway.py` for multi-model agent evaluation. Routes to GPT, Claude, and Gemini via Databricks AI Gateway with usage tracking and inference table logging. Used by `evaluate_fwa_agent.py` for cross-model comparison.
+- **MLflow Trace Materialization** — `materialize_traces.py` exports MLflow trace data to Unity Catalog Delta tables (`analytics.materialized_traces`) for SQL-queryable observability, powering the Agent Observability dashboard and FWA app Observability page.
 - **PA Auto-Adjudication** — XGBoost 3-class classifier (`pa_adjudication_model`) for Tier 2 ML-based PA determinations (approve/deny/review). Trained with stratified CV, registered in Unity Catalog. Includes MLflow governance: bias monitoring (disparate impact by LOB, urgency, service type), drift detection (PSI + KS test), and feature importance logging. See `train_pa_model.py` and `pa_model_governance.py`.
 
 ### Metric Views (Governed Semantic Layer)
@@ -253,14 +259,15 @@ The clinical pipeline reads Synthea FHIR R4 bundles directly (no intermediate tr
 
 ## AI Agents
 
-Five agents are deployed and registered in Unity Catalog via MLflow:
+Six agents are deployed and registered in Unity Catalog via MLflow:
 
 | Agent | Description | Audience |
 |-------|-------------|----------|
 | **Care Intelligence v1** (`deploy_member_agent`) | Member lookup + document search | Clinical care teams |
 | **Care Intelligence v2** (`deploy_agent_v2`) | v1 + benefits coverage analysis | Clinical care teams |
 | **Sales Coach** (`deploy_group_sales_agent`) | Group report card analysis, renewal prep, roleplay negotiation simulation, care management program recommendations | Account executives, sales reps |
-| **FWA Investigation** (`deploy_fwa_agent`) | Tool-calling agent that dynamically queries UC tables (provider risk, claims, ML predictions), generates structured investigation briefings | SIU analysts, compliance teams |
+| **FWA Investigation** (`deploy_fwa_agent`) | Tool-calling agent that dynamically queries UC tables (provider risk, claims, ML predictions) + medical policy RAG via Vector Search, generates structured investigation briefings | SIU analysts, compliance teams |
+| **FWA Supervisor** (`deploy_fwa_supervisor_agent`) | Multi-agent orchestrator that coordinates specialized FWA sub-agents for complex investigations | SIU supervisors |
 | **PA Review** (`deploy_pa_agent`) | Tool-calling agent that queries PA tables and medical policies, produces structured clinical review briefings with determination recommendations | UM nurses, PA reviewers |
 
 All agents are evaluated with `evaluate_agents.py`. The FWA Investigation and PA Review agents use multi-turn tool-calling patterns — the LLM autonomously composes SQL queries against allowed Unity Catalog schemas, retrieves data, and synthesizes findings. The Sales Coach supports intent-based modes: full briefing ("prepare me for..."), renewal focus ("why rate increase"), care management ("what programs can I offer"), and negotiation roleplay ("simulate a renewal negotiation").
@@ -305,7 +312,7 @@ Sales enablement application for account executives preparing employer group ren
 
 SIU-focused application for fraud, waste, and abuse investigation:
 
-- **Backend**: FastAPI (Python), connects to Lakebase Autoscaling (`fwa_cases` database), SQL warehouse (Statement Execution API for gold table queries), and Foundation Model API (Llama 4 Maverick)
+- **Backend**: FastAPI (Python), connects to Lakebase Autoscaling (`fwa_cases` database), SQL warehouse (Statement Execution API for gold table queries), Foundation Model API (Llama 4 Maverick), and AI Gateway external model endpoints
 - **Frontend**: React + Vite + Tailwind (Databricks-branded dark theme)
 - **Pages**:
   - **Dashboard** — KPIs (total/open/critical/closed investigations), financial metrics (estimated overpayment, recovered, recovery rate), breakdowns by status/severity/type
@@ -315,6 +322,7 @@ SIU-focused application for fraud, waste, and abuse investigation:
   - **Network Graph** — Interactive fraud network graph (canvas-based, `react-force-graph-2d`) showing provider→member connections from Unity Catalog `gold_fwa_claim_flags`. Zoom-responsive node sizing, click-to-highlight provider neighborhoods, drag-to-pan, scroll-to-zoom, auto-fit on load. Provider nodes sized by risk score; member nodes from real flagged claims data; edges colored by fraud score
   - **FWA Agent** — standalone AI agent chat with `[INV-XXXX]`/`[PRV-NPI]` prefix targeting; the agent dynamically queries Unity Catalog tables via tool-calling
   - **Genie Search** — natural language SQL exploration over FWA gold tables
+  - **Observability** — MLflow trace metrics dashboard showing agent query volume, P50/P95 latencies, token costs, error rates, and model comparison from materialized trace data
   - **Caseload** — investigator capacity dashboard with utilization bars
 - **Data Architecture**: Hybrid — Lakebase for transactional investigation state (status changes, assignments, audit log, evidence) + Statement Execution API for analytics (provider risk profiles, flagged claims, ML predictions from gold tables)
 - **Config**: `app-fwa/app.yml`, DAB resource: `resources/app_fwa.yml`
@@ -391,6 +399,7 @@ CMS network adequacy compliance monitoring for network operations teams:
 | **Network Adequacy** | CMS compliance overview, ghost network monitoring, OON leakage intelligence, network gaps & recruitment targets (4 pages, 17 datasets) |
 | **Care Management Operations** | Program enrollment, case episode tracking, SDOH prevalence, care gap closure rates, care manager productivity |
 | **Agent Observability** | Agent query volume, P50/P95 latencies, token costs, Genie usage, error rates (sourced from MLflow trace tables) |
+| **System Tables: Billing & Audit** | Workspace cost tracking (DBU spend by SKU, daily trends), audit log analysis (top users, API calls, security events), scoped to current workspace via hardcoded `workspace_id` |
 
 All dashboards are deployed as AI/BI Lakeview dashboards with `CAN_READ` permissions for the users group.
 
@@ -440,6 +449,7 @@ red-bricks-insurance/
 │   ├── frontend/
 │   │   └── src/pages/
 │   │       ├── NetworkGraph.tsx       #   Provider referral network visualization
+│   │       ├── ObservabilityPage.tsx  #   MLflow trace metrics, latency, token costs
 │   │       └── ...                    #   Dashboard, InvestigationDetail, ProviderAnalysis, etc.
 │   └── static/                       #   Built frontend output
 ├── app-underwriting-sim/                # Underwriting Simulation Portal Databricks App
@@ -482,13 +492,16 @@ red-bricks-insurance/
 │   ├── frontend/                     #   React + Vite + Tailwind source
 │   └── static/                       #   Built frontend output
 ├── resources/
-│   ├── full_demo_job.yml             # End-to-end orchestration (37 tasks)
+│   ├── full_demo_job.yml             # End-to-end orchestration (42 tasks)
 │   ├── adt_feed_job.yml              # Scheduled ADT event generation (every 3 hours)
 │   ├── data_generation_job.yml       # Standalone data generation
+│   ├── jobs_fwa_agent.yml            # FWA Supervisor Agent deployment job
+│   ├── ai_gateway.yml                # AI Gateway external model endpoint definitions
 │   ├── dashboard.yml                 # Analytics dashboard
 │   ├── agent_comparison_dashboard.yml# Agent eval dashboard
 │   ├── dashboard_pa_operations.yml   # PA operations dashboard
 │   ├── dashboard_network_adequacy.yml # Network adequacy dashboard (4 pages)
+│   ├── dashboard_system_tables.yml   # System Tables: Billing & Audit dashboard
 │   ├── lakebase_instances.yml        # Lakebase instance definitions
 │   ├── app.yml                       # Command Center app resource
 │   ├── app_prior_auth.yml            # Prior Auth Portal app resource
@@ -496,6 +509,7 @@ red-bricks-insurance/
 │   ├── app_fwa.yml                   # FWA Investigation Portal app resource
 │   ├── app_underwriting_sim.yml      # Underwriting Simulation Portal app resource
 │   ├── app_network_adequacy.yml     # Network Adequacy Portal app resource
+│   ├── fwa_monitoring_pipeline.yml   # FWA model monitoring SDP (inference tables, drift)
 │   ├── pipeline_members.yml          # Members & Enrollment SDP
 │   ├── pipeline_providers.yml        # Providers SDP
 │   ├── pipeline_claims.yml           # Claims SDP
@@ -511,7 +525,9 @@ red-bricks-insurance/
 │   ├── pipeline_care_management.yml  # Care management SDP (programs, episodes, SDOH, care gaps)
 │   ├── dashboard_care_management.yml # Care management operations dashboard
 │   ├── dashboard_observability.yml   # Agent observability dashboard (traces, latency, token costs)
-│   └── pipeline_gold_analytics.yml   # Cross-domain analytics (10 SQL files, 25+ gold views)
+│   ├── pipeline_gold_analytics.yml   # Cross-domain analytics (10 SQL files, 25+ gold views)
+│   └── classic/
+│       └── job_fwa_automl.yml        # AutoML FWA model training (requires classic compute)
 ├── src/
 │   ├── data_generation/              # Modular synthetic data generators
 │   │   ├── reference_data.py         #   ICD-10, CPT, DRG, HCC, CARC, LOB configs
@@ -552,13 +568,24 @@ red-bricks-insurance/
 │   │   ├── pa_model_governance.py   #   PA model bias monitoring, drift detection, audit trail
 │   │   ├── generate_adt_feed.py     #   ADT event batch generation + Lakebase alert seeding
 │   │   ├── evaluate_care_agent.py  #   MLflow GenAI evaluation (6 scorers, 4 question types)
+│   │   ├── evaluate_fwa_agent.py  #   Multi-model FWA agent evaluation via AI Gateway
+│   │   ├── materialize_traces.py  #   Write MLflow traces to UC Delta tables for SQL queryability
+│   │   ├── setup_ai_gateway.py    #   AI Gateway external model endpoint provisioning
+│   │   ├── setup_medical_policy_vs.py #  Medical policy Vector Search index for FWA agent RAG
 │   │   ├── create_uc_tools.py      #   Register 16 UC tool functions for agent tool-calling
 │   │   ├── deploy_app_source.py     #   Deploy source code + start compute for all 6 apps
+│   │   ├── deploy_fwa_supervisor_agent.py # FWA Supervisor Agent deployment
 │   │   ├── setup_lakebase.py        #   Lakebase DDL initialization (all instances)
-│   │   ├── seed_lakebase_alerts.py  #   Seed risk alerts into Command Center Lakebase
-│   │   ├── seed_fwa_lakebase.py     #   Seed FWA investigations into Lakebase (legacy, use bootstrap)
 │   │   ├── setup_uc_governance.py  #   Row filters & column masks on PHI tables (3 groups, 5 masks, 2 filters)
+│   │   ├── setup_online_tables.py #   Online Feature Store for low-latency agent lookups
 │   │   ├── demo_data_lineage.py   #   Data lineage demo (table, column, AI function, cross-domain)
+│   │   ├── demo_fwa_investigation_story.py # FWA investigation walkthrough demo notebook
+│   │   ├── system_tables_observability.py  # System tables billing & audit observability
+│   │   ├── fwa_batch_scoring.py   #   FWA model batch scoring pipeline
+│   │   ├── fwa_model_monitoring.py #  FWA model drift & performance monitoring
+│   │   ├── fwa_monitoring_pipeline.py # FWA monitoring SDP pipeline definitions
+│   │   ├── fwa_backfill_monitoring.py # FWA inference table backfill for monitoring
+│   │   ├── fwa_seed_inference_tables.py # Seed FWA inference tables with historical data
 │   │   ├── bootstrap_workspace.py   #   Post-deploy setup: Lakebase, grants, seed data, PA queue
 │   │   └── evaluate_agents.py       #   Agent evaluation
 │   ├── pipelines/
@@ -583,7 +610,12 @@ red-bricks-insurance/
 │   ├── fwa_lakebase_schema.sql       #   FWA Lakebase DDL (investigations, audit log, evidence)
 │   ├── pa_reviews_lakebase_schema.sql#   PA Lakebase DDL (review queue, reviewers, audit trail)
 │   ├── underwriting_sim_lakebase_schema.sql # UW Sim Lakebase DDL (simulations, comparisons)
-│   └── agents/                       #   Agent model definitions (Care Intel v1/v2, Sales Coach, FWA, PA)
+│   └── agents/                       #   Agent model definitions (Care Intel v1/v2, Sales Coach, FWA, FWA Supervisor, PA)
+│       ├── fwa_investigation_agent.py #  FWA Investigation agent model definition
+│       └── fwa_supervisor_agent.py    #  FWA Supervisor agent (multi-agent orchestration)
+├── scripts/
+│   ├── deploy.sh                     #   Bundle deploy helper script
+│   └── post_deploy.sh                #   Post-deploy automation
 ├── config/                           #   Genie setup, Lakebase config
 └── README.md
 ```
@@ -615,7 +647,7 @@ This bundle exercises a broad surface area of the Databricks platform. The follo
 | **Genie / AI/BI** | Natural language SQL in all 5 apps + 3 Lakeview dashboards | NL query and dashboard features |
 | **MLflow (UC Model Registry)** | 5 agents + 2 ML models registered via Models from Code | All agents and ML models |
 | **UC Volumes** | Raw data storage; `read_files()` ingestion in bronze layers | All data ingestion fails |
-| **Lakeview Dashboards** | 6 AI/BI dashboards (Analytics, Agent Comparison, PA Operations, Network Adequacy, Care Management, Observability) | Analytics visualization unavailable |
+| **Lakeview Dashboards** | 7 AI/BI dashboards (Analytics, Agent Comparison, PA Operations, Network Adequacy, Care Management, Observability, System Tables) | Analytics visualization unavailable |
 
 #### Required Foundation Model Endpoints
 
@@ -679,6 +711,7 @@ All tasks run on **serverless** compute. DLT pipelines are serverless SDP. Noteb
 | `e2-field-eng` | `fe-demo-field-eng` | AWS | Field engineering demos |
 | `hls-financial` | `hls-financial-foundation` | AWS | HLS Financial Foundation workspace |
 | `clinical-data-demo` | `clinical-data-demo` | AWS | Clinical data demo workspace |
+| `red-bricks-demo` | `fevm-red-bricks-demo` | AWS | Red Bricks demo workspace |
 | `prod` | `fe-vm-red-bricks-insurance` | Azure | Production |
 
 > **Catalog:** Defaults to `red_bricks_insurance`. Override with `--var="catalog=your_catalog_name"` at deploy/run time, or set it per-target in `databricks.yml`. The `dev` target overrides to `red_bricks_insurance_catalog`. The catalog must already exist on the workspace — the pipelines create the 13 domain schemas automatically.
@@ -691,8 +724,8 @@ All tasks run on **serverless** compute. DLT pipelines are serverless SDP. Noteb
 | `source_volume` | `/Volumes/${var.catalog}/raw/raw_sources` | Raw data volume path (auto-derived from catalog) |
 | `warehouse_id` | Lookup: `Serverless Starter Warehouse` | SQL warehouse for dashboards — auto-resolves by name; override with a specific ID |
 | `num_patients` | `5000` | Number of Synthea patients to generate (1000 for quick demos, 5000 for full) |
-| `node_type_small` | `Standard_DS3_v2` | Small compute (4 vCPU, 14GB) — AWS: `m5.xlarge` |
-| `node_type_large` | `Standard_DS5_v2` | Large compute (16 vCPU, 56GB) — AWS: `m5.4xlarge` |
+| `node_type_small` | `m5.xlarge` | Small compute (4 vCPU, 14GB) — Azure: `Standard_DS3_v2` |
+| `node_type_large` | `m5.4xlarge` | Large compute (16 vCPU, 56GB) — Azure: `Standard_DS5_v2` |
 | `lakebase_project_id` | `red-bricks-insurance` | Lakebase Autoscaling project ID |
 
 ### Deploying to a New Workspace
@@ -1153,10 +1186,11 @@ This demo is designed to be modular for customer-specific showings:
 | `mlflow` | Agent registration and evaluation |
 | `databricks-sdk` | Agent deployment, API calls |
 | `databricks-automl-runtime` | FWA fraud scorer model training (AutoML) |
-| `xgboost` / `scikit-learn` | FWA fraud scorer + PA auto-adjudication model training |
+| `xgboost` / `scikit-learn` / `shap` | FWA fraud scorer + PA auto-adjudication model training + explainability |
 | `fastapi` / `uvicorn` | App backends (Command Center, Group Reporting, FWA Portal, PA Portal, UW Sim, Network Adequacy) |
 | `psycopg` | Lakebase PostgreSQL connections (Command Center, FWA Portal, PA Portal, UW Sim) |
 | `opentelemetry-instrumentation-fastapi` | FastAPI auto-instrumentation for request tracing |
+| `databricks-feature-engineering` | Online Feature Store for low-latency agent lookups |
 | `langgraph` | LangGraph state machine agent framework (Command Center) |
 | `slack_sdk` | (Optional) Sales Coach Slack enrichment |
 | `simple_salesforce` | (Optional) Sales Coach Salesforce enrichment |

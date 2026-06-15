@@ -7,12 +7,14 @@ sync_shared_backend.sh. Edit THIS file, then run the sync script.
 import traceback
 from datetime import timedelta
 
+import mlflow
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import OperationFailed
 
 _TIMEOUT = timedelta(seconds=120)
 
 
+@mlflow.trace(span_type="TOOL", name="genie_query")
 def ask_genie(question_text: str, conversation_id: str = "", space_id: str = "",
               warehouse_id: str = "") -> dict:
     """Send a question to a Genie Space and return structured results.
@@ -31,7 +33,7 @@ def ask_genie(question_text: str, conversation_id: str = "", space_id: str = "",
             "columns": [],
             "rows": [],
             "row_count": 0,
-            "description": "Genie space not configured. Set GENIE_SPACE_ID environment variable.",
+            "description": "Genie space not configured. Run the bootstrap_workspace job to create Genie spaces and grant app permissions, then restart the app.",
         }
 
     try:

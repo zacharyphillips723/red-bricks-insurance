@@ -73,9 +73,10 @@ def _auto_detect_genie_space(w: WorkspaceClient, target_title: str = "") -> str:
             space = spaces[0]
             print(f"[env_config] Auto-detected Genie space (fallback): {space['space_id']} ({space.get('title', '')})")
             return space["space_id"]
-        print("[env_config] WARNING: No Genie spaces found")
+        print("[env_config] WARNING: No Genie spaces found — has bootstrap_workspace run?")
     except Exception as e:
         print(f"[env_config] Genie space auto-detection failed: {e}")
+        print("[env_config] The app service principal may not have Genie API access. Run bootstrap_workspace to grant permissions.")
     return ""
 
 

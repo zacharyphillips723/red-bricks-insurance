@@ -28,7 +28,7 @@
 
 # COMMAND ----------
 
-dbutils.widgets.text("catalog", "red_bricks_insurance", "Unity Catalog Name")
+dbutils.widgets.text("catalog", "red_bricks_insurance_catalog", "Unity Catalog Name")
 dbutils.widgets.text("warehouse_id", "", "SQL Warehouse ID (leave empty to auto-detect)")
 dbutils.widgets.text("lakebase_project_id", "red-bricks-insurance", "Lakebase Project ID")
 
@@ -522,16 +522,145 @@ def discover_app_service_principals() -> list[dict]:
             print(f"  {app_name}: not found ({e})")
     return sps
 
+
+def discover_serving_endpoint_service_principals() -> list[dict]:
+    """Discover service principals for custom model serving endpoints.
+
+    Serving endpoints that run agent models (e.g. fwa-supervisor-agent) get their
+    own SPs which need the same UC, warehouse, Genie, and Lakebase grants as app SPs.
+    """
+    # Custom serving endpoints that need grants (exclude FMAPI pay-per-token endpoints)
+    SERVING_ENDPOINT_PATTERNS = ["fwa-supervisor-agent", "fwa-fraud-scorer"]
+
+    import requests
+    host = spark.conf.get("spark.databricks.workspaceUrl")
+    token = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
+    headers = {"Authorization": f"Bearer {token}"}
+
+    sps = []
+    for ep_name in SERVING_ENDPOINT_PATTERNS:
+        try:
+            resp = requests.get(f"https://{host}/api/2.0/serving-endpoints/{ep_name}", headers=headers)
+            if resp.status_code != 200:
+                print(f"  {ep_name}: not found ({resp.status_code})")
+                continue
+
+            ep_data = resp.json()
+            found_sp = None
+
+            # Strategy 1: Search by display name (SDK-created endpoints)
+            sp_filter = f"displayName co \"{ep_name}\""
+            matching_sps = list(w.service_principals.list(filter=sp_filter))
+            if matching_sps:
+                found_sp = matching_sps[0]
+
+            # Strategy 2: Check endpoint events for system SP creation.
+            # The events API logs "System service principal creation with ID `<uuid>`"
+            # for each config version. We want the most recent one.
+            if not found_sp:
+                try:
+                    import re as _re_events
+                    events_resp = requests.get(
+                        f"https://{host}/api/2.0/serving-endpoints/{ep_name}/events",
+                        headers=headers,
+                    )
+                    if events_resp.status_code == 200:
+                        sp_uuid_pattern = _re_events.compile(
+                            r"System service principal creation with ID `([0-9a-f-]{36})`"
+                        )
+                        # Events are chronological; iterate in reverse to get the latest SP
+                        for evt in reversed(events_resp.json().get("events", [])):
+                            m = sp_uuid_pattern.search(evt.get("message", ""))
+                            if m:
+                                evt_sp_uuid = m.group(1)
+                                evt_sps = list(w.service_principals.list(
+                                    filter=f"applicationId eq \"{evt_sp_uuid}\""
+                                ))
+                                if evt_sps:
+                                    found_sp = evt_sps[0]
+                                    print(f"  {ep_name}: discovered runtime SP via endpoint events")
+                                break
+                except Exception as e_evt:
+                    print(f"  {ep_name}: endpoint events fallback failed: {e_evt}")
+
+            # Strategy 3: Check warehouse query history for the endpoint's runtime SP.
+            # UI-created endpoints get a system-managed SP with a UUID name that doesn't
+            # match the endpoint name. The SP shows up in SQL query history when the model
+            # executes queries via WorkspaceClient().
+            if not found_sp:
+                try:
+                    wh_id = spark.conf.get("spark.databricks.warehouseId", "")
+                    if not wh_id:
+                        wh_id = [wh.id for wh in w.warehouses.list()][0] if list(w.warehouses.list()) else ""
+                    if wh_id:
+                        qh_resp = requests.get(
+                            f"https://{host}/api/2.0/sql/history/queries",
+                            headers=headers,
+                            params={
+                                "max_results": "20",
+                                "include_metrics": "false",
+                                "filter_by.warehouse_ids": wh_id,
+                            },
+                        )
+                        if qh_resp.status_code == 200:
+                            # Collect SP-like user_names (UUID format) that ran queries
+                            import re
+                            uuid_pattern = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+                            known_app_sps = {sp_info["sp_name"] for sp_info in app_sps} if "app_sps" in dir() else set()
+                            candidate_sps = set()
+                            for q in qh_resp.json().get("res", []):
+                                user = q.get("user_name", "")
+                                if uuid_pattern.match(user) and user not in known_app_sps:
+                                    candidate_sps.add(user)
+                            # Match candidates against SCIM to find the endpoint's SP
+                            for cand in candidate_sps:
+                                cand_sps = list(w.service_principals.list(filter=f"applicationId eq \"{cand}\""))
+                                if cand_sps:
+                                    sp_obj = cand_sps[0]
+                                    # Accept if display name contains serving-related keywords or is unrecognized
+                                    display = (sp_obj.display_name or "").lower()
+                                    if "app-" not in display and "vending" not in display:
+                                        found_sp = sp_obj
+                                        print(f"  {ep_name}: discovered runtime SP via query history")
+                                        break
+                except Exception as e2:
+                    print(f"  {ep_name}: query history fallback failed: {e2}")
+
+            if found_sp:
+                sps.append({"app_name": f"endpoint:{ep_name}", "sp_name": found_sp.application_id, "sp_id": found_sp.id})
+                print(f"  {ep_name}: SP client_id={found_sp.application_id} (ID={found_sp.id}, name={found_sp.display_name})")
+            else:
+                print(f"  {ep_name}: WARNING — endpoint exists but no matching SP found")
+                print(f"    Try granting manually: look up SP in workspace Settings → Identity → Service Principals")
+        except Exception as e:
+            print(f"  {ep_name}: error ({e})")
+    return sps
+
 # COMMAND ----------
 
 print("=" * 60)
-print("STEP 3: Discover App Service Principals")
+print("STEP 3: Discover App & Serving Endpoint Service Principals")
 print("=" * 60)
 
+print("\n--- App SPs ---")
 app_sps = discover_app_service_principals()
 
+print("\n--- Serving Endpoint SPs ---")
+endpoint_sps = discover_serving_endpoint_service_principals()
+
+# Merge — deduplicate by sp_name (client_id)
+existing_sp_names = {sp["sp_name"] for sp in app_sps}
+for sp in endpoint_sps:
+    if sp["sp_name"] not in existing_sp_names:
+        app_sps.append(sp)
+        existing_sp_names.add(sp["sp_name"])
+    else:
+        print(f"  {sp['app_name']}: already in app_sps, skipping duplicate")
+
+print(f"\nTotal SPs to grant: {len(app_sps)}")
+
 if not app_sps:
-    print("\nNo app service principals found. Run 'databricks bundle deploy' first.")
+    print("\nNo service principals found. Run 'databricks bundle deploy' first.")
     print("Skipping grant steps.")
 
 # COMMAND ----------
@@ -640,8 +769,10 @@ if app_sps:
     _token_ep = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
     _ep_headers = {"Authorization": f"Bearer {_token_ep}", "Content-Type": "application/json"}
 
-    # Serving endpoints that app SPs need CAN_QUERY on (beyond Foundation Model API)
-    CUSTOM_ENDPOINTS = ["fwa-fraud-scorer"]
+    # Serving endpoints that app SPs need CAN_QUERY on.
+    # Includes the FWA supervisor agent (apps call it via SDK in endpoint mode)
+    # and any custom scoring endpoints.
+    CUSTOM_ENDPOINTS = ["fwa-supervisor-agent", "fwa-fraud-scorer"]
 
     for ep_name in CUSTOM_ENDPOINTS:
         print(f"\nGranting CAN_QUERY on serving endpoint '{ep_name}'...")
@@ -858,6 +989,25 @@ GENIE_SPACE_CONFIGS = [
             f"{catalog}.network.silver_cms_standards",
         ]),
     },
+    {
+        "title": "Red Bricks AI Ops — Agent Observability",
+        "description": "Observability for the FWA Investigation Agent system. Query token consumption, cost estimates, request volumes, inference table logs (every agent request/response automatically captured), evaluation scores, ML predictions, and AI classifications across Llama 4 Maverick (supervisor), Gemini 2.5 Pro (analyst), and the XGBoost fraud scorer. JOIN system.serving.endpoint_usage eu with system.serving.served_entities se on eu.served_entity_id = se.served_entity_id to get endpoint names. IMPORTANT: Always filter system tables by workspace_id = '7474660722665158' to scope to this workspace. Filter to FWA endpoints: WHERE se.endpoint_name IN ('databricks-llama-4-maverick', 'databricks-gemini-2-5-pro', 'fwa-fraud-scorer', 'fwa-supervisor-agent') AND eu.workspace_id = '7474660722665158'. Cost rates: Llama $0.40/$1.60 per 1M input/output tokens, Gemini $1.25/$10.00 per 1M. Evaluation table scores are 1-5 scale from Claude Sonnet 4 judge. The fwa_supervisor_payload table contains every request/response to the FWA agent endpoint with execution_time_ms, status_code, and full request/response JSON.",
+        "tables": sorted([
+            "system.serving.endpoint_usage",
+            "system.serving.served_entities",
+            f"{catalog}.analytics.fwa_agent_evaluation_results",
+            f"{catalog}.analytics.fwa_agent_otel_annotations",
+            f"{catalog}.analytics.fwa_agent_otel_logs",
+            f"{catalog}.analytics.fwa_agent_otel_spans",
+            f"{catalog}.analytics.fwa_ml_predictions",
+            f"{catalog}.analytics.fwa_model_inference",
+            f"{catalog}.analytics.fwa_supervisor_payload",
+            f"{catalog}.analytics.gold_fwa_ai_classification",
+            f"{catalog}.analytics.gold_fwa_model_scores",
+            f"{catalog}.analytics.gold_fwa_network_analysis",
+            f"{catalog}.analytics.gold_fwa_member_risk",
+        ]),
+    },
 ]
 
 
@@ -921,20 +1071,51 @@ def create_or_get_genie_space(title: str, description: str, tables: list[str]) -
 
 
 def grant_genie_permissions(space_id: str, sp_names: list[str]) -> None:
-    """Grant CAN_RUN on a Genie space to all app service principals."""
+    """Grant CAN_RUN on a Genie space to all app and serving endpoint service principals.
+
+    Grants permissions at TWO levels:
+    1. Genie API level (/permissions/genie/{space_id}) — controls Genie API access
+    2. Workspace-objects level (/permissions/workspace-objects/{obj_id}) — controls
+       workspace ACL traversal required by serving endpoint runtime SPs
+    """
     acl = [{"user_name": _current_user, "permission_level": "CAN_MANAGE"}]
     for sp_name in sp_names:
         acl.append({"service_principal_name": sp_name, "permission_level": "CAN_RUN"})
 
+    # 1. Genie API permissions
     resp = _requests.put(
         f"https://{_host}/api/2.0/permissions/genie/{space_id}",
         headers=_genie_headers,
         json={"access_control_list": acl},
     )
     if resp.status_code == 200:
-        print(f"  Permissions granted to {len(sp_names)} SPs")
+        print(f"  Genie API permissions granted to {len(sp_names)} SPs")
     else:
-        print(f"  Permission grant failed ({resp.status_code}): {resp.text[:200]}")
+        print(f"  Genie API permission grant failed ({resp.status_code}): {resp.text[:200]}")
+
+    # 2. Workspace-objects permissions (required for serving endpoint runtime SPs)
+    # The Genie permissions response contains the workspace object ID in object_id field
+    try:
+        perm_resp = _requests.get(
+            f"https://{_host}/api/2.0/permissions/genie/{space_id}",
+            headers=_genie_headers,
+        )
+        if perm_resp.status_code == 200:
+            obj_path = perm_resp.json().get("object_id", "")  # e.g. "/genie/4095602807544805"
+            ws_obj_id = obj_path.split("/")[-1] if "/" in obj_path else ""
+            if ws_obj_id:
+                ws_acl = [{"service_principal_name": sp, "permission_level": "CAN_RUN"} for sp in sp_names]
+                ws_resp = _requests.patch(
+                    f"https://{_host}/api/2.0/permissions/workspace-objects/{ws_obj_id}",
+                    headers=_genie_headers,
+                    json={"access_control_list": ws_acl},
+                )
+                if ws_resp.status_code == 200:
+                    print(f"  Workspace-objects ACL granted (object_id={ws_obj_id})")
+                else:
+                    print(f"  Workspace-objects ACL failed ({ws_resp.status_code}): {ws_resp.text[:200]}")
+    except Exception as e:
+        print(f"  Workspace-objects ACL grant failed: {e}")
 
 
 # COMMAND ----------
@@ -954,6 +1135,41 @@ for cfg in GENIE_SPACE_CONFIGS:
     if space_id and sp_names_for_genie:
         grant_genie_permissions(space_id, sp_names_for_genie)
     print()
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Enable AI Gateway Inference Tables on Serving Endpoints
+# MAGIC Endpoint config updates reset AI Gateway settings, so this re-enables
+# MAGIC inference table logging on every bootstrap run.
+
+# COMMAND ----------
+
+import requests as _gw_requests
+
+_gw_host = spark.conf.get("spark.databricks.workspaceUrl")
+_gw_token = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
+_gw_headers = {"Authorization": f"Bearer {_gw_token}", "Content-Type": "application/json"}
+
+_ai_gateway_endpoints = {
+    "fwa-supervisor-agent": {"catalog_name": catalog, "schema_name": "analytics", "table_name_prefix": "fwa_supervisor"},
+}
+
+print("\n--- AI Gateway Inference Tables ---")
+for _ep_name, _itc in _ai_gateway_endpoints.items():
+    _ep_check = _gw_requests.get(f"https://{_gw_host}/api/2.0/serving-endpoints/{_ep_name}", headers=_gw_headers)
+    if _ep_check.status_code != 200:
+        print(f"  {_ep_name}: not found, skipping")
+        continue
+    _gw_resp = _gw_requests.put(
+        f"https://{_gw_host}/api/2.0/serving-endpoints/{_ep_name}/ai-gateway",
+        headers=_gw_headers,
+        json={"inference_table_config": {**_itc, "enabled": True}},
+    )
+    if _gw_resp.status_code == 200:
+        print(f"  {_ep_name}: enabled -> {_itc['catalog_name']}.{_itc['schema_name']}.{_itc['table_name_prefix']}_payload")
+    else:
+        print(f"  {_ep_name}: WARNING ({_gw_resp.status_code}): {_gw_resp.text[:200]}")
 
 # COMMAND ----------
 

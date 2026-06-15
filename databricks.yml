@@ -35,6 +35,8 @@ sync:
 
 include:
   - resources/*.yml
+  # Uncomment for classic-compute-enabled workspaces (adds standalone AutoML job):
+  # - resources/classic/*.yml
 
 targets:
   dev:
@@ -69,6 +71,13 @@ targets:
       profile: clinical-data-demo
     variables:
       catalog: clinical-data-demo
+
+  red-bricks-demo:
+    mode: development
+    workspace:
+      profile: fevm-red-bricks-demo
+    variables:
+      catalog: red_bricks_insurance_demo_catalog
 
   prod:
     mode: production

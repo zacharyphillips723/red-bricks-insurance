@@ -1,0 +1,417 @@
+{
+  "datasets": [
+    {
+      "name": "ds_total_scored",
+      "displayName": "Total Scored Claims",
+      "queryLines": [
+        "SELECT COUNT(*) AS total_scored FROM red_bricks_insurance_catalog.analytics.fwa_model_inference"
+      ]
+    },
+    {
+      "name": "ds_high_risk_count",
+      "displayName": "High Risk Claims",
+      "queryLines": [
+        "SELECT COUNT(*) AS high_risk_count FROM red_bricks_insurance_catalog.analytics.fwa_model_inference WHERE ml_risk_tier = 'High'"
+      ]
+    },
+    {
+      "name": "ds_model_version",
+      "displayName": "Model Version",
+      "queryLines": [
+        "SELECT MAX(model_version) AS current_version FROM red_bricks_insurance_catalog.analytics.fwa_ml_predictions"
+      ]
+    },
+    {
+      "name": "ds_prediction_distribution",
+      "displayName": "Prediction Distribution by Risk Tier",
+      "queryLines": [
+        "SELECT ml_risk_tier, COUNT(*) AS claim_count, ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1) AS pct FROM red_bricks_insurance_catalog.analytics.fwa_model_inference GROUP BY ml_risk_tier ORDER BY CASE ml_risk_tier WHEN 'High' THEN 1 WHEN 'Medium' THEN 2 ELSE 3 END"
+      ]
+    },
+    {
+      "name": "ds_probability_histogram",
+      "displayName": "Fraud Probability Distribution",
+      "queryLines": [
+        "SELECT ROUND(ml_fraud_probability, 1) AS probability_bucket, COUNT(*) AS claim_count FROM red_bricks_insurance_catalog.analytics.fwa_model_inference GROUP BY ROUND(ml_fraud_probability, 1) ORDER BY probability_bucket"
+      ]
+    },
+    {
+      "name": "ds_risk_by_lob",
+      "displayName": "Risk Tier by Line of Business",
+      "queryLines": [
+        "SELECT line_of_business, ml_risk_tier, COUNT(*) AS claim_count FROM red_bricks_insurance_catalog.analytics.fwa_model_inference WHERE line_of_business IS NOT NULL GROUP BY line_of_business, ml_risk_tier ORDER BY line_of_business, ml_risk_tier"
+      ]
+    },
+    {
+      "name": "ds_risk_by_claim_type",
+      "displayName": "Risk Tier by Claim Type",
+      "queryLines": [
+        "SELECT claim_type, ml_risk_tier, COUNT(*) AS claim_count, ROUND(AVG(billed_amount), 2) AS avg_billed FROM red_bricks_insurance_catalog.analytics.fwa_model_inference GROUP BY claim_type, ml_risk_tier ORDER BY claim_type"
+      ]
+    },
+    {
+      "name": "ds_prediction_by_month",
+      "displayName": "Predictions Over Time",
+      "queryLines": [
+        "SELECT service_year_month, ml_risk_tier, COUNT(*) AS claim_count FROM red_bricks_insurance_catalog.analytics.fwa_model_inference WHERE service_year_month IS NOT NULL GROUP BY service_year_month, ml_risk_tier ORDER BY service_year_month"
+      ]
+    },
+    {
+      "name": "ds_high_risk_providers",
+      "displayName": "High Risk Providers",
+      "queryLines": [
+        "SELECT provider_npi, COUNT(*) AS high_risk_claims, ROUND(AVG(ml_fraud_probability), 3) AS avg_fraud_prob, ROUND(SUM(billed_amount), 0) AS total_billed FROM red_bricks_insurance_catalog.analytics.fwa_model_inference WHERE ml_risk_tier = 'High' GROUP BY provider_npi ORDER BY high_risk_claims DESC LIMIT 20"
+      ]
+    },
+    {
+      "name": "ds_feature_drift",
+      "displayName": "Feature Drift Metrics",
+      "queryLines": [
+        "SELECT column_name, drift_type, ROUND(ks_test.statistic, 4) AS ks_statistic, ROUND(ks_test.pvalue, 6) AS ks_pvalue, ROUND(js_distance, 4) AS js_distance, ROUND(population_stability_index, 4) AS psi, CASE WHEN population_stability_index > 0.2 THEN 'DRIFT' WHEN population_stability_index > 0.1 THEN 'WARNING' ELSE 'STABLE' END AS drift_status FROM red_bricks_insurance_catalog.analytics.fwa_model_inference_drift_metrics WHERE drift_type IS NOT NULL ORDER BY js_distance DESC"
+      ]
+    },
+    {
+      "name": "ds_profile_metrics",
+      "displayName": "Profile Metrics Summary",
+      "queryLines": [
+        "SELECT column_name, data_type, ROUND(avg, 4) AS avg_value, ROUND(stddev, 4) AS stddev_value, ROUND(min, 4) AS min_value, ROUND(max, 4) AS max_value, num_nulls, distinct_count FROM red_bricks_insurance_catalog.analytics.fwa_model_inference_profile_metrics WHERE column_name NOT IN ('ml_risk_tier', 'claim_id', 'member_id', 'provider_npi') ORDER BY column_name"
+      ]
+    },
+    {
+      "name": "ds_governance_audit",
+      "displayName": "Governance Audit Trail",
+      "queryLines": [
+        "SELECT check_timestamp, model_version_champion, ROUND(psi_billed_amount, 4) AS psi_billed, ROUND(psi_ml_fraud_probability, 4) AS psi_fraud_prob, total_requests_7d, total_errors_7d, alert_count, alerts_json, mlflow_run_id FROM red_bricks_insurance_catalog.analytics.fwa_governance_audit ORDER BY check_timestamp DESC LIMIT 20"
+      ]
+    },
+    {
+      "name": "ds_low_confidence",
+      "displayName": "Low Confidence Claims",
+      "queryLines": [
+        "SELECT claim_id, member_id, provider_npi, billed_amount, ml_fraud_probability, ml_risk_tier, claim_type FROM red_bricks_insurance_catalog.analytics.fwa_model_inference WHERE ml_fraud_probability BETWEEN 0.35 AND 0.65 ORDER BY ml_fraud_probability DESC LIMIT 50"
+      ]
+    },
+    {
+      "name": "ds_serving_volume",
+      "displayName": "Serving Request Volume",
+      "queryLines": [
+        "SELECT date_trunc('hour', request_time) AS hour, served_entity_name, COUNT(*) AS request_count, SUM(CASE WHEN status_code != 200 THEN 1 ELSE 0 END) AS error_count FROM system.serving.served_model_requests WHERE endpoint_name = 'fwa_scorer_demo' AND request_time >= CURRENT_DATE() - INTERVAL 7 DAYS GROUP BY 1, 2 ORDER BY 1 DESC, 2"
+      ]
+    },
+    {
+      "name": "ds_serving_latency",
+      "displayName": "Serving Latency Percentiles",
+      "queryLines": [
+        "SELECT date_trunc('hour', request_time) AS hour, ROUND(PERCENTILE(execution_time_ms, 0.50), 0) AS p50_ms, ROUND(PERCENTILE(execution_time_ms, 0.95), 0) AS p95_ms, ROUND(PERCENTILE(execution_time_ms, 0.99), 0) AS p99_ms FROM system.serving.served_model_requests WHERE endpoint_name = 'fwa_scorer_demo' AND request_time >= CURRENT_DATE() - INTERVAL 7 DAYS GROUP BY 1 ORDER BY 1 DESC"
+      ]
+    },
+    {
+      "name": "ds_serving_error_rate",
+      "displayName": "Serving Error Rate",
+      "queryLines": [
+        "SELECT DATE(request_time) AS date, COUNT(*) AS total_requests, SUM(CASE WHEN status_code != 200 THEN 1 ELSE 0 END) AS errors, ROUND(SUM(CASE WHEN status_code != 200 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS error_rate_pct FROM system.serving.served_model_requests WHERE endpoint_name = 'fwa_scorer_demo' AND request_time >= CURRENT_DATE() - INTERVAL 7 DAYS GROUP BY 1 ORDER BY 1 DESC"
+      ]
+    },
+    {
+      "name": "ds_serving_daily_summary",
+      "displayName": "Daily Request Summary",
+      "queryLines": [
+        "SELECT DATE(request_time) AS date, COUNT(*) AS total_requests, COUNT(DISTINCT served_entity_name) AS served_entities, ROUND(AVG(execution_time_ms), 0) AS avg_latency_ms, ROUND(PERCENTILE(execution_time_ms, 0.95), 0) AS p95_latency_ms, SUM(CASE WHEN status_code != 200 THEN 1 ELSE 0 END) AS errors FROM system.serving.served_model_requests WHERE endpoint_name = 'fwa_scorer_demo' AND request_time >= CURRENT_DATE() - INTERVAL 30 DAYS GROUP BY 1 ORDER BY 1 DESC"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "model_performance",
+      "displayName": "Model Performance",
+      "layout": [
+        {
+          "widget": {
+            "name": "title",
+            "multilineTextboxSpec": {
+              "lines": ["## FWA Model Monitoring Dashboard"]
+            }
+          },
+          "position": {"x": 0, "y": 0, "width": 6, "height": 1}
+        },
+        {
+          "widget": {
+            "name": "subtitle",
+            "multilineTextboxSpec": {
+              "lines": ["Fraud scoring model performance, prediction distribution, and risk segmentation for Red Bricks Insurance."]
+            }
+          },
+          "position": {"x": 0, "y": 1, "width": 6, "height": 1}
+        },
+        {
+          "widget": {
+            "name": "kpi-total-scored",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_total_scored", "fields": [{"name": "total_scored", "expression": "`total_scored`"}], "disaggregated": true}}],
+            "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "total_scored", "displayName": "Claims"}}, "frame": {"showTitle": true, "title": "Total Scored Claims"}}
+          },
+          "position": {"x": 0, "y": 2, "width": 2, "height": 3}
+        },
+        {
+          "widget": {
+            "name": "kpi-high-risk",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_high_risk_count", "fields": [{"name": "high_risk_count", "expression": "`high_risk_count`"}], "disaggregated": true}}],
+            "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "high_risk_count", "displayName": "Claims"}}, "frame": {"showTitle": true, "title": "High Risk Claims"}}
+          },
+          "position": {"x": 2, "y": 2, "width": 2, "height": 3}
+        },
+        {
+          "widget": {
+            "name": "kpi-model-version",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_model_version", "fields": [{"name": "current_version", "expression": "`current_version`"}], "disaggregated": true}}],
+            "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "current_version", "displayName": "Version"}}, "frame": {"showTitle": true, "title": "Model Version"}}
+          },
+          "position": {"x": 4, "y": 2, "width": 2, "height": 3}
+        },
+        {
+          "widget": {
+            "name": "section-distribution",
+            "multilineTextboxSpec": {"lines": ["### Prediction Distribution"]}
+          },
+          "position": {"x": 0, "y": 5, "width": 6, "height": 1}
+        },
+        {
+          "widget": {
+            "name": "chart-risk-tier",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_prediction_distribution", "fields": [{"name": "ml_risk_tier", "expression": "`ml_risk_tier`"}, {"name": "claim_count", "expression": "`claim_count`"}, {"name": "pct", "expression": "`pct`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "ml_risk_tier", "scale": {"type": "categorical"}, "displayName": "Risk Tier"}, "y": {"fieldName": "claim_count", "scale": {"type": "quantitative"}, "displayName": "Claims"}, "color": {"fieldName": "ml_risk_tier", "scale": {"type": "categorical", "mapping": {"High": "#DB3B21", "Medium": "#DB6D00", "Low": "#00A972"}}, "displayName": "Risk Tier"}}, "frame": {"showTitle": true, "title": "Claims by Risk Tier"}}
+          },
+          "position": {"x": 0, "y": 6, "width": 3, "height": 6}
+        },
+        {
+          "widget": {
+            "name": "chart-probability-histogram",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_probability_histogram", "fields": [{"name": "probability_bucket", "expression": "`probability_bucket`"}, {"name": "claim_count", "expression": "`claim_count`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "probability_bucket", "scale": {"type": "quantitative"}, "displayName": "Fraud Probability"}, "y": {"fieldName": "claim_count", "scale": {"type": "quantitative"}, "displayName": "Claims"}}, "frame": {"showTitle": true, "title": "Fraud Probability Distribution"}}
+          },
+          "position": {"x": 3, "y": 6, "width": 3, "height": 6}
+        },
+        {
+          "widget": {
+            "name": "section-segments",
+            "multilineTextboxSpec": {"lines": ["### Risk Segmentation"]}
+          },
+          "position": {"x": 0, "y": 12, "width": 6, "height": 1}
+        },
+        {
+          "widget": {
+            "name": "chart-risk-by-lob",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_risk_by_lob", "fields": [{"name": "line_of_business", "expression": "`line_of_business`"}, {"name": "ml_risk_tier", "expression": "`ml_risk_tier`"}, {"name": "claim_count", "expression": "`claim_count`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "line_of_business", "scale": {"type": "categorical"}, "displayName": "Line of Business"}, "y": {"fieldName": "claim_count", "scale": {"type": "quantitative"}, "displayName": "Claims"}, "color": {"fieldName": "ml_risk_tier", "scale": {"type": "categorical", "mapping": {"High": "#DB3B21", "Medium": "#DB6D00", "Low": "#00A972"}}, "displayName": "Risk Tier"}}, "frame": {"showTitle": true, "title": "Risk Tier by Line of Business"}}
+          },
+          "position": {"x": 0, "y": 13, "width": 3, "height": 6}
+        },
+        {
+          "widget": {
+            "name": "chart-risk-by-claim-type",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_risk_by_claim_type", "fields": [{"name": "claim_type", "expression": "`claim_type`"}, {"name": "ml_risk_tier", "expression": "`ml_risk_tier`"}, {"name": "claim_count", "expression": "`claim_count`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "claim_type", "scale": {"type": "categorical"}, "displayName": "Claim Type"}, "y": {"fieldName": "claim_count", "scale": {"type": "quantitative"}, "displayName": "Claims"}, "color": {"fieldName": "ml_risk_tier", "scale": {"type": "categorical", "mapping": {"High": "#DB3B21", "Medium": "#DB6D00", "Low": "#00A972"}}, "displayName": "Risk Tier"}}, "frame": {"showTitle": true, "title": "Risk Tier by Claim Type"}}
+          },
+          "position": {"x": 3, "y": 13, "width": 3, "height": 6}
+        },
+        {
+          "widget": {
+            "name": "section-predictions-time",
+            "multilineTextboxSpec": {"lines": ["### Prediction Trends"]}
+          },
+          "position": {"x": 0, "y": 19, "width": 6, "height": 1}
+        },
+        {
+          "widget": {
+            "name": "chart-predictions-over-time",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_prediction_by_month", "fields": [{"name": "service_year_month", "expression": "`service_year_month`"}, {"name": "ml_risk_tier", "expression": "`ml_risk_tier`"}, {"name": "claim_count", "expression": "`claim_count`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "service_year_month", "scale": {"type": "temporal"}, "displayName": "Month"}, "y": {"fieldName": "claim_count", "scale": {"type": "quantitative"}, "displayName": "Claims"}, "color": {"fieldName": "ml_risk_tier", "scale": {"type": "categorical", "mapping": {"High": "#DB3B21", "Medium": "#DB6D00", "Low": "#00A972"}}, "displayName": "Risk Tier"}}, "frame": {"showTitle": true, "title": "Prediction Volume Over Time"}}
+          },
+          "position": {"x": 0, "y": 20, "width": 6, "height": 6}
+        },
+        {
+          "widget": {
+            "name": "section-high-risk",
+            "multilineTextboxSpec": {"lines": ["### High Risk Providers"]}
+          },
+          "position": {"x": 0, "y": 26, "width": 6, "height": 1}
+        },
+        {
+          "widget": {
+            "name": "table-high-risk-providers",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_high_risk_providers", "fields": [{"name": "provider_npi", "expression": "`provider_npi`"}, {"name": "high_risk_claims", "expression": "`high_risk_claims`"}, {"name": "avg_fraud_prob", "expression": "`avg_fraud_prob`"}, {"name": "total_billed", "expression": "`total_billed`"}], "disaggregated": true}}],
+            "spec": {"version": 2, "widgetType": "table", "encodings": {"columns": [{"fieldName": "provider_npi", "displayName": "Provider NPI", "type": "string"}, {"fieldName": "high_risk_claims", "displayName": "High Risk Claims", "type": "number"}, {"fieldName": "avg_fraud_prob", "displayName": "Avg Fraud Prob", "type": "number"}, {"fieldName": "total_billed", "displayName": "Total Billed ($)", "type": "number"}]}, "frame": {"showTitle": true, "title": "Top Providers by High Risk Claims"}}
+          },
+          "position": {"x": 0, "y": 27, "width": 6, "height": 7}
+        }
+      ]
+    },
+    {
+      "name": "drift_governance",
+      "displayName": "Drift & Governance",
+      "layout": [
+        {
+          "widget": {
+            "name": "title-drift",
+            "multilineTextboxSpec": {"lines": ["## Drift Detection & Governance"]}
+          },
+          "position": {"x": 0, "y": 0, "width": 6, "height": 1}
+        },
+        {
+          "widget": {
+            "name": "subtitle-drift",
+            "multilineTextboxSpec": {"lines": ["Feature drift from Lakehouse Monitor, profile metrics, PSI/KS manual drift, governance audit trail, and low-confidence predictions."]}
+          },
+          "position": {"x": 0, "y": 1, "width": 6, "height": 1}
+        },
+        {
+          "widget": {
+            "name": "section-drift",
+            "multilineTextboxSpec": {"lines": ["### Feature Drift (Lakehouse Monitor)"]}
+          },
+          "position": {"x": 0, "y": 2, "width": 6, "height": 1}
+        },
+        {
+          "widget": {
+            "name": "table-feature-drift",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_feature_drift", "fields": [{"name": "column_name", "expression": "`column_name`"}, {"name": "drift_type", "expression": "`drift_type`"}, {"name": "ks_statistic", "expression": "`ks_statistic`"}, {"name": "ks_pvalue", "expression": "`ks_pvalue`"}, {"name": "js_distance", "expression": "`js_distance`"}, {"name": "psi", "expression": "`psi`"}, {"name": "drift_status", "expression": "`drift_status`"}], "disaggregated": true}}],
+            "spec": {"version": 2, "widgetType": "table", "encodings": {"columns": [{"fieldName": "column_name", "displayName": "Feature", "type": "string"}, {"fieldName": "drift_type", "displayName": "Drift Type", "type": "string"}, {"fieldName": "ks_statistic", "displayName": "KS Statistic", "type": "number"}, {"fieldName": "ks_pvalue", "displayName": "KS P-Value", "type": "number"}, {"fieldName": "js_distance", "displayName": "JS Distance", "type": "number"}, {"fieldName": "psi", "displayName": "PSI", "type": "number"}, {"fieldName": "drift_status", "displayName": "Status", "type": "string"}]}, "frame": {"showTitle": true, "title": "Feature Drift Metrics (from _drift_metrics)"}}
+          },
+          "position": {"x": 0, "y": 3, "width": 6, "height": 7}
+        },
+        {
+          "widget": {
+            "name": "section-profile",
+            "multilineTextboxSpec": {"lines": ["### Profile Metrics (Lakehouse Monitor)"]}
+          },
+          "position": {"x": 0, "y": 10, "width": 6, "height": 1}
+        },
+        {
+          "widget": {
+            "name": "table-profile-metrics",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_profile_metrics", "fields": [{"name": "column_name", "expression": "`column_name`"}, {"name": "data_type", "expression": "`data_type`"}, {"name": "avg_value", "expression": "`avg_value`"}, {"name": "stddev_value", "expression": "`stddev_value`"}, {"name": "min_value", "expression": "`min_value`"}, {"name": "max_value", "expression": "`max_value`"}, {"name": "num_nulls", "expression": "`num_nulls`"}, {"name": "distinct_count", "expression": "`distinct_count`"}], "disaggregated": true}}],
+            "spec": {"version": 2, "widgetType": "table", "encodings": {"columns": [{"fieldName": "column_name", "displayName": "Feature", "type": "string"}, {"fieldName": "data_type", "displayName": "Type", "type": "string"}, {"fieldName": "avg_value", "displayName": "Mean", "type": "number"}, {"fieldName": "stddev_value", "displayName": "Std Dev", "type": "number"}, {"fieldName": "min_value", "displayName": "Min", "type": "number"}, {"fieldName": "max_value", "displayName": "Max", "type": "number"}, {"fieldName": "num_nulls", "displayName": "Nulls", "type": "number"}, {"fieldName": "distinct_count", "displayName": "Distinct", "type": "number"}]}, "frame": {"showTitle": true, "title": "Feature Profile Summary (from _profile_metrics)"}}
+          },
+          "position": {"x": 0, "y": 11, "width": 6, "height": 7}
+        },
+        {
+          "widget": {
+            "name": "section-governance",
+            "multilineTextboxSpec": {"lines": ["### Governance Audit Trail"]}
+          },
+          "position": {"x": 0, "y": 18, "width": 6, "height": 1}
+        },
+        {
+          "widget": {
+            "name": "table-governance",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_governance_audit", "fields": [{"name": "check_timestamp", "expression": "`check_timestamp`"}, {"name": "model_version_champion", "expression": "`model_version_champion`"}, {"name": "psi_billed", "expression": "`psi_billed`"}, {"name": "psi_fraud_prob", "expression": "`psi_fraud_prob`"}, {"name": "total_requests_7d", "expression": "`total_requests_7d`"}, {"name": "total_errors_7d", "expression": "`total_errors_7d`"}, {"name": "alert_count", "expression": "`alert_count`"}, {"name": "alerts_json", "expression": "`alerts_json`"}, {"name": "mlflow_run_id", "expression": "`mlflow_run_id`"}], "disaggregated": true}}],
+            "spec": {"version": 2, "widgetType": "table", "encodings": {"columns": [{"fieldName": "check_timestamp", "displayName": "Timestamp", "type": "string"}, {"fieldName": "model_version_champion", "displayName": "Champion", "type": "string"}, {"fieldName": "psi_billed", "displayName": "PSI (Billed)", "type": "number"}, {"fieldName": "psi_fraud_prob", "displayName": "PSI (Fraud Prob)", "type": "number"}, {"fieldName": "total_requests_7d", "displayName": "Requests (7d)", "type": "number"}, {"fieldName": "total_errors_7d", "displayName": "Errors (7d)", "type": "number"}, {"fieldName": "alert_count", "displayName": "Alerts", "type": "number"}, {"fieldName": "alerts_json", "displayName": "Alert Details", "type": "string"}, {"fieldName": "mlflow_run_id", "displayName": "MLflow Run", "type": "string"}]}, "frame": {"showTitle": true, "title": "Governance Check History"}}
+          },
+          "position": {"x": 0, "y": 19, "width": 6, "height": 7}
+        },
+        {
+          "widget": {
+            "name": "section-low-confidence",
+            "multilineTextboxSpec": {"lines": ["### Low-Confidence Claims (Manual Review)"]}
+          },
+          "position": {"x": 0, "y": 26, "width": 6, "height": 1}
+        },
+        {
+          "widget": {
+            "name": "table-low-confidence",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_low_confidence", "fields": [{"name": "claim_id", "expression": "`claim_id`"}, {"name": "member_id", "expression": "`member_id`"}, {"name": "provider_npi", "expression": "`provider_npi`"}, {"name": "billed_amount", "expression": "`billed_amount`"}, {"name": "ml_fraud_probability", "expression": "`ml_fraud_probability`"}, {"name": "ml_risk_tier", "expression": "`ml_risk_tier`"}, {"name": "claim_type", "expression": "`claim_type`"}], "disaggregated": true}}],
+            "spec": {"version": 2, "widgetType": "table", "encodings": {"columns": [{"fieldName": "claim_id", "displayName": "Claim ID", "type": "string"}, {"fieldName": "member_id", "displayName": "Member ID", "type": "string"}, {"fieldName": "provider_npi", "displayName": "Provider NPI", "type": "string"}, {"fieldName": "billed_amount", "displayName": "Billed ($)", "type": "number"}, {"fieldName": "ml_fraud_probability", "displayName": "Fraud Probability", "type": "number"}, {"fieldName": "ml_risk_tier", "displayName": "Risk Tier", "type": "string"}, {"fieldName": "claim_type", "displayName": "Claim Type", "type": "string"}]}, "frame": {"showTitle": true, "title": "Claims with Probability 0.35-0.65 (Uncertain Zone)"}}
+          },
+          "position": {"x": 0, "y": 27, "width": 6, "height": 7}
+        }
+      ]
+    },
+    {
+      "name": "serving_metrics",
+      "displayName": "Serving Metrics",
+      "layout": [
+        {
+          "widget": {
+            "name": "title-serving",
+            "multilineTextboxSpec": {"lines": ["## Model Serving Metrics"]}
+          },
+          "position": {"x": 0, "y": 0, "width": 6, "height": 1}
+        },
+        {
+          "widget": {
+            "name": "subtitle-serving",
+            "multilineTextboxSpec": {"lines": ["Real-time serving endpoint metrics from `system.serving` — request volume, latency percentiles, and error rates for the FWA scorer endpoint."]}
+          },
+          "position": {"x": 0, "y": 1, "width": 6, "height": 1}
+        },
+        {
+          "widget": {
+            "name": "section-volume",
+            "multilineTextboxSpec": {"lines": ["### Request Volume by Served Entity"]}
+          },
+          "position": {"x": 0, "y": 2, "width": 6, "height": 1}
+        },
+        {
+          "widget": {
+            "name": "chart-request-volume",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_serving_volume", "fields": [{"name": "hour", "expression": "`hour`"}, {"name": "served_entity_name", "expression": "`served_entity_name`"}, {"name": "request_count", "expression": "`request_count`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "hour", "scale": {"type": "temporal"}, "displayName": "Hour"}, "y": {"fieldName": "request_count", "scale": {"type": "quantitative"}, "displayName": "Requests"}, "color": {"fieldName": "served_entity_name", "scale": {"type": "categorical"}, "displayName": "Served Entity"}}, "frame": {"showTitle": true, "title": "Request Volume Over Time (7d)"}}
+          },
+          "position": {"x": 0, "y": 3, "width": 6, "height": 6}
+        },
+        {
+          "widget": {
+            "name": "section-latency",
+            "multilineTextboxSpec": {"lines": ["### Latency Percentiles"]}
+          },
+          "position": {"x": 0, "y": 9, "width": 6, "height": 1}
+        },
+        {
+          "widget": {
+            "name": "chart-latency-p50",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_serving_latency", "fields": [{"name": "hour", "expression": "`hour`"}, {"name": "p50_ms", "expression": "`p50_ms`"}, {"name": "p95_ms", "expression": "`p95_ms`"}, {"name": "p99_ms", "expression": "`p99_ms`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "line", "encodings": {"x": {"fieldName": "hour", "scale": {"type": "temporal"}, "displayName": "Hour"}, "y": {"fieldName": "p50_ms", "scale": {"type": "quantitative"}, "displayName": "Latency (ms)"}}, "frame": {"showTitle": true, "title": "P50 Latency Over Time (ms)"}}
+          },
+          "position": {"x": 0, "y": 10, "width": 3, "height": 6}
+        },
+        {
+          "widget": {
+            "name": "chart-latency-p95-p99",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_serving_latency", "fields": [{"name": "hour", "expression": "`hour`"}, {"name": "p95_ms", "expression": "`p95_ms`"}, {"name": "p99_ms", "expression": "`p99_ms`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "line", "encodings": {"x": {"fieldName": "hour", "scale": {"type": "temporal"}, "displayName": "Hour"}, "y": {"fieldName": "p95_ms", "scale": {"type": "quantitative"}, "displayName": "Latency (ms)"}}, "frame": {"showTitle": true, "title": "P95/P99 Latency Over Time (ms)"}}
+          },
+          "position": {"x": 3, "y": 10, "width": 3, "height": 6}
+        },
+        {
+          "widget": {
+            "name": "section-errors",
+            "multilineTextboxSpec": {"lines": ["### Error Rate"]}
+          },
+          "position": {"x": 0, "y": 16, "width": 6, "height": 1}
+        },
+        {
+          "widget": {
+            "name": "chart-error-rate",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_serving_error_rate", "fields": [{"name": "date", "expression": "`date`"}, {"name": "error_rate_pct", "expression": "`error_rate_pct`"}], "disaggregated": true}}],
+            "spec": {"version": 3, "widgetType": "line", "encodings": {"x": {"fieldName": "date", "scale": {"type": "temporal"}, "displayName": "Date"}, "y": {"fieldName": "error_rate_pct", "scale": {"type": "quantitative"}, "displayName": "Error Rate (%)"}}, "frame": {"showTitle": true, "title": "Daily Error Rate (%)"}}
+          },
+          "position": {"x": 0, "y": 17, "width": 6, "height": 6}
+        },
+        {
+          "widget": {
+            "name": "section-daily-summary",
+            "multilineTextboxSpec": {"lines": ["### Daily Request Summary"]}
+          },
+          "position": {"x": 0, "y": 23, "width": 6, "height": 1}
+        },
+        {
+          "widget": {
+            "name": "table-daily-summary",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_serving_daily_summary", "fields": [{"name": "date", "expression": "`date`"}, {"name": "total_requests", "expression": "`total_requests`"}, {"name": "served_entities", "expression": "`served_entities`"}, {"name": "avg_latency_ms", "expression": "`avg_latency_ms`"}, {"name": "p95_latency_ms", "expression": "`p95_latency_ms`"}, {"name": "errors", "expression": "`errors`"}], "disaggregated": true}}],
+            "spec": {"version": 2, "widgetType": "table", "encodings": {"columns": [{"fieldName": "date", "displayName": "Date", "type": "string"}, {"fieldName": "total_requests", "displayName": "Requests", "type": "number"}, {"fieldName": "served_entities", "displayName": "Entities", "type": "number"}, {"fieldName": "avg_latency_ms", "displayName": "Avg Latency (ms)", "type": "number"}, {"fieldName": "p95_latency_ms", "displayName": "P95 Latency (ms)", "type": "number"}, {"fieldName": "errors", "displayName": "Errors", "type": "number"}]}, "frame": {"showTitle": true, "title": "Daily Request Summary (30d)"}}
+          },
+          "position": {"x": 0, "y": 24, "width": 6, "height": 7}
+        }
+      ]
+    }
+  ]
+}

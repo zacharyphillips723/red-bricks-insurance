@@ -216,11 +216,14 @@ class AgentQueryIn(BaseModel):
     question: str
     target_id: Optional[str] = None
     target_type: Optional[str] = None
+    model_endpoint: Optional[str] = None
 
 
 class AgentQueryOut(BaseModel):
     answer: str
     sources: list[dict] = []
+    model_used: Optional[str] = None
+    policy_chunks: list[dict] = []
 
 
 class GenieQuestionIn(BaseModel):

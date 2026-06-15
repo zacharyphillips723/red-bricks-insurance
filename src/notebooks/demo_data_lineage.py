@@ -15,7 +15,7 @@
 
 # COMMAND ----------
 
-dbutils.widgets.text("catalog", "red_bricks_insurance", "Catalog")
+dbutils.widgets.text("catalog", "red_bricks_insurance_catalog", "Catalog")
 catalog = dbutils.widgets.get("catalog")
 cat = f"`{catalog}`"
 

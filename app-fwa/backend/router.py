@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 from typing import Optional
 
 from databricks.sdk import WorkspaceClient
@@ -9,9 +10,10 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import text
 
 from .database import db
-from .env_config import UC_CATALOG, SQL_WAREHOUSE_ID
+from .env_config import UC_CATALOG, SQL_WAREHOUSE_ID, GATEWAY_MODELS, GENIE_SPACE_ID, GEMINI_ENDPOINT
 from .agent import (
     query_fwa_agent,
+    query_fwa_agent_via_endpoint,
     get_provider_risk_profile,
     get_provider_flagged_claims,
     get_provider_ml_scores,
@@ -676,12 +678,131 @@ async def get_network_graph():
 
 @api.post("/agent/query", response_model=AgentQueryOut, operation_id="queryFWAAgent")
 async def query_agent(query_in: AgentQueryIn):
-    result = await asyncio.to_thread(
-        query_fwa_agent,
-        query_in.target_id or "",
-        query_in.target_type or "investigation",
-        query_in.question,
-    )
+    agent_mode = os.environ.get("AGENT_MODE", "endpoint")
+    if agent_mode == "endpoint":
+        result = await asyncio.to_thread(
+            query_fwa_agent_via_endpoint,
+            query_in.target_id or "",
+            query_in.target_type or "investigation",
+            query_in.question,
+            query_in.model_endpoint,
+        )
+    else:
+        result = await asyncio.to_thread(
+            query_fwa_agent,
+            query_in.target_id or "",
+            query_in.target_type or "investigation",
+            query_in.question,
+            query_in.model_endpoint,
+        )
     return AgentQueryOut(**result)
 
 
+@api.get("/agent/models", operation_id="getAvailableModels")
+async def get_available_models():
+    return {"models": GATEWAY_MODELS}
+
+
+# ===================================================================
+# Observability
+# ===================================================================
+
+@api.get("/observability/traces", operation_id="getObservabilityTraces")
+async def get_observability_traces():
+    """Get recent agent traces from UC OTel span tables (real-time via MLflow tracing)."""
+    try:
+        spans_table = f"`{UC_CATALOG}`.`analytics`.`fwa_agent_otel_spans`"
+        sql = f"""
+            SELECT trace_id,
+                   MIN(start_time_unix_nano) AS trace_start_ns,
+                   MAX(end_time_unix_nano) AS trace_end_ns,
+                   COUNT(*) AS span_count,
+                   CASE WHEN SUM(CASE WHEN status.code = 'STATUS_CODE_ERROR' THEN 1 ELSE 0 END) > 0
+                        THEN 'ERROR' ELSE 'OK' END AS trace_status
+            FROM {spans_table}
+            GROUP BY trace_id
+            ORDER BY trace_start_ns DESC
+            LIMIT 25
+        """
+        rows = await asyncio.to_thread(_uc_query, sql)
+        records = []
+        for d in rows:
+            start_ns = int(d.get("trace_start_ns") or 0)
+            end_ns = int(d.get("trace_end_ns") or 0)
+            records.append({
+                "request_id": d.get("trace_id", ""),
+                "timestamp_ms": start_ns // 1_000_000 if start_ns else 0,
+                "execution_time_ms": (end_ns - start_ns) // 1_000_000 if start_ns and end_ns else 0,
+                "status": d.get("trace_status", "UNKNOWN"),
+                "span_count": int(d.get("span_count") or 0),
+                "tags": {},
+            })
+        return {"traces": records}
+    except Exception as e:
+        print(f"[observability] Trace fetch error: {e}")
+        return {"traces": [], "error": str(e)}
+
+
+@api.get("/observability/costs", operation_id="getObservabilityCosts")
+async def get_observability_costs():
+    """Get token usage and cost summary from system tables — scoped to this app's service principal."""
+    try:
+        endpoints = ", ".join(f"'{m}'" for m in GATEWAY_MODELS)
+        # Auto-detect workspace ID to scope queries (avoids account-wide totals)
+        try:
+            w = WorkspaceClient()
+            workspace_id = w.get_workspace_id()
+            workspace_filter = f"AND eu.workspace_id = '{workspace_id}'" if workspace_id else ""
+        except Exception:
+            workspace_filter = ""
+        rows = _uc_query(f"""
+            SELECT
+                se.endpoint_name AS endpoint,
+                COUNT(*) AS request_count,
+                COALESCE(SUM(eu.input_token_count), 0) AS total_input_tokens,
+                COALESCE(SUM(eu.output_token_count), 0) AS total_output_tokens,
+                CASE se.endpoint_name
+                  WHEN 'databricks-llama-4-maverick'
+                    THEN ROUND(SUM(eu.input_token_count) * 0.40 / 1000000
+                             + SUM(eu.output_token_count) * 1.60 / 1000000, 4)
+                  WHEN 'databricks-gemini-2-5-pro'
+                    THEN ROUND(SUM(eu.input_token_count) * 1.25 / 1000000
+                             + SUM(eu.output_token_count) * 10.00 / 1000000, 4)
+                  ELSE 0
+                END AS estimated_cost_usd
+            FROM system.serving.endpoint_usage eu
+            JOIN system.serving.served_entities se
+              ON eu.served_entity_id = se.served_entity_id
+            WHERE se.endpoint_name IN ({endpoints})
+              AND eu.request_time >= DATE_SUB(CURRENT_TIMESTAMP(), 30)
+              {workspace_filter}
+            GROUP BY se.endpoint_name
+            ORDER BY request_count DESC
+        """)
+        return {"costs": rows}
+    except Exception as e:
+        log.warning("Cost query error: %s", e)
+        return {"costs": [], "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Genie Search
+# ---------------------------------------------------------------------------
+
+@api.post("/genie/ask", operation_id="askGenie")
+async def ask_genie_route(payload: dict):
+    """Send a natural language question to the Genie Space."""
+    from .genie import ask_genie
+
+    question = payload.get("question", "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="question is required")
+    conversation_id = payload.get("conversation_id", "")
+    result = await asyncio.to_thread(
+        ask_genie,
+        question_text=question,
+        conversation_id=conversation_id,
+        space_id=GENIE_SPACE_ID,
+        warehouse_id=SQL_WAREHOUSE_ID,
+    )
+    return result

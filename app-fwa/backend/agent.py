@@ -1,21 +1,38 @@
-"""FWA Investigation Agent and analytics data integration module.
+"""FWA Investigation Supervisor Agent — Agent-to-Agent Communication.
 
-Implements the FWA investigation agent directly in the backend using
-Foundation Model API + Statement Execution API with tool-calling for
-dynamic UC table access. Uses the Databricks SDK for all data access.
+Implements a supervisor pattern where:
+  1. Supervisor (Llama 4 Maverick) receives the analyst's question
+  2. Routes to two sub-agents in parallel:
+     - Genie sub-agent: structured claims data via natural language SQL
+     - Gemini sub-agent: medical policy RAG + tool-calling analysis
+  3. Supervisor synthesizes both responses into a unified investigation briefing
+
+All calls are traced via MLflow with a full span hierarchy:
+  AGENT (supervisor)
+    ├── TOOL (genie_subagent)
+    ├── AGENT (gemini_subagent)
+    │     ├── TOOL (query_uc_table)
+    │     ├── RETRIEVER (search_medical_policies)
+    │     ├── TOOL (classify_fwa_type)
+    │     └── LLM (gemini_call)
+    └── LLM (supervisor_synthesis)
 """
 
 import json
 import os
 import re
+import time
 import traceback
-
+import mlflow
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import StatementParameterListItem
 
-from .env_config import UC_CATALOG, SQL_WAREHOUSE_ID, LLM_ENDPOINT, FWA_MODEL_ENDPOINT
+from .env_config import (
+    UC_CATALOG, SQL_WAREHOUSE_ID, LLM_ENDPOINT, GEMINI_ENDPOINT,
+    FWA_MODEL_ENDPOINT, VS_INDEX_NAME, GATEWAY_MODELS, GENIE_SPACE_ID,
+)
 
-_CAT = f"`{UC_CATALOG}`"  # SQL-safe quoting (handles hyphens in catalog names)
+_CAT = f"`{UC_CATALOG}`"
 # Table references (used by direct API routes)
 PROVIDER_RISK_TABLE = f"{_CAT}.fwa.gold_fwa_provider_risk"
 CLAIM_FLAGS_TABLE = f"{_CAT}.fwa.gold_fwa_claim_flags"
@@ -24,32 +41,35 @@ MODEL_INFERENCE_TABLE = f"{_CAT}.analytics.gold_fwa_model_scores"
 FWA_SUMMARY_TABLE = f"{_CAT}.fwa.gold_fwa_summary"
 
 # Allowed schemas the agent can query
-ALLOWED_SCHEMAS = ["fwa", "analytics", "claims", "members", "providers", "pharmacy", "benefits"]
+ALLOWED_SCHEMAS = ["fwa", "analytics", "claims", "members", "providers", "pharmacy", "benefits", "prior_auth"]
 
-SYSTEM_PROMPT = """You are an FWA (Fraud, Waste & Abuse) Investigation Specialist for Red Bricks Insurance.
-You help SIU analysts investigate suspected fraud by querying structured data
-and synthesizing findings into actionable investigation briefings.
+# ---------------------------------------------------------------------------
+# Prompts
+# ---------------------------------------------------------------------------
 
-You have access to tools that let you query Unity Catalog tables directly. Use them to:
-- Look up investigation details, provider risk profiles, flagged claims
-- Retrieve ML model fraud predictions from the inference table
-- Find related claims, members, or providers
-- Compare metrics against peers or benchmarks
-- Discover patterns across multiple tables
+SUPERVISOR_SYSTEM_PROMPT = """You are the FWA Investigation Supervisor for Red Bricks Insurance.
+You coordinate two specialized sub-agents to produce comprehensive investigation briefings:
 
-Strategy: First gather all relevant data using tool calls, then synthesize.
+1. **Genie** — queries structured claims data (billing totals, claim counts, procedure distributions)
+2. **Gemini Analyst** — searches medical policies, analyzes compliance, classifies Fraud/Waste/Abuse
+
+You receive their raw outputs and synthesize a unified briefing.
 
 Your final response MUST include these sections:
 
 ## CASE SUMMARY
 Brief overview of the investigation target, fraud types suspected, and current status.
 
-## KEY FINDINGS
-Top 3-5 findings with supporting evidence (claim IDs, dollar amounts, dates).
+## STRUCTURED DATA ANALYSIS
+Key findings from claims data (from Genie): billing patterns, dollar amounts, claim volumes,
+procedure code distributions. Cite specific numbers.
 
-## EVIDENCE ANALYSIS
-Detailed analysis of billing patterns, anomalies, and red flags. Include both
-rules-based flags AND ML model scores where available.
+## POLICY COMPLIANCE ANALYSIS
+Findings from medical policy review (from Gemini Analyst):
+- Which policies were searched and what they say
+- Whether billing practices comply with policy
+- Classification of each finding as **Fraud**, **Waste**, or **Abuse** with reasoning
+- Specific policy names, rule types, and procedure codes cited
 
 ## RISK ASSESSMENT
 Risk rating: **Critical** / **High** / **Medium** / **Low** with justification.
@@ -57,9 +77,56 @@ Risk rating: **Critical** / **High** / **Medium** / **Low** with justification.
 ## RECOMMENDED ACTIONS
 Prioritized next steps with timeframes.
 
-Always cite data sources. Never fabricate evidence."""
+Always attribute which sub-agent provided each finding. Never fabricate evidence."""
 
-TOOLS = [
+GEMINI_SUBAGENT_PROMPT = """You are an FWA (Fraud, Waste & Abuse) Clinical Analyst for Red Bricks Insurance.
+You specialize in medical policy compliance and clinical billing analysis.
+
+You have tools to:
+- Query Unity Catalog tables for provider risk profiles, flagged claims, and ML model scores
+- Search medical policy documents via semantic similarity (Vector Search)
+- Classify findings as Fraud, Waste, or Abuse based on evidence and policy
+- Query the Lakebase investigation case database for investigation status and audit trail
+
+## MANDATORY WORKFLOW — Follow these steps in order:
+
+1. **Query provider/investigation data** — Use query_uc_table or query_lakebase_cases to get
+   the provider risk profile, flagged claims, ML model scores, and investigation details.
+
+2. **ALWAYS search medical policies** — You MUST call search_medical_policies at least once
+   for EVERY investigation. This is non-negotiable. Our medical policy documents are the
+   authoritative source for determining whether billing practices are compliant. Search for
+   the specific procedure codes, service categories, or billing patterns found in step 1.
+   If multiple procedure codes or fraud types are involved, make multiple searches.
+
+3. **Classify each finding** — After gathering both claims data AND policy context, use
+   classify_fwa_type to formally classify each suspicious finding as Fraud, Waste, or Abuse.
+
+## CRITICAL RULES:
+- NEVER skip search_medical_policies. Even if the fraud seems obvious from claims data alone,
+  you MUST search our medical policies to cite the specific rules being violated.
+- When you find procedure codes (CPT codes like 99213, 99215, etc.), ALWAYS search for the
+  policy governing those codes.
+- When you find fraud types (upcoding, unbundling, duplicate billing), ALWAYS search for our
+  policy on that practice.
+- Reference specific policy names, rule types, claim IDs, and dollar amounts in your analysis."""
+
+GENIE_QUESTIONS_TEMPLATE = """Based on this investigation question about {target_type} {target_id}:
+"{question}"
+
+Generate exactly 1 comprehensive natural language question for a SQL analytics system that can query claims data.
+The question should be broad enough to surface the most relevant evidence in a single query.
+Combine multiple dimensions where possible — e.g. "Show total billed vs allowed amounts,
+top procedure codes by volume, E/M visit level distribution, and denial rate for provider X"
+rather than asking separate narrow questions.
+
+Return ONLY a JSON array with exactly 1 question string, nothing else."""
+
+# ---------------------------------------------------------------------------
+# Gemini sub-agent tools (same as before)
+# ---------------------------------------------------------------------------
+
+GEMINI_TOOLS = [
     {
         "type": "function",
         "function": {
@@ -71,12 +138,8 @@ TOOLS = [
                 f"- {_CAT}.fwa.gold_fwa_claim_flags: Flagged claims with evidence\n"
                 f"- {_CAT}.fwa.gold_fwa_summary: Aggregate FWA metrics\n"
                 f"- {_CAT}.fwa.silver_fwa_signals: Individual FWA signals\n"
-                f"- {_CAT}.fwa.silver_fwa_investigation_cases: Investigation case records\n"
-                f"- {_CAT}.analytics.gold_fwa_member_risk: Member-level fraud indicators\n"
-                f"- {_CAT}.analytics.gold_fwa_network_analysis: Provider referral rings\n"
                 f"- {_CAT}.analytics.gold_fwa_model_scores: ML model fraud predictions per claim\n"
                 f"- {_CAT}.claims.silver_claims_medical: Medical claims detail\n"
-                f"- {_CAT}.members.silver_enrollment: Member enrollment\n"
                 f"- {_CAT}.providers.silver_providers: Provider demographics\n"
                 "Always include a LIMIT clause (max 50 rows). Only SELECT/WITH/DESCRIBE allowed."
             ),
@@ -107,10 +170,91 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_medical_policies",
+            "description": (
+                "Search Red Bricks Insurance medical policies using semantic similarity. "
+                "Returns relevant policy sections with citations (policy name, rule ID, rule type, "
+                "procedure codes, and the full policy text). Use this to determine if a provider's "
+                "billing practices comply with company medical policy."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural language query describing the billing practice or policy question.",
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "Number of policy sections to retrieve (default 5).",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "classify_fwa_type",
+            "description": (
+                "Classify an FWA finding as Fraud, Waste, or Abuse based on claim evidence and "
+                "retrieved medical policy context. Returns a structured classification with confidence "
+                "score, reasoning, and policy citations."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "claim_summary": {
+                        "type": "string",
+                        "description": "Summary of the claim or billing pattern being evaluated.",
+                    },
+                    "policy_context": {
+                        "type": "string",
+                        "description": "Relevant medical policy sections retrieved from search_medical_policies.",
+                    },
+                },
+                "required": ["claim_summary", "policy_context"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_lakebase_cases",
+            "description": (
+                "Query the Lakebase FWA investigation case database for operational data. "
+                "Returns investigation details, audit trail, evidence records, and case status. "
+                "Tables: fwa_investigations, investigation_audit_log, investigation_evidence, fraud_investigators. "
+                "Use this to get the current status, timeline, assigned investigator, and prior actions on a case."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sql": {
+                        "type": "string",
+                        "description": "SQL query against the fwa_cases Lakebase database. Key tables: fwa_investigations, investigation_audit_log, investigation_evidence, fraud_investigators.",
+                    },
+                    "purpose": {
+                        "type": "string",
+                        "description": "Brief description of what this query retrieves.",
+                    },
+                },
+                "required": ["sql", "purpose"],
+            },
+        },
+    },
 ]
 
 MAX_TOOL_ROUNDS = 6
 
+
+# ---------------------------------------------------------------------------
+# Low-level helpers
+# ---------------------------------------------------------------------------
 
 def _execute_sql(sql: str, params: list | None = None) -> list[dict]:
     """Execute SQL via SDK Statement Execution API."""
@@ -141,22 +285,19 @@ def _sdk_request(method: str, path: str, body: dict | None = None) -> dict:
 
 
 def _validate_sql(sql: str) -> str | None:
-    """Validate SQL is read-only and references allowed schemas. Returns error message or None."""
+    """Validate SQL is read-only and references allowed schemas."""
     sql_upper = sql.upper().lstrip()
     if not sql_upper.startswith("SELECT") and not sql_upper.startswith("WITH") and not sql_upper.startswith("DESCRIBE"):
         return "Only SELECT, WITH, and DESCRIBE statements are allowed."
-
     dangerous = re.compile(
         r'\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|MERGE)\b',
         re.IGNORECASE,
     )
     if dangerous.search(sql):
         return "Write operations are not permitted."
-
     schema_found = any(s in sql.lower() for s in ALLOWED_SCHEMAS)
     if not schema_found and "information_schema" not in sql.lower():
         return f"Query must reference one of: {ALLOWED_SCHEMAS}"
-
     return None
 
 
@@ -165,15 +306,12 @@ def _execute_tool(tool_name: str, tool_args: dict) -> str:
     if tool_name == "query_uc_table":
         sql = tool_args.get("sql", "").strip()
         purpose = tool_args.get("purpose", "")
-
         error = _validate_sql(sql)
         if error:
             return json.dumps({"error": error})
-
         if "LIMIT" not in sql.upper():
             sql = sql.rstrip(";") + " LIMIT 50"
-
-        print(f"[FWA Agent] Tool query ({purpose}): {sql[:200]}")
+        print(f"[Gemini Agent] Tool query ({purpose}): {sql[:200]}")
         try:
             rows = _execute_sql(sql)
             if not rows:
@@ -184,7 +322,6 @@ def _execute_tool(tool_name: str, tool_args: dict) -> str:
 
     elif tool_name == "list_table_columns":
         table_name = tool_args.get("table_name", "").strip()
-        # Normalize: strip any existing catalog prefix, then re-add with backticks
         table_name = table_name.replace(f"`{UC_CATALOG}`.", "").replace(f"{UC_CATALOG}.", "")
         table_name = f"{_CAT}.{table_name}"
         try:
@@ -193,172 +330,425 @@ def _execute_tool(tool_name: str, tool_args: dict) -> str:
         except Exception as e:
             return json.dumps({"error": f"Could not describe table: {str(e)}"})
 
+    elif tool_name == "search_medical_policies":
+        query = tool_args.get("query", "").strip()
+        top_k = tool_args.get("top_k", 5)
+        if not query:
+            return json.dumps({"error": "Query is required."})
+        print(f"[Gemini Agent] Searching medical policies: {query[:100]}")
+        try:
+            with mlflow.start_span(name="search_medical_policies", span_type="RETRIEVER") as span:
+                span.set_inputs({"query": query, "top_k": top_k})
+                w = WorkspaceClient()
+                vs_result = w.api_client.do(
+                    "POST",
+                    f"/api/2.0/vector-search/indexes/{VS_INDEX_NAME}/query",
+                    body={
+                        "query_text": query,
+                        "columns": [
+                            "chunk_id", "policy_name", "service_category",
+                            "chunk_text",
+                        ],
+                        "num_results": top_k,
+                    },
+                )
+                data_array = vs_result.get("result", {}).get("data_array", [])
+                columns = vs_result.get("manifest", {}).get("columns", [])
+                col_names = [c.get("name", f"col_{i}") for i, c in enumerate(columns)]
+                policies = [dict(zip(col_names, row)) for row in data_array]
+                # MLflow RETRIEVER span requires documents in outputs for trace viewer
+                span.set_outputs({
+                    "result_count": len(policies),
+                    "documents": [
+                        {
+                            "page_content": p.get("chunk_text", ""),
+                            "metadata": {
+                                "chunk_id": p.get("chunk_id", ""),
+                                "policy_name": p.get("policy_name", ""),
+                                "service_category": p.get("service_category", ""),
+                            },
+                        }
+                        for p in policies
+                    ],
+                })
+                return json.dumps({"policies": policies, "result_count": len(policies)}, default=str)
+        except Exception as e:
+            print(f"[Gemini Agent] VS search error: {e}")
+            return json.dumps({"error": f"Policy search failed: {str(e)}", "policies": []})
+
+    elif tool_name == "classify_fwa_type":
+        claim_summary = tool_args.get("claim_summary", "")
+        policy_context = tool_args.get("policy_context", "")
+        if not claim_summary:
+            return json.dumps({"error": "claim_summary is required."})
+        print(f"[Gemini Agent] Classifying FWA type for: {claim_summary[:80]}")
+        try:
+            classification_prompt = (
+                "You are an FWA classification specialist. Based on the claim evidence and medical policy "
+                "context below, classify the finding.\n\n"
+                f"## Claim Summary\n{claim_summary}\n\n"
+                f"## Relevant Medical Policies\n{policy_context}\n\n"
+                "Respond with ONLY a JSON object:\n"
+                '{"classification": "Fraud"|"Waste"|"Abuse"|"No Violation", '
+                '"confidence": 0.0-1.0, '
+                '"reasoning": "brief explanation", '
+                '"policy_citations": ["policy name - rule type - procedure codes"]}'
+            )
+            resp = _sdk_request("POST", f"/serving-endpoints/{GEMINI_ENDPOINT}/invocations", {
+                "messages": [{"role": "user", "content": classification_prompt}],
+                "max_tokens": 500,
+                "temperature": 0.0,
+            })
+            content = resp.get("choices", [{}])[0].get("message", {}).get("content", "{}")
+            try:
+                clean = content.strip().removeprefix("```json").removesuffix("```").strip()
+                result = json.loads(clean)
+            except json.JSONDecodeError:
+                result = {"classification": "Unknown", "confidence": 0.0, "reasoning": content, "policy_citations": []}
+            return json.dumps(result, default=str)
+        except Exception as e:
+            return json.dumps({"error": f"Classification failed: {str(e)}"})
+
+    elif tool_name == "query_lakebase_cases":
+        sql = tool_args.get("sql", "").strip()
+        purpose = tool_args.get("purpose", "")
+        if not sql:
+            return json.dumps({"error": "SQL query is required."})
+        # Safety: read-only queries only
+        first_word = sql.split()[0].upper() if sql.split() else ""
+        if first_word not in ("SELECT", "WITH"):
+            return json.dumps({"error": "Only SELECT/WITH queries are allowed against Lakebase."})
+        print(f"[Gemini Agent] Lakebase query ({purpose}): {sql[:100]}")
+        try:
+            import psycopg
+            project_id = os.environ.get("LAKEBASE_PROJECT_ID", "red-bricks-insurance")
+            branch = os.environ.get("LAKEBASE_BRANCH", "production")
+            database_name = os.environ.get("LAKEBASE_DATABASE_NAME", "fwa_cases")
+            endpoint_path = f"projects/{project_id}/branches/{branch}/endpoints/primary"
+            w = WorkspaceClient()
+            ep = w.postgres.get_endpoint(name=endpoint_path)
+            host = ep.status.hosts.host
+            cred = w.postgres.generate_database_credential(endpoint=endpoint_path)
+            username = w.current_user.me().user_name
+            conn = psycopg.connect(
+                f"host={host} dbname={database_name} user={username} password={cred.token} sslmode=require"
+            )
+            cur = conn.cursor()
+            cur.execute(sql)
+            cols = [desc[0] for desc in cur.description]
+            rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+            cur.close()
+            conn.close()
+            return json.dumps({"purpose": purpose, "columns": cols, "rows": rows[:50], "row_count": len(rows)}, default=str)
+        except Exception as e:
+            return json.dumps({"error": f"Lakebase query failed: {str(e)}"})
+
     return json.dumps({"error": f"Unknown tool: {tool_name}"})
+
+
+# ---------------------------------------------------------------------------
+# Genie sub-agent
+# ---------------------------------------------------------------------------
+
+@mlflow.trace(span_type="TOOL", name="genie_subagent")
+def _run_genie_subagent(target_id: str, target_type: str, question: str) -> dict:
+    """Route structured data questions to Genie and return results."""
+    from .genie import ask_genie
+
+    # Generate Genie-appropriate questions using the supervisor LLM
+    try:
+        prompt = GENIE_QUESTIONS_TEMPLATE.format(
+            target_type=target_type, target_id=target_id, question=question,
+        )
+        resp = _sdk_request("POST", f"/serving-endpoints/{LLM_ENDPOINT}/invocations", {
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 300,
+            "temperature": 0.0,
+        })
+        content = resp.get("choices", [{}])[0].get("message", {}).get("content", "[]")
+        # Parse JSON array of questions
+        clean = content.strip().removeprefix("```json").removesuffix("```").strip()
+        genie_questions = json.loads(clean)
+        if not isinstance(genie_questions, list):
+            genie_questions = [str(genie_questions)]
+    except Exception as e:
+        print(f"[Genie Sub-agent] Question generation failed: {e}, using original")
+        genie_questions = [question]
+
+    # Execute each Genie question
+    results = []
+    for gq in genie_questions[:1]:
+        print(f"[Genie Sub-agent] Asking: {gq[:80]}")
+        try:
+            genie_result = ask_genie(
+                question_text=gq,
+                space_id=GENIE_SPACE_ID,
+                warehouse_id=SQL_WAREHOUSE_ID,
+            )
+            results.append({
+                "question": gq,
+                "sql_query": genie_result.get("sql_query"),
+                "columns": genie_result.get("columns", []),
+                "rows": genie_result.get("rows", [])[:20],
+                "row_count": genie_result.get("row_count", 0),
+                "description": genie_result.get("description"),
+            })
+        except Exception as e:
+            print(f"[Genie Sub-agent] Query failed: {e}")
+            results.append({"question": gq, "error": str(e)})
+
+    return {
+        "agent": "genie",
+        "model": "Genie (NL-to-SQL)",
+        "questions_asked": len(results),
+        "results": results,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Gemini sub-agent (tool-calling)
+# ---------------------------------------------------------------------------
+
+@mlflow.trace(span_type="AGENT", name="gemini_subagent")
+def _run_gemini_subagent(target_id: str, target_type: str, question: str) -> dict:
+    """Run the Gemini sub-agent with tool-calling for medical policy analysis."""
+    context_hint = f"Question: {question}\nTarget: {target_id} (type: {target_type})\n\n"
+    context_hint += f"The Unity Catalog is: {_CAT}\n"
+
+    if target_type == "investigation":
+        lb_data = _fetch_investigation_from_lakebase(target_id)
+        if lb_data:
+            context_hint += (
+                f"Investigation record from Lakebase:\n```json\n{lb_data}\n```\n\n"
+                "Query UC tables for flagged claims, provider risk, and ML model scores.\n"
+            )
+    elif target_type == "provider":
+        context_hint += (
+            f"Start by querying: SELECT * FROM {PROVIDER_RISK_TABLE} WHERE provider_npi = '{target_id}' LIMIT 1\n"
+            f"Then query flagged claims from {CLAIM_FLAGS_TABLE} and ML predictions from {MODEL_INFERENCE_TABLE}.\n"
+            "After gathering data, search medical policies for relevant procedure codes.\n"
+        )
+
+    messages = [
+        {"role": "system", "content": GEMINI_SUBAGENT_PROMPT},
+        {"role": "user", "content": context_hint},
+    ]
+
+    tables_queried = 0
+    tools_used = []
+    policy_chunks = []  # Collect raw VS retrieval results for frontend
+
+    for _ in range(MAX_TOOL_ROUNDS):
+        t0 = time.time()
+        with mlflow.start_span(name="gemini_llm_call", span_type="LLM") as llm_span:
+            llm_span.set_inputs({"model": GEMINI_ENDPOINT, "message_count": len(messages)})
+            data = _sdk_request("POST", f"/serving-endpoints/{GEMINI_ENDPOINT}/invocations", {
+                "messages": messages,
+                "tools": GEMINI_TOOLS,
+                "max_tokens": 4000,
+                "temperature": 0.05,
+            })
+            usage = data.get("usage", {})
+            llm_span.set_outputs({
+                "tokens_input": usage.get("prompt_tokens", 0),
+                "tokens_output": usage.get("completion_tokens", 0),
+                "latency_ms": int((time.time() - t0) * 1000),
+            })
+
+        tool_calls = (
+            data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("tool_calls", [])
+        )
+
+        if not tool_calls:
+            answer = data.get("choices", [{}])[0].get("message", {}).get("content", "No response.")
+            return {
+                "agent": "gemini_analyst",
+                "model": GEMINI_ENDPOINT,
+                "answer": answer,
+                "tables_queried": tables_queried,
+                "tools_used": tools_used,
+                "policy_chunks": policy_chunks,
+            }
+
+        messages.append(data["choices"][0]["message"])
+
+        for tc in tool_calls:
+            tool_name = tc.get("function", {}).get("name", "")
+            try:
+                tool_args = json.loads(tc.get("function", {}).get("arguments", "{}"))
+            except json.JSONDecodeError:
+                tool_args = {}
+            tool_call_id = tc.get("id", "")
+
+            span_type = "RETRIEVER" if tool_name == "search_medical_policies" else "TOOL"
+            with mlflow.start_span(name=tool_name, span_type=span_type) as tool_span:
+                tool_span.set_inputs(tool_args)
+                result = _execute_tool(tool_name, tool_args)
+                tool_span.set_outputs({"result_length": len(result)})
+
+            # Capture raw policy chunks from VS retrieval
+            if tool_name == "search_medical_policies":
+                try:
+                    parsed = json.loads(result)
+                    for p in parsed.get("policies", []):
+                        policy_chunks.append({
+                            "chunk_id": p.get("chunk_id", ""),
+                            "policy_name": p.get("policy_name", ""),
+                            "service_category": p.get("service_category", ""),
+                            "chunk_text": p.get("chunk_text", ""),
+                        })
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            tables_queried += 1
+            tools_used.append(tool_name)
+
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": result,
+            })
+
+    # Exhausted rounds — force final answer
+    messages.append({"role": "user", "content": "Provide your final analysis now based on all data gathered."})
+    data = _sdk_request("POST", f"/serving-endpoints/{GEMINI_ENDPOINT}/invocations", {
+        "messages": messages,
+        "max_tokens": 3000,
+        "temperature": 0.05,
+    })
+    answer = data.get("choices", [{}])[0].get("message", {}).get("content", "No response.")
+    return {
+        "agent": "gemini_analyst",
+        "model": GEMINI_ENDPOINT,
+        "answer": answer,
+        "tables_queried": tables_queried,
+        "tools_used": tools_used,
+        "policy_chunks": policy_chunks,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Supervisor agent (orchestrator)
+# ---------------------------------------------------------------------------
+
+@mlflow.trace(span_type="AGENT", name="fwa_supervisor_agent")
+def query_fwa_agent(target_id: str, target_type: str, question: str, model_endpoint: str | None = None) -> dict:
+    """FWA Supervisor Agent — orchestrates Genie + Gemini sub-agents."""
+    try:
+        print(f"[Supervisor] Processing: {target_type} {target_id} — {question[:80]}...")
+
+        # Phase 1: Dispatch to sub-agents sequentially
+        # (Sequential ensures MLflow trace context propagates correctly,
+        #  producing a single deep span tree instead of orphaned traces.)
+        genie_result = None
+        gemini_result = None
+
+        try:
+            genie_result = _run_genie_subagent(target_id, target_type, question)
+        except Exception as e:
+            print(f"[Supervisor] Genie sub-agent error: {e}")
+            traceback.print_exc()
+
+        try:
+            gemini_result = _run_gemini_subagent(target_id, target_type, question)
+        except Exception as e:
+            print(f"[Supervisor] Gemini sub-agent error: {e}")
+            traceback.print_exc()
+
+        # Phase 2: Build synthesis context
+        synthesis_context = f"Original question: {question}\nTarget: {target_id} ({target_type})\n\n"
+
+        synthesis_context += "## GENIE SUB-AGENT (Structured Claims Data)\n"
+        if genie_result:
+            for r in genie_result.get("results", []):
+                synthesis_context += f"\n### Question: {r.get('question', 'N/A')}\n"
+                if r.get("error"):
+                    synthesis_context += f"Error: {r['error']}\n"
+                else:
+                    synthesis_context += f"SQL: {r.get('sql_query', 'N/A')}\n"
+                    synthesis_context += f"Rows returned: {r.get('row_count', 0)}\n"
+                    if r.get("rows"):
+                        synthesis_context += f"Data:\n```json\n{json.dumps(r['rows'][:10], default=str, indent=1)}\n```\n"
+                    if r.get("description"):
+                        synthesis_context += f"Description: {r['description']}\n"
+        else:
+            synthesis_context += "Genie sub-agent did not return results.\n"
+
+        synthesis_context += "\n## GEMINI ANALYST SUB-AGENT (Medical Policy & Clinical Analysis)\n"
+        if gemini_result:
+            synthesis_context += f"Model: {gemini_result.get('model', 'unknown')}\n"
+            synthesis_context += f"Tools used: {gemini_result.get('tools_used', [])}\n"
+            synthesis_context += f"Tables queried: {gemini_result.get('tables_queried', 0)}\n\n"
+            synthesis_context += f"Analysis:\n{gemini_result.get('answer', 'No analysis provided.')}\n"
+        else:
+            synthesis_context += "Gemini sub-agent did not return results.\n"
+
+        # Phase 3: Supervisor synthesizes
+        with mlflow.start_span(name="supervisor_synthesis", span_type="LLM") as synth_span:
+            synth_span.set_inputs({"model": LLM_ENDPOINT, "sub_agents": ["genie", "gemini"]})
+            t0 = time.time()
+            data = _sdk_request("POST", f"/serving-endpoints/{LLM_ENDPOINT}/invocations", {
+                "messages": [
+                    {"role": "system", "content": SUPERVISOR_SYSTEM_PROMPT},
+                    {"role": "user", "content": synthesis_context},
+                ],
+                "max_tokens": 4000,
+                "temperature": 0.1,
+            })
+            usage = data.get("usage", {})
+            synth_span.set_outputs({
+                "tokens_input": usage.get("prompt_tokens", 0),
+                "tokens_output": usage.get("completion_tokens", 0),
+                "latency_ms": int((time.time() - t0) * 1000),
+            })
+
+        answer = data.get("choices", [{}])[0].get("message", {}).get("content", "No response.")
+
+        # Build sources metadata
+        sources = [
+            {
+                "type": "supervisor_agent",
+                "supervisor_model": LLM_ENDPOINT,
+                "gemini_model": GEMINI_ENDPOINT,
+                "genie_questions": genie_result.get("questions_asked", 0) if genie_result else 0,
+                "gemini_tables_queried": gemini_result.get("tables_queried", 0) if gemini_result else 0,
+                "gemini_tools_used": gemini_result.get("tools_used", []) if gemini_result else [],
+            }
+        ]
+
+        # Pass raw policy chunks from VS retrieval to frontend
+        policy_chunks = gemini_result.get("policy_chunks", []) if gemini_result else []
+
+        return {
+            "answer": answer,
+            "sources": sources,
+            "model_used": f"{LLM_ENDPOINT} (supervisor) + {GEMINI_ENDPOINT} (analyst)",
+            "policy_chunks": policy_chunks,
+        }
+
+    except Exception as e:
+        print(f"[Supervisor] ERROR: {e}")
+        traceback.print_exc()
+        return {"answer": f"Error: {str(e)}", "sources": [], "model_used": LLM_ENDPOINT}
 
 
 # ---------------------------------------------------------------------------
 # Direct data access functions (used by API routes, not the agent)
 # ---------------------------------------------------------------------------
 
-def get_provider_risk_profile(npi: str) -> dict | None:
-    """Get provider risk profile from gold FWA table."""
-    try:
-        rows = _execute_sql(
-            f"SELECT * FROM {PROVIDER_RISK_TABLE} WHERE provider_npi = :npi LIMIT 1",
-            [{"name": "npi", "value": npi}],
-        )
-        return rows[0] if rows else None
-    except Exception as e:
-        print(f"[FWA] Provider risk error: {e}")
-        return None
-
-
-def get_provider_flagged_claims(npi: str, limit: int = 30) -> list[dict]:
-    """Get flagged claims for a provider."""
-    try:
-        return _execute_sql(
-            f"""SELECT signal_id, claim_id, member_id, fraud_type, fraud_score, severity,
-                       evidence_summary, estimated_overpayment, service_date,
-                       procedure_code, billed_amount, claim_paid_amount, line_of_business
-                FROM {CLAIM_FLAGS_TABLE}
-                WHERE provider_npi = :npi
-                ORDER BY fraud_score DESC LIMIT {limit}""",
-            [{"name": "npi", "value": npi}],
-        )
-    except Exception as e:
-        print(f"[FWA] Flagged claims error: {e}")
-        return []
-
-
-def get_provider_ml_scores(npi: str, limit: int = 20) -> list[dict]:
-    """Get ML model predictions for a provider's claims."""
-    try:
-        return _execute_sql(
-            f"""SELECT claim_id, ml_fraud_probability, ml_risk_tier,
-                       billed_amount, paid_amount, procedure_code, claim_type
-                FROM {MODEL_INFERENCE_TABLE}
-                WHERE provider_npi = :npi
-                ORDER BY ml_fraud_probability DESC LIMIT {limit}""",
-            [{"name": "npi", "value": npi}],
-        )
-    except Exception as e:
-        print(f"[FWA] ML scores error: {e}")
-        return []
-
-
-def get_provider_shap_values(npi: str) -> dict | None:
-    """Compute synthetic SHAP-like feature attributions for a provider.
-
-    Compares the provider's risk factors against population means
-    and returns the deviation as a "contribution" value for each feature.
-    """
-    try:
-        # Get the individual provider's risk profile
-        provider_rows = _execute_sql(
-            f"""SELECT provider_npi, composite_risk_score, e5_visit_pct,
-                       billed_to_allowed_ratio, denial_rate, fwa_signal_count,
-                       fwa_avg_score, total_claims, total_billed, total_paid
-                FROM {PROVIDER_RISK_TABLE}
-                WHERE provider_npi = :npi LIMIT 1""",
-            [{"name": "npi", "value": npi}],
-        )
-        if not provider_rows:
-            return None
-
-        provider = provider_rows[0]
-
-        # Get population averages for comparison
-        pop_rows = _execute_sql(
-            f"""SELECT
-                    AVG(CAST(e5_visit_pct AS DOUBLE)) AS avg_e5_visit_pct,
-                    AVG(CAST(billed_to_allowed_ratio AS DOUBLE)) AS avg_billed_to_allowed_ratio,
-                    AVG(CAST(denial_rate AS DOUBLE)) AS avg_denial_rate,
-                    AVG(CAST(fwa_signal_count AS DOUBLE)) AS avg_fwa_signal_count,
-                    AVG(CAST(fwa_avg_score AS DOUBLE)) AS avg_fwa_avg_score,
-                    AVG(CAST(total_claims AS DOUBLE)) AS avg_total_claims,
-                    AVG(CAST(total_billed AS DOUBLE)) AS avg_total_billed
-                FROM {PROVIDER_RISK_TABLE}"""
-        )
-        if not pop_rows:
-            return None
-
-        pop = pop_rows[0]
-
-        def _safe_float(val) -> float:
-            try:
-                return float(val) if val is not None else 0.0
-            except (ValueError, TypeError):
-                return 0.0
-
-        # Calculate deviation-based contributions
-        features = {
-            "E5 Visit %": _safe_float(provider.get("e5_visit_pct")) - _safe_float(pop.get("avg_e5_visit_pct")),
-            "Billed/Allowed Ratio": _safe_float(provider.get("billed_to_allowed_ratio")) - _safe_float(pop.get("avg_billed_to_allowed_ratio")),
-            "Denial Rate": _safe_float(provider.get("denial_rate")) - _safe_float(pop.get("avg_denial_rate")),
-            "FWA Signal Count": _safe_float(provider.get("fwa_signal_count")) - _safe_float(pop.get("avg_fwa_signal_count")),
-            "Avg Fraud Score": _safe_float(provider.get("fwa_avg_score")) - _safe_float(pop.get("avg_fwa_avg_score")),
-            "Total Claims Volume": _safe_float(provider.get("total_claims")) - _safe_float(pop.get("avg_total_claims")),
-            "Total Billed Amount": _safe_float(provider.get("total_billed")) - _safe_float(pop.get("avg_total_billed")),
-        }
-
-        # Normalize contributions to sum to the composite risk score
-        composite = _safe_float(provider.get("composite_risk_score"))
-        abs_total = sum(abs(v) for v in features.values())
-        if abs_total > 0 and composite > 0:
-            scale_factor = composite / abs_total
-            features = {k: round(v * scale_factor, 4) for k, v in features.items()}
-        else:
-            features = {k: round(v, 4) for k, v in features.items()}
-
-        return features
-
-    except Exception as e:
-        print(f"[FWA] SHAP values error: {e}")
-        return None
-
-
-def get_dashboard_analytics() -> dict:
-    """Get FWA dashboard analytics from gold tables."""
-    try:
-        summary = _execute_sql(f"""
-            SELECT
-                SUM(signal_count) AS total_signals,
-                SUM(total_estimated_overpayment) AS total_overpayment,
-                COUNT(DISTINCT fraud_type) AS fraud_types,
-                SUM(distinct_providers) AS flagged_providers,
-                SUM(distinct_members) AS flagged_members
-            FROM (
-                SELECT fraud_type, SUM(signal_count) AS signal_count,
-                       SUM(total_estimated_overpayment) AS total_estimated_overpayment,
-                       SUM(distinct_providers) AS distinct_providers,
-                       SUM(distinct_members) AS distinct_members
-                FROM {FWA_SUMMARY_TABLE}
-                GROUP BY fraud_type
-            )
-        """)
-        return summary[0] if summary else {}
-    except Exception as e:
-        print(f"[FWA] Dashboard analytics error: {e}")
-        return {}
-
-
-# ---------------------------------------------------------------------------
-# Tool-calling agent
-# ---------------------------------------------------------------------------
-
 def _fetch_investigation_from_lakebase(inv_id: str) -> str | None:
     """Pre-fetch investigation details from Lakebase for agent context."""
     try:
-        from .database import db as _db
         import psycopg
-        from databricks.sdk import WorkspaceClient as _WC
 
         project_id = os.environ.get("LAKEBASE_PROJECT_ID", "red-bricks-insurance")
         branch = os.environ.get("LAKEBASE_BRANCH", "production")
         database_name = os.environ.get("LAKEBASE_DATABASE_NAME", "fwa_cases")
         endpoint_path = f"projects/{project_id}/branches/{branch}/endpoints/primary"
 
-        w = _WC()
+        w = WorkspaceClient()
         ep = w.postgres.get_endpoint(name=endpoint_path)
         host = ep.status.hosts.host
         cred = w.postgres.generate_database_credential(endpoint=endpoint_path)
@@ -393,140 +783,173 @@ def _fetch_investigation_from_lakebase(inv_id: str) -> str | None:
         data = dict(zip(cols, row))
         return json.dumps(data, default=str, indent=2)
     except Exception as e:
-        print(f"[FWA Agent] Lakebase fetch error: {e}")
+        print(f"[Supervisor] Lakebase fetch error: {e}")
         return None
 
 
-def _parse_and_execute_text_tools(text: str) -> str | None:
-    """Parse tool calls written as text by the model and execute them."""
-    # Match patterns like: query_uc_table(sql=..., purpose=...)
-    sql_pattern = re.compile(
-        r'query_uc_table\(sql\s*=\s*(.+?),\s*purpose\s*=\s*(.+?)\)',
-        re.DOTALL,
-    )
-    matches = sql_pattern.findall(text)
-    if not matches:
-        return None
+@mlflow.trace(name="fwa_supervisor_endpoint", span_type="AGENT")
+def query_fwa_agent_via_endpoint(target_id: str, target_type: str, question: str, model_endpoint: str | None = None) -> dict:
+    """Call the FWA supervisor agent via Model Serving endpoint.
 
-    results = []
-    for sql_raw, purpose_raw in matches:
-        sql = sql_raw.strip().strip("'\"")
-        purpose = purpose_raw.strip().strip("'\"")
-        result = _execute_tool("query_uc_table", {"sql": sql, "purpose": purpose})
-        results.append(f"Query ({purpose}):\n{result}")
+    Uses the same input format as query_fwa_agent() but routes through
+    the served model endpoint. The @mlflow.trace decorator on this function
+    captures request/response/latency in the app's UC-enabled experiment,
+    giving real-time trace visibility in the OTel spans table.
+    """
+    w = WorkspaceClient()
 
-    return "\n---\n".join(results) if results else None
+    endpoint_name = os.environ.get("FWA_AGENT_ENDPOINT", "fwa-supervisor-agent")
 
+    # Format input as ChatModel expects: [TARGET_ID] question
+    if target_id:
+        prefix = target_id if target_id.startswith(("INV-", "PRV-", "MBR-")) else f"PRV-{target_id}"
+        user_msg = f"[{prefix}] {question}"
+    else:
+        user_msg = question
 
-def query_fwa_agent(target_id: str, target_type: str, question: str) -> dict:
-    """FWA investigation agent with tool-calling for dynamic UC table access."""
+    print(f"[Endpoint] Querying {endpoint_name}: {user_msg[:80]}...")
+
     try:
-        print(f"[FWA Agent] Processing query for {target_type} {target_id}: {question[:80]}...")
+        response = w.serving_endpoints.query(
+            name=endpoint_name,
+            messages=[{"role": "user", "content": user_msg}],
+            max_tokens=4000,
+        )
 
-        # Build context hint
-        context_hint = f"Question: {question}\n"
-        if target_id:
-            context_hint += f"Target: {target_id} (type: {target_type})\n\n"
-        context_hint += f"The Unity Catalog is: {_CAT}\n"
-        context_hint += "Use the query_uc_table tool to gather all relevant data before generating your analysis.\n\n"
+        content = response.choices[0].message.content
 
-        if target_type == "investigation":
-            # Pre-fetch investigation details from Lakebase (the source of truth)
-            lb_data = _fetch_investigation_from_lakebase(target_id)
-            if lb_data:
-                context_hint += (
-                    f"Here is the investigation record from the Lakebase database (source of truth):\n"
-                    f"```json\n{lb_data}\n```\n\n"
-                    "Use this data as the basis for your analysis. "
-                    "Now query UC tables for additional context: flagged claims, provider risk, "
-                    "member risk, and ML model scores using the target_id and target_type above.\n"
-                )
-            else:
-                context_hint += (
-                    f"Investigation {target_id} was not found in Lakebase. "
-                    f"Try querying: SELECT * FROM {_CAT}.fwa.silver_fwa_investigation_cases "
-                    f"WHERE investigation_id = '{target_id}' LIMIT 1\n"
-                )
-        elif target_type == "provider":
-            context_hint += (
-                f"Start by querying: SELECT * FROM {PROVIDER_RISK_TABLE} WHERE provider_npi = '{target_id}' LIMIT 1\n"
-                f"Then query flagged claims and ML predictions.\n"
-            )
-
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": context_hint},
-        ]
-
-        tables_queried = 0
-
-        # Multi-turn tool-calling loop
-        for _ in range(MAX_TOOL_ROUNDS):
-            data = _sdk_request("POST", f"/serving-endpoints/{LLM_ENDPOINT}/invocations", {
-                "messages": messages,
-                "tools": TOOLS,
-                "max_tokens": 4000,
-                "temperature": 0.05,
-            })
-
-            tool_calls = (
-                data.get("choices", [{}])[0]
-                .get("message", {})
-                .get("tool_calls", [])
-            )
-
-            if not tool_calls:
-                answer = data.get("choices", [{}])[0].get("message", {}).get("content", "No response generated.")
-                # Check if the model returned tool calls as text instead of structured calls
-                if "query_uc_table(" in answer or "list_table_columns(" in answer:
-                    # Parse text-based tool calls and execute them directly
-                    text_tool_results = _parse_and_execute_text_tools(answer)
-                    if text_tool_results:
-                        messages.append(data["choices"][0]["message"])
-                        # Feed results back as if they were normal tool responses
-                        messages.append({
-                            "role": "user",
-                            "content": f"Here are the query results:\n\n{text_tool_results}\n\nNow provide your final analysis based on all the data above. Do NOT output any more tool calls — just give the structured briefing.",
-                        })
-                        tables_queried += len(text_tool_results.split("---"))
-                        continue
-                return {"answer": answer, "sources": [{"type": "fwa_tool_calling", "tables_queried": tables_queried}]}
-
-            # Append assistant message with tool calls
-            messages.append(data["choices"][0]["message"])
-
-            # Execute each tool call
-            for tc in tool_calls:
-                tool_name = tc.get("function", {}).get("name", "")
-                try:
-                    tool_args = json.loads(tc.get("function", {}).get("arguments", "{}"))
-                except json.JSONDecodeError:
-                    tool_args = {}
-                tool_call_id = tc.get("id", "")
-
-                result = _execute_tool(tool_name, tool_args)
-                tables_queried += 1
-
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "content": result,
-                })
-
-        # Exhausted rounds — get final answer without tools
-        messages.append({
-            "role": "user",
-            "content": "Please provide your final analysis now based on all the data gathered.",
-        })
-        data = _sdk_request("POST", f"/serving-endpoints/{LLM_ENDPOINT}/invocations", {
-            "messages": messages,
-            "max_tokens": 3000,
-            "temperature": 0.05,
-        })
-        answer = data.get("choices", [{}])[0].get("message", {}).get("content", "No response generated.")
-        return {"answer": answer, "sources": [{"type": "fwa_tool_calling", "tables_queried": tables_queried}]}
-
+        return {
+            "answer": content,
+            "sources": [{"type": "served_endpoint", "endpoint": endpoint_name}],
+            "model_used": f"{endpoint_name} (served)",
+            "policy_chunks": [],
+        }
     except Exception as e:
-        print(f"[FWA Agent] ERROR: {e}")
+        print(f"[Endpoint] Error calling {endpoint_name}: {e}")
         traceback.print_exc()
-        return {"answer": f"Error: {str(e)}", "sources": []}
+        # Fallback to in-process agent
+        print("[Endpoint] Falling back to in-process agent...")
+        return query_fwa_agent(target_id, target_type, question, model_endpoint)
+
+
+def get_provider_risk_profile(npi: str) -> dict | None:
+    try:
+        rows = _execute_sql(
+            f"SELECT * FROM {PROVIDER_RISK_TABLE} WHERE provider_npi = :npi LIMIT 1",
+            [{"name": "npi", "value": npi}],
+        )
+        return rows[0] if rows else None
+    except Exception as e:
+        print(f"[FWA] Provider risk error: {e}")
+        return None
+
+
+def get_provider_flagged_claims(npi: str, limit: int = 30) -> list[dict]:
+    try:
+        return _execute_sql(
+            f"""SELECT signal_id, claim_id, member_id, fraud_type, fraud_score, severity,
+                       evidence_summary, estimated_overpayment, service_date,
+                       procedure_code, billed_amount, claim_paid_amount, line_of_business
+                FROM {CLAIM_FLAGS_TABLE}
+                WHERE provider_npi = :npi
+                ORDER BY fraud_score DESC LIMIT {limit}""",
+            [{"name": "npi", "value": npi}],
+        )
+    except Exception as e:
+        print(f"[FWA] Flagged claims error: {e}")
+        return []
+
+
+def get_provider_ml_scores(npi: str, limit: int = 20) -> list[dict]:
+    try:
+        return _execute_sql(
+            f"""SELECT claim_id, ml_fraud_probability, ml_risk_tier,
+                       billed_amount, paid_amount, procedure_code, claim_type
+                FROM {MODEL_INFERENCE_TABLE}
+                WHERE provider_npi = :npi
+                ORDER BY ml_fraud_probability DESC LIMIT {limit}""",
+            [{"name": "npi", "value": npi}],
+        )
+    except Exception as e:
+        print(f"[FWA] ML scores error: {e}")
+        return []
+
+
+def get_provider_shap_values(npi: str) -> dict | None:
+    try:
+        provider_rows = _execute_sql(
+            f"""SELECT provider_npi, composite_risk_score, e5_visit_pct,
+                       billed_to_allowed_ratio, denial_rate, fwa_signal_count,
+                       fwa_avg_score, total_claims, total_billed, total_paid
+                FROM {PROVIDER_RISK_TABLE}
+                WHERE provider_npi = :npi LIMIT 1""",
+            [{"name": "npi", "value": npi}],
+        )
+        if not provider_rows:
+            return None
+        provider = provider_rows[0]
+        pop_rows = _execute_sql(
+            f"""SELECT
+                    AVG(CAST(e5_visit_pct AS DOUBLE)) AS avg_e5_visit_pct,
+                    AVG(CAST(billed_to_allowed_ratio AS DOUBLE)) AS avg_billed_to_allowed_ratio,
+                    AVG(CAST(denial_rate AS DOUBLE)) AS avg_denial_rate,
+                    AVG(CAST(fwa_signal_count AS DOUBLE)) AS avg_fwa_signal_count,
+                    AVG(CAST(fwa_avg_score AS DOUBLE)) AS avg_fwa_avg_score,
+                    AVG(CAST(total_claims AS DOUBLE)) AS avg_total_claims,
+                    AVG(CAST(total_billed AS DOUBLE)) AS avg_total_billed
+                FROM {PROVIDER_RISK_TABLE}"""
+        )
+        if not pop_rows:
+            return None
+        pop = pop_rows[0]
+
+        def _sf(val) -> float:
+            try:
+                return float(val) if val is not None else 0.0
+            except (ValueError, TypeError):
+                return 0.0
+
+        features = {
+            "E5 Visit %": _sf(provider.get("e5_visit_pct")) - _sf(pop.get("avg_e5_visit_pct")),
+            "Billed/Allowed Ratio": _sf(provider.get("billed_to_allowed_ratio")) - _sf(pop.get("avg_billed_to_allowed_ratio")),
+            "Denial Rate": _sf(provider.get("denial_rate")) - _sf(pop.get("avg_denial_rate")),
+            "FWA Signal Count": _sf(provider.get("fwa_signal_count")) - _sf(pop.get("avg_fwa_signal_count")),
+            "Avg Fraud Score": _sf(provider.get("fwa_avg_score")) - _sf(pop.get("avg_fwa_avg_score")),
+            "Total Claims Volume": _sf(provider.get("total_claims")) - _sf(pop.get("avg_total_claims")),
+            "Total Billed Amount": _sf(provider.get("total_billed")) - _sf(pop.get("avg_total_billed")),
+        }
+        composite = _sf(provider.get("composite_risk_score"))
+        abs_total = sum(abs(v) for v in features.values())
+        if abs_total > 0 and composite > 0:
+            scale_factor = composite / abs_total
+            features = {k: round(v * scale_factor, 4) for k, v in features.items()}
+        else:
+            features = {k: round(v, 4) for k, v in features.items()}
+        return features
+    except Exception as e:
+        print(f"[FWA] SHAP values error: {e}")
+        return None
+
+
+def get_dashboard_analytics() -> dict:
+    try:
+        summary = _execute_sql(f"""
+            SELECT
+                SUM(signal_count) AS total_signals,
+                SUM(total_estimated_overpayment) AS total_overpayment,
+                COUNT(DISTINCT fraud_type) AS fraud_types,
+                SUM(distinct_providers) AS flagged_providers,
+                SUM(distinct_members) AS flagged_members
+            FROM (
+                SELECT fraud_type, SUM(signal_count) AS signal_count,
+                       SUM(total_estimated_overpayment) AS total_estimated_overpayment,
+                       SUM(distinct_providers) AS distinct_providers,
+                       SUM(distinct_members) AS distinct_members
+                FROM {FWA_SUMMARY_TABLE}
+                GROUP BY fraud_type
+            )
+        """)
+        return summary[0] if summary else {}
+    except Exception as e:
+        print(f"[FWA] Dashboard analytics error: {e}")
+        return {}

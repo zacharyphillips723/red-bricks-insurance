@@ -134,9 +134,55 @@ export interface ProviderRisk {
   overall_risk_rank: string | null;
 }
 
+export interface PolicyChunk {
+  chunk_id: string;
+  policy_name: string;
+  service_category: string;
+  chunk_text: string;
+}
+
 export interface AgentResponse {
   answer: string;
   sources: Record<string, unknown>[];
+  model_used?: string;
+  policy_chunks?: PolicyChunk[];
+}
+
+export interface PolicySection {
+  chunk_id: string;
+  policy_name: string;
+  service_category: string;
+  rule_type: string;
+  chunk_text: string;
+  procedure_codes: string;
+  diagnosis_codes: string;
+}
+
+export interface ObservabilityTrace {
+  request_id?: string;
+  timestamp_ms?: number;
+  status?: string;
+  execution_time_ms?: number;
+  [key: string]: unknown;
+}
+
+export interface CostSummary {
+  endpoint: string;
+  request_count: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  avg_latency_ms: number;
+  estimated_cost_usd?: number;
+}
+
+export interface GenieResponse {
+  conversation_id: string;
+  message_id: string;
+  sql_query: string | null;
+  columns: string[];
+  rows: Record<string, string>[];
+  row_count: number;
+  description: string | null;
 }
 
 export interface NetworkNode {
@@ -228,7 +274,7 @@ export const api = {
   // Network Graph
   getNetworkGraph: () => fetchApi<NetworkGraphData>("/network-graph"),
 
-  // Agent
+  // Agent (supervisor pattern — routes to Genie + Gemini sub-agents)
   queryAgent: (question: string, targetId?: string, targetType?: string) =>
     fetchApi<AgentResponse>("/agent/query", {
       method: "POST",
@@ -238,5 +284,19 @@ export const api = {
         target_type: targetType,
       }),
     }),
+
+  // Genie
+  askGenie: (question: string, conversationId?: string) =>
+    fetchApi<GenieResponse>("/genie/ask", {
+      method: "POST",
+      body: JSON.stringify({ question, conversation_id: conversationId || "" }),
+    }),
+
+  // Observability
+  getTraces: () =>
+    fetchApi<{ traces: ObservabilityTrace[] }>("/observability/traces"),
+
+  getCostSummary: () =>
+    fetchApi<{ costs: CostSummary[] }>("/observability/costs"),
 
 };

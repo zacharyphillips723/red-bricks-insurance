@@ -1,0 +1,9 @@
+# External model serving endpoints for AI Gateway multi-model comparison.
+# API keys must be stored in the 'ai-gateway' secret scope before deployment.
+# The setup_ai_gateway.py notebook handles creation; this file declares them
+# as DAB resources for permissions wiring.
+
+# NOTE: External model serving endpoints cannot be fully declared as DAB
+# resources today (no external_model block in serving_endpoint resource).
+# The notebook creates them; this file only wires permissions for the FWA app.
+# Once DAB adds external_model support, migrate creation here.

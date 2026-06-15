@@ -16,7 +16,7 @@
 
 # COMMAND ----------
 
-dbutils.widgets.text("catalog", "red_bricks_insurance", "Catalog")
+dbutils.widgets.text("catalog", "red_bricks_insurance_catalog", "Catalog")
 catalog = dbutils.widgets.get("catalog")
 
 spark.sql(f"USE CATALOG `{catalog}`")
@@ -343,6 +343,63 @@ if fwa_exists:
       SELECT to_json(struct(*))
       FROM fwa.gold_fwa_provider_risk
       WHERE provider_npi = get_fwa_risk_profile.provider_npi
+      LIMIT 1
+    )
+    """)
+
+    register_function("search_medical_policies", """
+    CREATE OR REPLACE FUNCTION ai_tools.search_medical_policies(
+      query STRING
+    )
+    RETURNS STRING
+    COMMENT 'Search Red Bricks medical policies by keyword for FWA investigations. Returns up to 5 matching policy rules with policy name, rule type, procedure codes, and rule text. Use this to find policy language that supports or contradicts a billing pattern. Note: for semantic (embedding-based) search, use the FWA agent search_medical_policies tool instead — this function does keyword matching only.'
+    RETURN (
+      SELECT to_json(collect_list(named_struct(
+        'rule_id', rule_id,
+        'policy_name', policy_name,
+        'service_category', service_category,
+        'rule_type', rule_type,
+        'rule_text', rule_text,
+        'procedure_codes', procedure_codes,
+        'diagnosis_codes', diagnosis_codes
+      )))
+      FROM (
+        SELECT rule_id, policy_name, service_category, rule_type, rule_text,
+               procedure_codes, diagnosis_codes
+        FROM prior_auth.parsed_medical_policies
+        WHERE LOWER(rule_text) LIKE CONCAT('%', LOWER(search_medical_policies.query), '%')
+           OR LOWER(policy_name) LIKE CONCAT('%', LOWER(search_medical_policies.query), '%')
+           OR LOWER(procedure_codes) LIKE CONCAT('%', LOWER(search_medical_policies.query), '%')
+        LIMIT 5
+      )
+    )
+    """)
+
+    register_function("get_fwa_investigation_summary", """
+    CREATE OR REPLACE FUNCTION ai_tools.get_fwa_investigation_summary(investigation_id STRING)
+    RETURNS STRING
+    COMMENT 'Get a full investigation summary for an FWA case. Returns investigation details, provider risk context, fraud types, severity, status, estimated overpayment, and composite risk score from the investigation cases table. Use this to quickly pull up the full context of an ongoing FWA investigation.'
+    RETURN (
+      SELECT to_json(named_struct(
+        'investigation_id', ic.investigation_id,
+        'investigation_type', ic.investigation_type,
+        'target_type', ic.target_type,
+        'target_id', ic.target_id,
+        'fraud_types', ic.fraud_types,
+        'severity', ic.severity,
+        'status', ic.status,
+        'estimated_overpayment', ic.estimated_overpayment,
+        'claims_involved_count', ic.claims_involved_count,
+        'rules_risk_score', ic.rules_risk_score,
+        'ml_risk_score', ic.ml_risk_score,
+        'composite_risk_score', pr.composite_risk_score,
+        'provider_name', pr.provider_name,
+        'specialty', pr.specialty,
+        'risk_tier', pr.risk_tier
+      ))
+      FROM fwa.silver_fwa_investigation_cases ic
+      LEFT JOIN fwa.gold_fwa_provider_risk pr ON ic.target_id = pr.provider_npi
+      WHERE ic.investigation_id = get_fwa_investigation_summary.investigation_id
       LIMIT 1
     )
     """)

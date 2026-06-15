@@ -8,7 +8,7 @@
 
 # COMMAND ----------
 
-dbutils.widgets.text("catalog", "red_bricks_insurance", "Unity Catalog Name")
+dbutils.widgets.text("catalog", "red_bricks_insurance_catalog", "Unity Catalog Name")
 
 # COMMAND ----------
 

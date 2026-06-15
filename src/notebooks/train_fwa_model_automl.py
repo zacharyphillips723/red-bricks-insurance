@@ -17,13 +17,25 @@
 # MAGIC - Logs all trials to MLflow with metrics, feature importance, and SHAP plots
 # MAGIC - Generates a reproducible notebook for the best model
 # MAGIC
-# MAGIC > **Note:** This notebook is NOT part of the automated DAB job pipeline.
-# MAGIC > The primary pipeline uses `train_fwa_model.py` (manual XGBoost) which runs on serverless.
-# MAGIC > Both notebooks produce the same outputs: a registered UC model, batch predictions, and a serving endpoint.
+# MAGIC > **Note:** This notebook runs in the DAB job pipeline but **skips automatically on serverless**
+# MAGIC > (AutoML uses `PERSIST TABLE` internally). The primary pipeline uses `train_fwa_model.py`
+# MAGIC > (manual XGBoost) which runs on serverless. Both notebooks produce the same outputs:
+# MAGIC > a registered UC model, batch predictions, and a serving endpoint.
 
 # COMMAND ----------
 
-dbutils.widgets.text("catalog", "red_bricks_insurance", "Catalog")
+# --- Serverless / AutoML availability guard ---
+# AutoML requires non-serverless compute (uses PERSIST TABLE internally).
+# Rather than guessing cluster tags, just check if the module is available.
+try:
+    import databricks.automl as _automl_check  # noqa: F401
+    del _automl_check
+except (ImportError, ModuleNotFoundError):
+    dbutils.notebook.exit("SKIPPED: databricks.automl not available (requires classic ML Runtime, not serverless)")
+
+# COMMAND ----------
+
+dbutils.widgets.text("catalog", "red_bricks_insurance_catalog", "Catalog")
 
 catalog = dbutils.widgets.get("catalog")
 catalog_sql = f"`{catalog}`"  # SQL-safe quoting (handles hyphens in catalog names)
@@ -50,7 +62,7 @@ print(f"Model:      {MODEL_NAME}")
 # COMMAND ----------
 
 feature_df = spark.sql(f"""
-WITH claim_features AS (
+WITH claim_features_raw AS (
   SELECT
     c.claim_id,
     c.member_id,
@@ -75,9 +87,14 @@ WITH claim_features AS (
     CASE WHEN c.secondary_diagnosis_code_1 IS NOT NULL THEN 1 ELSE 0 END
     + CASE WHEN c.secondary_diagnosis_code_2 IS NOT NULL THEN 1 ELSE 0 END
     + CASE WHEN c.secondary_diagnosis_code_3 IS NOT NULL THEN 1 ELSE 0 END
-    + 1 AS diagnosis_code_count
+    + 1 AS diagnosis_code_count,
+    ROW_NUMBER() OVER (PARTITION BY c.claim_id ORDER BY c.paid_date DESC) AS rn
 
   FROM {catalog_sql}.{CLAIMS_SCHEMA}.silver_claims_medical c
+),
+
+claim_features AS (
+  SELECT * EXCEPT (rn) FROM claim_features_raw WHERE rn = 1
 ),
 
 provider_features AS (
@@ -98,15 +115,14 @@ provider_features AS (
 member_features AS (
   SELECT
     m.member_id,
-    e.line_of_business AS member_lob,
-    e.risk_score AS member_risk_score,
+    COALESCE(MAX(e.risk_score), 1.0) AS member_risk_score,
     COUNT(DISTINCT c2.claim_id) AS member_total_claims,
     COUNT(DISTINCT c2.rendering_provider_npi) AS member_unique_providers,
     COUNT(DISTINCT c2.primary_diagnosis_code) AS member_unique_diagnoses
   FROM {catalog_sql}.{MEMBERS_SCHEMA}.silver_members m
   LEFT JOIN {catalog_sql}.{MEMBERS_SCHEMA}.silver_enrollment e ON m.member_id = e.member_id
   LEFT JOIN {catalog_sql}.{CLAIMS_SCHEMA}.silver_claims_medical c2 ON m.member_id = c2.member_id
-  GROUP BY m.member_id, e.line_of_business, e.risk_score
+  GROUP BY m.member_id
 ),
 
 labels AS (
@@ -125,22 +141,22 @@ SELECT
   cf.copay,
   cf.coinsurance,
   cf.deductible,
-  cf.payment_lag_days,
-  cf.service_day_of_week,
-  cf.diagnosis_code_count,
+  CAST(cf.payment_lag_days AS DOUBLE) AS payment_lag_days,
+  CAST(cf.service_day_of_week AS DOUBLE) AS service_day_of_week,
+  CAST(cf.diagnosis_code_count AS DOUBLE) AS diagnosis_code_count,
 
-  COALESCE(pf.provider_total_claims, 0) AS provider_total_claims,
-  COALESCE(pf.provider_avg_billed, 0) AS provider_avg_billed,
-  COALESCE(pf.provider_e5_visit_pct, 0) AS provider_e5_visit_pct,
-  COALESCE(pf.provider_denial_rate, 0) AS provider_denial_rate,
-  COALESCE(pf.provider_unique_members, 0) AS provider_unique_members,
-  COALESCE(pf.provider_billed_to_allowed_ratio, 0) AS provider_billed_to_allowed_ratio,
-  COALESCE(pf.provider_fwa_signal_count, 0) AS provider_fwa_signal_count,
-  COALESCE(pf.provider_composite_risk_score, 0) AS provider_composite_risk_score,
+  CAST(COALESCE(pf.provider_total_claims, 0) AS DOUBLE) AS provider_total_claims,
+  CAST(COALESCE(pf.provider_avg_billed, 0) AS DOUBLE) AS provider_avg_billed,
+  CAST(COALESCE(pf.provider_e5_visit_pct, 0) AS DOUBLE) AS provider_e5_visit_pct,
+  CAST(COALESCE(pf.provider_denial_rate, 0) AS DOUBLE) AS provider_denial_rate,
+  CAST(COALESCE(pf.provider_unique_members, 0) AS DOUBLE) AS provider_unique_members,
+  CAST(COALESCE(pf.provider_billed_to_allowed_ratio, 0) AS DOUBLE) AS provider_billed_to_allowed_ratio,
+  CAST(COALESCE(pf.provider_fwa_signal_count, 0) AS DOUBLE) AS provider_fwa_signal_count,
+  CAST(COALESCE(pf.provider_composite_risk_score, 0) AS DOUBLE) AS provider_composite_risk_score,
 
-  COALESCE(mf.member_total_claims, 0) AS member_total_claims,
-  COALESCE(mf.member_unique_providers, 0) AS member_unique_providers,
-  COALESCE(mf.member_unique_diagnoses, 0) AS member_unique_diagnoses,
+  CAST(COALESCE(mf.member_total_claims, 0) AS DOUBLE) AS member_total_claims,
+  CAST(COALESCE(mf.member_unique_providers, 0) AS DOUBLE) AS member_unique_providers,
+  CAST(COALESCE(mf.member_unique_diagnoses, 0) AS DOUBLE) AS member_unique_diagnoses,
   COALESCE(mf.member_risk_score, 1.0) AS member_risk_score,
 
   COALESCE(l.is_fraud, 0) AS is_fraud
@@ -162,8 +178,8 @@ print(f"Feature table: {total:,} rows, {fraud_count:,} fraud ({fraud_count/total
 
 # COMMAND ----------
 
-feature_table_name = f"{catalog_sql}.{ANALYTICS_SCHEMA}.fwa_training_features"
-feature_df.write.mode("overwrite").saveAsTable(feature_table_name)
+feature_table_name = f"{catalog_sql}.{ANALYTICS_SCHEMA}.fwa_training_features_automl"
+feature_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(feature_table_name)
 print(f"Feature table written to: {feature_table_name}")
 
 # COMMAND ----------
