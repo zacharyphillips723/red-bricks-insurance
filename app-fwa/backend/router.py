@@ -10,7 +10,10 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import text
 
 from .database import db
-from .env_config import UC_CATALOG, SQL_WAREHOUSE_ID, GATEWAY_MODELS, GENIE_SPACE_ID, GEMINI_ENDPOINT
+from .env_config import (
+    UC_CATALOG, SQL_WAREHOUSE_ID, GATEWAY_MODELS, GENIE_SPACE_ID, GEMINI_ENDPOINT,
+    UC_TRACE_SCHEMA, UC_TRACE_TABLE_PREFIX,
+)
 from .agent import (
     query_fwa_agent,
     query_fwa_agent_via_endpoint,
@@ -678,7 +681,7 @@ async def get_network_graph():
 
 @api.post("/agent/query", response_model=AgentQueryOut, operation_id="queryFWAAgent")
 async def query_agent(query_in: AgentQueryIn):
-    agent_mode = os.environ.get("AGENT_MODE", "endpoint")
+    agent_mode = os.environ.get("AGENT_MODE", "local")
     if agent_mode == "endpoint":
         result = await asyncio.to_thread(
             query_fwa_agent_via_endpoint,
@@ -711,7 +714,9 @@ async def get_available_models():
 async def get_observability_traces():
     """Get recent agent traces from UC OTel span tables (real-time via MLflow tracing)."""
     try:
-        spans_table = f"`{UC_CATALOG}`.`analytics`.`fwa_agent_otel_spans`"
+        spans_table = (
+            f"`{UC_CATALOG}`.`{UC_TRACE_SCHEMA}`.`{UC_TRACE_TABLE_PREFIX}_otel_spans`"
+        )
         sql = f"""
             SELECT trace_id,
                    MIN(start_time_unix_nano) AS trace_start_ns,

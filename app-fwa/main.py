@@ -16,34 +16,56 @@ from backend.router import api
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle — initialize Lakebase and MLflow tracing."""
     import os
-    from backend.env_config import UC_CATALOG, SQL_WAREHOUSE_ID
+    from backend.env_config import (
+        UC_CATALOG, SQL_WAREHOUSE_ID, UC_TRACE_SCHEMA,
+        UC_TRACE_TABLE_PREFIX, MLFLOW_UC_EXPERIMENT,
+    )
 
     agent_mode = os.environ.get("AGENT_MODE", "local")
 
-    # Configure MLflow tracing with UC trace storage for both modes.
-    # In local mode, @mlflow.trace decorators on agent internals capture the
-    # full span tree (supervisor → genie + gemini → tools).
-    # In endpoint mode, @mlflow.trace on query_fwa_agent_via_endpoint() captures
-    # the request/response/latency as a single span from the app side.
-    # Both write to the same UC OTel tables in real-time.
+    # Configure MLflow tracing to stream traces into Unity Catalog OTel tables
+    # in real-time. @mlflow.trace decorators on the agent internals capture the
+    # full span tree (supervisor → genie + gemini → tools) and each completed
+    # turn is exported to `{catalog}.{schema}.{prefix}_otel_spans` within seconds.
+    #
+    # We link the experiment to the UC location via the modern
+    # `trace_location=UnityCatalog(...)` API. The backing OTel tables are
+    # provisioned once by bootstrap_workspace.py (running as a principal with
+    # CREATE TABLE); this call then hits the fast idempotent re-link path.
+    # MLFLOW_TRACING_SQL_WAREHOUSE_ID is required for the link/provision call.
     tracking_uri = os.environ.get("MLFLOW_TRACKING_URI", "databricks")
     mlflow.set_tracking_uri(tracking_uri)
+    if SQL_WAREHOUSE_ID:
+        os.environ.setdefault("MLFLOW_TRACING_SQL_WAREHOUSE_ID", SQL_WAREHOUSE_ID)
 
-    uc_experiment = os.environ.get(
-        "MLFLOW_EXPERIMENT_NAME", "/Shared/red-bricks-fwa-agent-traces"
-    ) + "-uc"
     try:
-        exp = mlflow.set_experiment(uc_experiment)
-        print(f"Agent mode: {agent_mode} — MLflow UC traces enabled")
-        print(f"  Experiment: {uc_experiment} (ID: {exp.experiment_id})")
-        print(f"  Spans table: {UC_CATALOG}.analytics.fwa_agent_otel_spans")
-    except Exception as e:
-        base_experiment = os.environ.get(
-            "MLFLOW_EXPERIMENT_NAME", "/Shared/red-bricks-fwa-agent-traces"
+        from mlflow.entities import UnityCatalog
+
+        exp = mlflow.set_experiment(
+            MLFLOW_UC_EXPERIMENT,
+            trace_location=UnityCatalog(
+                catalog_name=UC_CATALOG,
+                schema_name=UC_TRACE_SCHEMA,
+                table_prefix=UC_TRACE_TABLE_PREFIX,
+            ),
         )
-        mlflow.set_experiment(base_experiment)
-        print(f"WARNING: UC experiment setup failed ({e})")
-        print(f"  Using fallback: {base_experiment}")
+        spans_table = f"{UC_CATALOG}.{UC_TRACE_SCHEMA}.{UC_TRACE_TABLE_PREFIX}_otel_spans"
+        print(f"Agent mode: {agent_mode} — MLflow UC traces enabled")
+        print(f"  Experiment: {MLFLOW_UC_EXPERIMENT} (ID: {exp.experiment_id})")
+        print(f"  Spans table: {spans_table}")
+    except Exception as e:
+        # Fall back to a plain experiment so tracing still works via the MLflow
+        # backend (artifact-backed) even if UC linking is unavailable.
+        print(f"WARNING: UC trace linking failed ({e})")
+        traceback.print_exc()
+        try:
+            fallback = os.environ.get(
+                "MLFLOW_EXPERIMENT_NAME", "/Shared/red-bricks-fwa-agent-traces"
+            )
+            mlflow.set_experiment(fallback)
+            print(f"  Using fallback experiment (no UC tables): {fallback}")
+        except Exception as e2:
+            print(f"  Fallback experiment setup also failed: {e2}")
 
     try:
         db.initialize()

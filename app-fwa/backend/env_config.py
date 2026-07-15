@@ -99,6 +99,19 @@ FWA_MODEL_ENDPOINT = os.environ.get("FWA_MODEL_ENDPOINT") or "fwa-fraud-scorer"
 VS_INDEX_NAME = os.environ.get("VS_INDEX_NAME", f"{UC_CATALOG}.prior_auth.medical_policy_vs_index")
 GATEWAY_MODELS = os.environ.get("GATEWAY_MODELS", f"{LLM_ENDPOINT},{GEMINI_ENDPOINT}").split(",")
 
+# MLflow UC trace storage — the app links its experiment to these UC OTel tables
+# so agent traces (supervisor + genie + gemini) stream into Unity Catalog in
+# real-time. Tables are named `{UC_TRACE_TABLE_PREFIX}_otel_spans`, etc., in
+# `{UC_CATALOG}.{UC_TRACE_SCHEMA}`. Provisioned by bootstrap_workspace.py; the
+# app performs an idempotent re-link on startup. The experiment name must be a
+# fresh one that has never had legacy trace-storage tags set on it (a polluted
+# experiment causes set_experiment to skip table provisioning).
+UC_TRACE_SCHEMA = os.environ.get("UC_TRACE_SCHEMA", "analytics")
+UC_TRACE_TABLE_PREFIX = os.environ.get("UC_TRACE_TABLE_PREFIX", "fwa_agent")
+MLFLOW_UC_EXPERIMENT = os.environ.get(
+    "MLFLOW_UC_EXPERIMENT", "/Shared/red-bricks-fwa-agent-traces-uc2"
+)
+
 print(f"[env_config] SQL_WAREHOUSE_ID={SQL_WAREHOUSE_ID}")
 print(f"[env_config] UC_CATALOG={UC_CATALOG}")
 print(f"[env_config] GENIE_SPACE_ID={GENIE_SPACE_ID}")
@@ -107,3 +120,6 @@ print(f"[env_config] GEMINI_ENDPOINT={GEMINI_ENDPOINT}")
 print(f"[env_config] FWA_MODEL_ENDPOINT={FWA_MODEL_ENDPOINT}")
 print(f"[env_config] VS_INDEX_NAME={VS_INDEX_NAME}")
 print(f"[env_config] GATEWAY_MODELS={GATEWAY_MODELS}")
+print(f"[env_config] UC_TRACE_SCHEMA={UC_TRACE_SCHEMA}")
+print(f"[env_config] UC_TRACE_TABLE_PREFIX={UC_TRACE_TABLE_PREFIX}")
+print(f"[env_config] MLFLOW_UC_EXPERIMENT={MLFLOW_UC_EXPERIMENT}")

@@ -3,5 +3,7 @@ uvicorn>=0.23.0
 sqlalchemy[asyncio]>=2.0
 psycopg[binary]>=3.1
 databricks-sdk>=0.81.0
-mlflow>=2.14.0
+# mlflow>=3.14 required for the UnityCatalog trace_location API used to stream
+# agent traces into UC OTel tables (mlflow.entities.UnityCatalog).
+mlflow>=3.14.0
 pydantic>=2.0

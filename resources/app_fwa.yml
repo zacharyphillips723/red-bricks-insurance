@@ -11,8 +11,10 @@ resources:
           - --host=0.0.0.0
           - --port=8000
         env:
+          # in-process supervisor so the full span tree (supervisor -> genie +
+          # gemini -> tools) is captured in this app's UC OTel trace tables.
           - name: AGENT_MODE
-            value: endpoint
+            value: local
           - name: FWA_AGENT_ENDPOINT
             value: fwa-supervisor-agent
           - name: LAKEBASE_PROJECT_ID
@@ -43,6 +45,17 @@ resources:
             value: databricks
           - name: MLFLOW_EXPERIMENT_NAME
             value: /Shared/red-bricks-fwa-agent-traces
+          # UC trace storage — agent traces stream into these OTel tables in
+          # real-time. Must match bootstrap_workspace.py provisioning. The
+          # experiment name must be a FRESH name that never had legacy
+          # trace-storage tags (a polluted experiment silently skips table
+          # creation). See backend/env_config.py for details.
+          - name: MLFLOW_UC_EXPERIMENT
+            value: /Shared/red-bricks-fwa-agent-traces-uc2
+          - name: UC_TRACE_SCHEMA
+            value: analytics
+          - name: UC_TRACE_TABLE_PREFIX
+            value: fwa_agent
       resources:
         # NOTE: fwa-supervisor-agent is NOT listed here because it doesn't exist
         # at deploy time — it's created by the deploy_fwa_agent job task.

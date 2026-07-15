@@ -41,7 +41,7 @@ print(f"Warehouse ID: {warehouse_id or '(will auto-detect)'}")
 
 # COMMAND ----------
 
-# MAGIC %pip install psycopg[binary] databricks-sdk --upgrade --quiet
+# MAGIC %pip install psycopg[binary] databricks-sdk "mlflow>=3.14.0" --upgrade --quiet
 # MAGIC %restart_python
 
 # COMMAND ----------
@@ -1170,6 +1170,103 @@ for _ep_name, _itc in _ai_gateway_endpoints.items():
         print(f"  {_ep_name}: enabled -> {_itc['catalog_name']}.{_itc['schema_name']}.{_itc['table_name_prefix']}_payload")
     else:
         print(f"  {_ep_name}: WARNING ({_gw_resp.status_code}): {_gw_resp.text[:200]}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Provision MLflow UC Trace Storage for the FWA Agent
+# MAGIC
+# MAGIC Links a dedicated MLflow experiment to Unity Catalog OTel tables so the FWA
+# MAGIC Investigation app streams agent traces (supervisor + genie + gemini spans)
+# MAGIC into `{catalog}.analytics.fwa_agent_otel_*` in real-time. Uses the modern
+# MAGIC `mlflow.set_experiment(trace_location=UnityCatalog(...))` API, which creates
+# MAGIC the backing tables server-side on first call and is idempotent thereafter.
+# MAGIC
+# MAGIC **Important:** the experiment name MUST be one that has never had legacy
+# MAGIC `databricksTrace*StorageTable` tags set on it. If such a tag exists,
+# MAGIC `set_experiment` early-returns and silently skips table creation (there is
+# MAGIC no supported API to delete experiment tags on Databricks-managed MLflow).
+
+# COMMAND ----------
+
+print("=" * 60)
+print("STEP 3b: Provision MLflow UC Trace Storage (FWA Agent)")
+print("=" * 60)
+
+# These MUST stay in sync with app-fwa/backend/env_config.py defaults and the
+# MLFLOW_UC_EXPERIMENT / UC_TRACE_* env vars in resources/app_fwa.yml.
+TRACE_EXPERIMENT = "/Shared/red-bricks-fwa-agent-traces-uc2"
+TRACE_SCHEMA = "analytics"
+TRACE_TABLE_PREFIX = "fwa_agent"
+
+if not warehouse_id:
+    print("  Skipped — no warehouse_id available (required to provision UC trace tables).")
+else:
+    try:
+        import os as _os
+        import mlflow
+        from mlflow.entities import UnityCatalog
+
+        mlflow.set_tracking_uri("databricks")
+        # The link/provision call needs a warehouse to create the Delta tables.
+        _os.environ["MLFLOW_TRACING_SQL_WAREHOUSE_ID"] = warehouse_id
+
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog_sql}.{TRACE_SCHEMA}")
+
+        exp = mlflow.set_experiment(
+            TRACE_EXPERIMENT,
+            trace_location=UnityCatalog(
+                catalog_name=catalog,
+                schema_name=TRACE_SCHEMA,
+                table_prefix=TRACE_TABLE_PREFIX,
+            ),
+        )
+        spans_table = f"{catalog}.{TRACE_SCHEMA}.{TRACE_TABLE_PREFIX}_otel_spans"
+        print(f"  Experiment linked: {TRACE_EXPERIMENT} (ID: {exp.experiment_id})")
+        print(f"  Resolved location: {exp.trace_location}")
+        print(f"  Spans table:       {spans_table}")
+
+        # Verify the OTel tables were actually created (guards against the
+        # silent early-return failure mode described above).
+        _otel_tables = [
+            f"{TRACE_TABLE_PREFIX}_otel_spans",
+            f"{TRACE_TABLE_PREFIX}_otel_logs",
+            f"{TRACE_TABLE_PREFIX}_otel_annotations",
+        ]
+        _existing = {
+            r["tableName"]
+            for r in spark.sql(
+                f"SHOW TABLES IN {catalog_sql}.{TRACE_SCHEMA} LIKE '{TRACE_TABLE_PREFIX}_otel_*'"
+            ).collect()
+        }
+        _missing = [t for t in _otel_tables if t not in _existing]
+        if _missing:
+            print(
+                f"  WARNING: expected OTel tables missing: {_missing}. "
+                "The experiment may be linked to a stale destination. "
+                f"Choose a fresh TRACE_EXPERIMENT name and re-run."
+            )
+        else:
+            print(f"  Verified OTel tables exist: {sorted(_existing)}")
+
+        # Grant the app service principals write + read on the trace tables so
+        # the running app can export spans (bootstrap creates them as the
+        # notebook runner, not as the app SP).
+        if app_sps:
+            print("\n  Granting app SPs access to trace tables...")
+            for _sp in app_sps:
+                _sp_name = _sp["sp_name"]
+                for _tbl in sorted(_existing):
+                    _fq = f"{catalog_sql}.{TRACE_SCHEMA}.`{_tbl}`"
+                    try:
+                        spark.sql(f"GRANT SELECT, MODIFY ON TABLE {_fq} TO `{_sp_name}`")
+                    except Exception as _ge:
+                        print(f"    {_sp_name} on {_tbl}: {_ge}")
+            print(f"    SELECT + MODIFY granted to {len(app_sps)} SP(s) on {len(_existing)} table(s)")
+    except Exception as _te:
+        import traceback as _tb
+        print(f"  WARNING: UC trace storage provisioning failed: {_te}")
+        _tb.print_exc()
 
 # COMMAND ----------
 

@@ -476,6 +476,10 @@ resources:
             dependencies:
               - psycopg[binary]
               - databricks-sdk>=0.30.0
+              # Required by STEP 3b (provision UC trace storage for the FWA
+              # agent): the mlflow.entities.UnityCatalog trace_location API
+              # only exists in mlflow >= 3.14.
+              - mlflow>=3.14.0
         - environment_key: feature_store_env
           spec:
             client: "1"

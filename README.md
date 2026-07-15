@@ -905,9 +905,10 @@ The `bootstrap_workspace` task runs automatically at the end of both the full de
 6. **Serving endpoint grants** — `CAN_QUERY` on all model serving endpoints (LLM, embedding, FWA scorer) for each app SP
 7. **Vector search endpoint grants** — `CAN_USE` on the vector search endpoint (resolves endpoint UUID dynamically for Azure compatibility)
 8. **Genie spaces** — Creates 5 Genie spaces (Analytics Assistant, FWA Analytics, Group Reporting, Financial Analytics, Network Analytics) with catalog table references including metric views (`mv_financial_overview`, `mv_mlr_compliance`, etc.). Validates tables exist before adding. Grants `CAN_RUN` to all app SPs. Skips spaces that already exist (matched by title).
-9. **ML predictions table** — Pre-creates `analytics.fwa_ml_predictions` for gold MV compatibility
-10. **Operational data seeding** — Populates Lakebase with risk alerts (from gold tables), FWA investigation cases (from silver/gold FWA tables), and PA review queue entries (from PA gold tables with reviewer assignments)
-11. **App source code deployment** — Deploys source code to each of the 6 apps and restarts them so they pick up all grants and Lakebase connectivity
+9. **MLflow UC trace storage (FWA agent)** — Links the `/Shared/red-bricks-fwa-agent-traces-uc2` experiment to Unity Catalog OTel tables via `mlflow.set_experiment(trace_location=UnityCatalog(...))`, provisioning `analytics.fwa_agent_otel_spans` (+ `_otel_logs`, `_otel_annotations`, `_otel_metrics`) and granting each app SP `SELECT, MODIFY`. This is what lets the FWA app stream agent traces (supervisor + Genie + Gemini spans) into UC in real-time. Idempotent. **Note:** the experiment name must be one that has never had legacy `databricksTrace*StorageTable` tags — a polluted experiment silently skips table creation.
+10. **ML predictions table** — Pre-creates `analytics.fwa_ml_predictions` for gold MV compatibility
+11. **Operational data seeding** — Populates Lakebase with risk alerts (from gold tables), FWA investigation cases (from silver/gold FWA tables), and PA review queue entries (from PA gold tables with reviewer assignments)
+12. **App source code deployment** — Deploys source code to each of the 6 apps and restarts them so they pick up all grants and Lakebase connectivity
 
 To run manually (e.g., after a fresh deploy without running the full job):
 
