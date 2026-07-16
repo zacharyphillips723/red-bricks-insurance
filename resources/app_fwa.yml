@@ -30,7 +30,7 @@ resources:
           - name: LLM_ENDPOINT
             value: databricks-llama-4-maverick
           - name: GEMINI_ENDPOINT
-            value: databricks-gemini-2-5-pro
+            value: databricks-gemini-2-5-flash
           - name: UC_CATALOG
             value: ${var.catalog}
           - name: UC_SCHEMA
@@ -40,7 +40,7 @@ resources:
           - name: VS_INDEX_NAME
             value: ${var.catalog}.prior_auth.medical_policy_vs_index
           - name: GATEWAY_MODELS
-            value: databricks-llama-4-maverick,databricks-gemini-2-5-pro
+            value: databricks-llama-4-maverick,databricks-gemini-2-5-flash
           - name: MLFLOW_TRACKING_URI
             value: databricks
           - name: MLFLOW_EXPERIMENT_NAME

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Bot, Send, Loader2, Sparkles, ChevronDown, ChevronUp, Shield, Network, Database, Brain, FileText } from "lucide-react";
+import { Bot, Send, Loader2, Sparkles, ChevronDown, ChevronUp, Shield, Network, Database, Brain, FileText, CheckCircle2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import { api } from "@/lib/api";
@@ -139,6 +139,10 @@ export function AgentChat() {
   const [question, setQuestion] = useState("");
   const [history, setHistory] = useState<ChatEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [statusMsg, setStatusMsg] = useState<string>("");
+  const [geniePending, setGeniePending] = useState(true);
+  const [geminiPending, setGeminiPending] = useState(true);
+  const [earlyGemini, setEarlyGemini] = useState<{ analysis: string; policyChunks?: PolicyChunk[] } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const handleAsk = async (q?: string) => {
@@ -146,6 +150,10 @@ export function AgentChat() {
     if (!text.trim()) return;
 
     setLoading(true);
+    setStatusMsg("Routing to Genie + Gemini sub-agents in parallel…");
+    setGeniePending(true);
+    setGeminiPending(true);
+    setEarlyGemini(null);
     setQuestion("");
 
     let targetId: string | undefined;
@@ -179,9 +187,45 @@ export function AgentChat() {
     }
 
     try {
-      const result = await api.queryAgent(cleanQuestion || text, targetId, targetType);
-      setHistory((prev) => [...prev, { question: text, answer: result.answer, sources: result.sources, modelUsed: result.model_used, policyChunks: result.policy_chunks }]);
-      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+      await api.queryAgentStream(
+        cleanQuestion || text,
+        targetId,
+        targetType,
+        (event) => {
+          switch (event.type) {
+            case "status":
+              setStatusMsg(event.message);
+              break;
+            case "gemini":
+              // Gemini finishes well before Genie — surface its clinical
+              // analysis immediately so the user isn't staring at a spinner.
+              setGeminiPending(false);
+              setEarlyGemini({ analysis: event.analysis, policyChunks: event.policy_chunks });
+              break;
+            case "genie":
+              setGeniePending(false);
+              break;
+            case "final":
+              setHistory((prev) => [
+                ...prev,
+                {
+                  question: text,
+                  answer: event.answer,
+                  sources: event.sources,
+                  modelUsed: event.model_used,
+                  policyChunks: event.policy_chunks,
+                },
+              ]);
+              setEarlyGemini(null);
+              setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+              break;
+            case "error":
+              setHistory((prev) => [...prev, { question: text, answer: `Error: ${event.message}`, sources: [] }]);
+              setEarlyGemini(null);
+              break;
+          }
+        },
+      );
     } catch (err) {
       setHistory((prev) => [...prev, { question: text, answer: `Error: ${err}`, sources: [] }]);
     } finally {
@@ -197,7 +241,7 @@ export function AgentChat() {
         </h2>
         <p className="text-sm text-gray-500 mt-1">
           Supervisor agent routes to <strong>Genie</strong> (structured claims SQL) and{" "}
-          <strong>Gemini 2.5 Pro</strong> (medical policy RAG) in parallel, then synthesizes a unified briefing.
+          <strong>Gemini 2.5 Flash</strong> (medical policy RAG) in parallel, then synthesizes a unified briefing.
         </p>
       </div>
 
@@ -220,7 +264,7 @@ export function AgentChat() {
               </div>
               <div className="text-left p-3 rounded-lg border border-blue-200 bg-blue-50 max-w-xs">
                 <div className="flex items-center gap-2 text-sm font-semibold text-blue-800 mb-1">
-                  <Brain className="w-4 h-4" /> Gemini 2.5 Pro (Tool-Calling)
+                  <Brain className="w-4 h-4" /> Gemini 2.5 Flash (Tool-Calling)
                 </div>
                 <p className="text-xs text-blue-700">Searches medical policies via Vector Search, analyzes compliance, classifies Fraud/Waste/Abuse</p>
               </div>
@@ -267,26 +311,45 @@ export function AgentChat() {
           <div className="card p-6">
             <div className="flex items-center gap-3 mb-3">
               <Loader2 className="w-5 h-5 text-databricks-red animate-spin" />
-              <span className="text-sm font-medium text-databricks-dark">Supervisor coordinating sub-agents...</span>
+              <span className="text-sm font-medium text-databricks-dark">{statusMsg || "Supervisor coordinating sub-agents..."}</span>
             </div>
             <div className="flex gap-3">
-              <div className="flex-1 p-2 rounded-md bg-green-50 border border-green-200">
+              <div className={`flex-1 p-2 rounded-md border ${geniePending ? "bg-green-50 border-green-200" : "bg-green-100 border-green-300"}`}>
                 <div className="flex items-center gap-1 text-xs text-green-700">
                   <Database className="w-3 h-3" />
                   <span className="font-medium">Genie</span>
-                  <Loader2 className="w-3 h-3 animate-spin ml-auto" />
+                  {geniePending
+                    ? <Loader2 className="w-3 h-3 animate-spin ml-auto" />
+                    : <CheckCircle2 className="w-3 h-3 ml-auto" />}
                 </div>
-                <p className="text-xs text-green-600 mt-1">Querying claims data...</p>
+                <p className="text-xs text-green-600 mt-1">{geniePending ? "Querying claims data..." : "Claims data retrieved ✓"}</p>
               </div>
-              <div className="flex-1 p-2 rounded-md bg-blue-50 border border-blue-200">
+              <div className={`flex-1 p-2 rounded-md border ${geminiPending ? "bg-blue-50 border-blue-200" : "bg-blue-100 border-blue-300"}`}>
                 <div className="flex items-center gap-1 text-xs text-blue-700">
                   <Brain className="w-3 h-3" />
                   <span className="font-medium">Gemini Analyst</span>
-                  <Loader2 className="w-3 h-3 animate-spin ml-auto" />
+                  {geminiPending
+                    ? <Loader2 className="w-3 h-3 animate-spin ml-auto" />
+                    : <CheckCircle2 className="w-3 h-3 ml-auto" />}
                 </div>
-                <p className="text-xs text-blue-600 mt-1">Analyzing policies &amp; compliance...</p>
+                <p className="text-xs text-blue-600 mt-1">{geminiPending ? "Analyzing policies & compliance..." : "Clinical analysis ready ✓"}</p>
               </div>
             </div>
+
+            {/* Gemini finishes early — show its analysis while Genie is still running. */}
+            {earlyGemini && (
+              <div className="mt-4 border-t border-gray-100 pt-3">
+                <div className="flex items-center gap-2 mb-2 text-xs font-semibold text-blue-800">
+                  <Brain className="w-3.5 h-3.5" /> Preliminary clinical analysis (Gemini)
+                  <FwaClassificationBadge answer={earlyGemini.analysis} />
+                </div>
+                <div className="text-sm text-gray-700 opacity-90">
+                  <ReactMarkdown components={mdComponents}>{earlyGemini.analysis}</ReactMarkdown>
+                </div>
+                <PolicyContextPanel answer={earlyGemini.analysis} policyChunks={earlyGemini.policyChunks} />
+                <p className="text-xs text-gray-400 mt-2 italic">Finalizing with structured claims data…</p>
+              </div>
+            )}
           </div>
         )}
 

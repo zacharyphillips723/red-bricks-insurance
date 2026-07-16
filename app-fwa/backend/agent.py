@@ -23,9 +23,23 @@ import os
 import re
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import mlflow
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import StatementParameterListItem
+
+# set_span_in_context / detach_span_from_context are semi-internal MLflow trace
+# helpers. Import defensively so a future MLflow rename can't crash the agent —
+# without them we still run sub-agents in parallel; only trace nesting degrades.
+try:
+    from mlflow.tracing.provider import (
+        detach_span_from_context,
+        set_span_in_context,
+    )
+except ImportError:  # pragma: no cover - version-dependent
+    set_span_in_context = None
+    detach_span_from_context = None
 
 from .env_config import (
     UC_CATALOG, SQL_WAREHOUSE_ID, LLM_ENDPOINT, GEMINI_ENDPOINT,
@@ -83,44 +97,31 @@ GEMINI_SUBAGENT_PROMPT = """You are an FWA (Fraud, Waste & Abuse) Clinical Analy
 You specialize in medical policy compliance and clinical billing analysis.
 
 You have tools to:
-- Query Unity Catalog tables for provider risk profiles, flagged claims, and ML model scores
 - Search medical policy documents via semantic similarity (Vector Search)
-- Classify findings as Fraud, Waste, or Abuse based on evidence and policy
+- Query Unity Catalog tables (only if the pre-fetched data below is missing something)
 - Query the Lakebase investigation case database for investigation status and audit trail
 
-## MANDATORY WORKFLOW — Follow these steps in order:
+## WORKFLOW — be efficient, minimize tool calls:
 
-1. **Query provider/investigation data** — Use query_uc_table or query_lakebase_cases to get
-   the provider risk profile, flagged claims, ML model scores, and investigation details.
+1. **Provider/claims data is already provided below.** It has been pre-fetched for you. Do NOT
+   re-query it with query_uc_table. Only use query_uc_table if you need a specific detail that
+   is genuinely absent from the provided data.
 
-2. **ALWAYS search medical policies** — You MUST call search_medical_policies at least once
-   for EVERY investigation. This is non-negotiable. Our medical policy documents are the
-   authoritative source for determining whether billing practices are compliant. Search for
-   the specific procedure codes, service categories, or billing patterns found in step 1.
-   If multiple procedure codes or fraud types are involved, make multiple searches.
+2. **Search medical policies** — You MUST call search_medical_policies for the procedure codes
+   and billing patterns in the data. Make ONE combined search that covers the main procedure
+   codes and fraud pattern (e.g. "upcoding E/M office visits 99214 99215"). Only make a second
+   search if a genuinely distinct fraud type is involved. Do not over-search.
 
-3. **Classify each finding** — After gathering both claims data AND policy context, use
-   classify_fwa_type to formally classify each suspicious finding as Fraud, Waste, or Abuse.
+3. **Classify inline in your final answer** — Do NOT call a classification tool. Once you have
+   the policy context, write your final analysis directly and, for each suspicious finding,
+   state its classification as **Fraud**, **Waste**, or **Abuse** with a one-line rationale,
+   a confidence level (High/Medium/Low), and the specific policy citation.
 
 ## CRITICAL RULES:
-- NEVER skip search_medical_policies. Even if the fraud seems obvious from claims data alone,
-  you MUST search our medical policies to cite the specific rules being violated.
-- When you find procedure codes (CPT codes like 99213, 99215, etc.), ALWAYS search for the
-  policy governing those codes.
-- When you find fraud types (upcoding, unbundling, duplicate billing), ALWAYS search for our
-  policy on that practice.
-- Reference specific policy names, rule types, claim IDs, and dollar amounts in your analysis."""
-
-GENIE_QUESTIONS_TEMPLATE = """Based on this investigation question about {target_type} {target_id}:
-"{question}"
-
-Generate exactly 1 comprehensive natural language question for a SQL analytics system that can query claims data.
-The question should be broad enough to surface the most relevant evidence in a single query.
-Combine multiple dimensions where possible — e.g. "Show total billed vs allowed amounts,
-top procedure codes by volume, E/M visit level distribution, and denial rate for provider X"
-rather than asking separate narrow questions.
-
-Return ONLY a JSON array with exactly 1 question string, nothing else."""
+- NEVER skip search_medical_policies — our policies are the authoritative source for citing the
+  specific rules being violated.
+- Reference specific policy names, rule types, claim IDs, and dollar amounts.
+- Aim to finish in 2 tool calls (one policy search, optionally one more) then answer."""
 
 # ---------------------------------------------------------------------------
 # Gemini sub-agent tools (same as before)
@@ -196,31 +197,9 @@ GEMINI_TOOLS = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "classify_fwa_type",
-            "description": (
-                "Classify an FWA finding as Fraud, Waste, or Abuse based on claim evidence and "
-                "retrieved medical policy context. Returns a structured classification with confidence "
-                "score, reasoning, and policy citations."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "claim_summary": {
-                        "type": "string",
-                        "description": "Summary of the claim or billing pattern being evaluated.",
-                    },
-                    "policy_context": {
-                        "type": "string",
-                        "description": "Relevant medical policy sections retrieved from search_medical_policies.",
-                    },
-                },
-                "required": ["claim_summary", "policy_context"],
-            },
-        },
-    },
+    # NOTE: classify_fwa_type was removed as a tool — classification now happens
+    # inline in the analyst's final answer, saving a full LLM round-trip (plus
+    # the extra reasoning round the model spent processing each classify result).
     {
         "type": "function",
         "function": {
@@ -249,12 +228,31 @@ GEMINI_TOOLS = [
     },
 ]
 
-MAX_TOOL_ROUNDS = 6
+MAX_TOOL_ROUNDS = 3
 
 
 # ---------------------------------------------------------------------------
 # Low-level helpers
 # ---------------------------------------------------------------------------
+
+def _run_with_parent_span(parent_span, fn, *args, **kwargs):
+    """Run ``fn`` in the current thread with ``parent_span`` re-attached.
+
+    MLflow keeps the active span in its own runtime context (contextvars),
+    which does NOT automatically cross a ThreadPoolExecutor boundary — a naive
+    contextvars.copy_context() silently splits the work into separate root
+    traces. Re-attaching the parent span with set_span_in_context() ensures any
+    @mlflow.trace spans created inside ``fn`` nest under the supervisor as
+    children, preserving the single deep span tree this demo showcases.
+    """
+    if parent_span is None or set_span_in_context is None:
+        return fn(*args, **kwargs)
+    token = set_span_in_context(parent_span)
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        detach_span_from_context(token)
+
 
 def _execute_sql(sql: str, params: list | None = None) -> list[dict]:
     """Execute SQL via SDK Statement Execution API."""
@@ -282,6 +280,27 @@ def _sdk_request(method: str, path: str, body: dict | None = None) -> dict:
     """Make an authenticated request using the SDK's api_client."""
     w = WorkspaceClient()
     return w.api_client.do(method, path, body=body) if body else w.api_client.do(method, path)
+
+
+def _content_to_text(content) -> str:
+    """Normalize an LLM message `content` to plain text.
+
+    Some endpoints (e.g. Gemini via the Gateway) return content as a list of
+    typed blocks — [{"type": "text", "text": "..."}] — rather than a bare
+    string. Flatten those so downstream code (frontend markdown, synthesis
+    context) always receives a string.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                parts.append(block.get("text") or block.get("content") or "")
+            elif isinstance(block, str):
+                parts.append(block)
+        return "\n".join(p for p in parts if p)
+    return str(content) if content is not None else ""
 
 
 def _validate_sql(sql: str) -> str | None:
@@ -455,25 +474,27 @@ def _run_genie_subagent(target_id: str, target_type: str, question: str) -> dict
     """Route structured data questions to Genie and return results."""
     from .genie import ask_genie
 
-    # Generate Genie-appropriate questions using the supervisor LLM
-    try:
-        prompt = GENIE_QUESTIONS_TEMPLATE.format(
-            target_type=target_type, target_id=target_id, question=question,
+    # Build the Genie question deterministically. Genie is itself an NL->SQL
+    # engine, so spending a full supervisor-LLM round-trip just to reword the
+    # question adds latency for no benefit. For provider/investigation targets
+    # we template a rich, multi-dimension question directly.
+    if target_type == "provider" and target_id:
+        genie_question = (
+            f"For provider {target_id}: show total billed vs allowed amounts, "
+            "claim counts, top procedure codes by volume, E/M visit level "
+            "distribution (99211-99215), and denial rate. "
+            f"Context: {question}"
         )
-        resp = _sdk_request("POST", f"/serving-endpoints/{LLM_ENDPOINT}/invocations", {
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 300,
-            "temperature": 0.0,
-        })
-        content = resp.get("choices", [{}])[0].get("message", {}).get("content", "[]")
-        # Parse JSON array of questions
-        clean = content.strip().removeprefix("```json").removesuffix("```").strip()
-        genie_questions = json.loads(clean)
-        if not isinstance(genie_questions, list):
-            genie_questions = [str(genie_questions)]
-    except Exception as e:
-        print(f"[Genie Sub-agent] Question generation failed: {e}, using original")
-        genie_questions = [question]
+    elif target_type == "investigation" and target_id:
+        genie_question = (
+            f"For investigation {target_id}: summarize the associated claims — "
+            "total billed, total paid, claim volume, top procedure codes, and "
+            f"any billing anomalies. Context: {question}"
+        )
+    else:
+        genie_question = question
+
+    genie_questions = [genie_question]
 
     # Execute each Genie question
     results = []
@@ -509,6 +530,43 @@ def _run_genie_subagent(target_id: str, target_type: str, question: str) -> dict
 # Gemini sub-agent (tool-calling)
 # ---------------------------------------------------------------------------
 
+@mlflow.trace(span_type="TOOL", name="prefetch_provider_context")
+def _prefetch_provider_context(npi: str) -> str | None:
+    """Pre-fetch provider risk, flagged claims, and ML scores in parallel.
+
+    These are deterministic lookups against fixed gold tables — there is no
+    reason to spend serial Gemini tool rounds on them. Fetching them up front
+    (concurrently) collapses ~2-3 LLM+tool round-trips into a single set of
+    parallel SQL queries and lets the model jump straight to policy search.
+    """
+    # These three lookups are plain SQL and create no MLflow spans of their
+    # own, so they can run on bare worker threads — no span context to carry.
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        risk_f = pool.submit(get_provider_risk_profile, npi)
+        claims_f = pool.submit(get_provider_flagged_claims, npi, 15)
+        ml_f = pool.submit(get_provider_ml_scores, npi, 15)
+        try:
+            risk = risk_f.result()
+            claims = claims_f.result()
+            ml_scores = ml_f.result()
+        except Exception as e:
+            print(f"[Gemini Agent] Provider pre-fetch error: {e}")
+            return None
+
+    if not risk and not claims and not ml_scores:
+        return None
+
+    return (
+        "Provider data (pre-fetched from Unity Catalog gold tables — no need to "
+        "re-query these):\n"
+        f"### Provider risk profile\n```json\n{json.dumps(risk, default=str, indent=1)}\n```\n"
+        f"### Flagged claims (top {len(claims or [])} by fraud score)\n"
+        f"```json\n{json.dumps(claims, default=str, indent=1)}\n```\n"
+        f"### ML fraud model scores (top {len(ml_scores or [])})\n"
+        f"```json\n{json.dumps(ml_scores, default=str, indent=1)}\n```\n\n"
+    )
+
+
 @mlflow.trace(span_type="AGENT", name="gemini_subagent")
 def _run_gemini_subagent(target_id: str, target_type: str, question: str) -> dict:
     """Run the Gemini sub-agent with tool-calling for medical policy analysis."""
@@ -523,11 +581,20 @@ def _run_gemini_subagent(target_id: str, target_type: str, question: str) -> dic
                 "Query UC tables for flagged claims, provider risk, and ML model scores.\n"
             )
     elif target_type == "provider":
-        context_hint += (
-            f"Start by querying: SELECT * FROM {PROVIDER_RISK_TABLE} WHERE provider_npi = '{target_id}' LIMIT 1\n"
-            f"Then query flagged claims from {CLAIM_FLAGS_TABLE} and ML predictions from {MODEL_INFERENCE_TABLE}.\n"
-            "After gathering data, search medical policies for relevant procedure codes.\n"
-        )
+        prefetched = _prefetch_provider_context(target_id)
+        if prefetched:
+            context_hint += prefetched
+            context_hint += (
+                "Now search medical policies for the procedure codes and billing "
+                "patterns in the data above, then classify each finding.\n"
+            )
+        else:
+            # Fall back to instructing the model to query the tables itself.
+            context_hint += (
+                f"Start by querying: SELECT * FROM {PROVIDER_RISK_TABLE} WHERE provider_npi = '{target_id}' LIMIT 1\n"
+                f"Then query flagged claims from {CLAIM_FLAGS_TABLE} and ML predictions from {MODEL_INFERENCE_TABLE}.\n"
+                "After gathering data, search medical policies for relevant procedure codes.\n"
+            )
 
     messages = [
         {"role": "system", "content": GEMINI_SUBAGENT_PROMPT},
@@ -562,7 +629,7 @@ def _run_gemini_subagent(target_id: str, target_type: str, question: str) -> dic
         )
 
         if not tool_calls:
-            answer = data.get("choices", [{}])[0].get("message", {}).get("content", "No response.")
+            answer = _content_to_text(data.get("choices", [{}])[0].get("message", {}).get("content", "No response."))
             return {
                 "agent": "gemini_analyst",
                 "model": GEMINI_ENDPOINT,
@@ -618,7 +685,7 @@ def _run_gemini_subagent(target_id: str, target_type: str, question: str) -> dic
         "max_tokens": 3000,
         "temperature": 0.05,
     })
-    answer = data.get("choices", [{}])[0].get("message", {}).get("content", "No response.")
+    answer = _content_to_text(data.get("choices", [{}])[0].get("message", {}).get("content", "No response."))
     return {
         "agent": "gemini_analyst",
         "model": GEMINI_ENDPOINT,
@@ -627,6 +694,80 @@ def _run_gemini_subagent(target_id: str, target_type: str, question: str) -> dic
         "tools_used": tools_used,
         "policy_chunks": policy_chunks,
     }
+
+
+# ---------------------------------------------------------------------------
+# Supervisor helpers (shared by blocking + streaming paths)
+# ---------------------------------------------------------------------------
+
+def _build_synthesis_context(target_id, target_type, question, genie_result, gemini_result) -> str:
+    """Assemble the supervisor's synthesis prompt from sub-agent outputs."""
+    ctx = f"Original question: {question}\nTarget: {target_id} ({target_type})\n\n"
+
+    ctx += "## GENIE SUB-AGENT (Structured Claims Data)\n"
+    if genie_result:
+        for r in genie_result.get("results", []):
+            ctx += f"\n### Question: {r.get('question', 'N/A')}\n"
+            if r.get("error"):
+                ctx += f"Error: {r['error']}\n"
+            else:
+                ctx += f"SQL: {r.get('sql_query', 'N/A')}\n"
+                ctx += f"Rows returned: {r.get('row_count', 0)}\n"
+                if r.get("rows"):
+                    ctx += f"Data:\n```json\n{json.dumps(r['rows'][:10], default=str, indent=1)}\n```\n"
+                if r.get("description"):
+                    ctx += f"Description: {r['description']}\n"
+    else:
+        ctx += "Genie sub-agent did not return results.\n"
+
+    ctx += "\n## GEMINI ANALYST SUB-AGENT (Medical Policy & Clinical Analysis)\n"
+    if gemini_result:
+        ctx += f"Model: {gemini_result.get('model', 'unknown')}\n"
+        ctx += f"Tools used: {gemini_result.get('tools_used', [])}\n"
+        ctx += f"Tables queried: {gemini_result.get('tables_queried', 0)}\n\n"
+        ctx += f"Analysis:\n{gemini_result.get('answer', 'No analysis provided.')}\n"
+    else:
+        ctx += "Gemini sub-agent did not return results.\n"
+
+    return ctx
+
+
+def _build_sources(genie_result, gemini_result) -> list[dict]:
+    return [
+        {
+            "type": "supervisor_agent",
+            "supervisor_model": LLM_ENDPOINT,
+            "gemini_model": GEMINI_ENDPOINT,
+            "genie_questions": genie_result.get("questions_asked", 0) if genie_result else 0,
+            "gemini_tables_queried": gemini_result.get("tables_queried", 0) if gemini_result else 0,
+            "gemini_tools_used": gemini_result.get("tools_used", []) if gemini_result else [],
+        }
+    ]
+
+
+def _synthesize(target_id, target_type, question, genie_result, gemini_result) -> str:
+    """Run the supervisor synthesis LLM call and return the final briefing text."""
+    synthesis_context = _build_synthesis_context(
+        target_id, target_type, question, genie_result, gemini_result
+    )
+    with mlflow.start_span(name="supervisor_synthesis", span_type="LLM") as synth_span:
+        synth_span.set_inputs({"model": LLM_ENDPOINT, "sub_agents": ["genie", "gemini"]})
+        t0 = time.time()
+        data = _sdk_request("POST", f"/serving-endpoints/{LLM_ENDPOINT}/invocations", {
+            "messages": [
+                {"role": "system", "content": SUPERVISOR_SYSTEM_PROMPT},
+                {"role": "user", "content": synthesis_context},
+            ],
+            "max_tokens": 4000,
+            "temperature": 0.1,
+        })
+        usage = data.get("usage", {})
+        synth_span.set_outputs({
+            "tokens_input": usage.get("prompt_tokens", 0),
+            "tokens_output": usage.get("completion_tokens", 0),
+            "latency_ms": int((time.time() - t0) * 1000),
+        })
+    return _content_to_text(data.get("choices", [{}])[0].get("message", {}).get("content", "No response."))
 
 
 # ---------------------------------------------------------------------------
@@ -639,86 +780,44 @@ def query_fwa_agent(target_id: str, target_type: str, question: str, model_endpo
     try:
         print(f"[Supervisor] Processing: {target_type} {target_id} — {question[:80]}...")
 
-        # Phase 1: Dispatch to sub-agents sequentially
-        # (Sequential ensures MLflow trace context propagates correctly,
-        #  producing a single deep span tree instead of orphaned traces.)
+        # Phase 1: Dispatch to sub-agents in PARALLEL.
+        # Genie and Gemini are independent — the supervisor only combines their
+        # outputs at synthesis time — so we run them concurrently and pay
+        # max(genie, gemini) instead of genie + gemini.
+        #
+        # Each sub-agent runs in its own thread with the supervisor span
+        # re-attached (see _run_with_parent_span), so their @mlflow.trace spans
+        # nest under the supervisor as siblings instead of splitting into
+        # separate root traces.
         genie_result = None
         gemini_result = None
 
-        try:
-            genie_result = _run_genie_subagent(target_id, target_type, question)
-        except Exception as e:
-            print(f"[Supervisor] Genie sub-agent error: {e}")
-            traceback.print_exc()
+        parent_span = mlflow.get_current_active_span()
 
-        try:
-            gemini_result = _run_gemini_subagent(target_id, target_type, question)
-        except Exception as e:
-            print(f"[Supervisor] Gemini sub-agent error: {e}")
-            traceback.print_exc()
+        def _dispatch(fn):
+            return _run_with_parent_span(
+                parent_span, fn, target_id, target_type, question
+            )
 
-        # Phase 2: Build synthesis context
-        synthesis_context = f"Original question: {question}\nTarget: {target_id} ({target_type})\n\n"
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            genie_future = pool.submit(_dispatch, _run_genie_subagent)
+            gemini_future = pool.submit(_dispatch, _run_gemini_subagent)
 
-        synthesis_context += "## GENIE SUB-AGENT (Structured Claims Data)\n"
-        if genie_result:
-            for r in genie_result.get("results", []):
-                synthesis_context += f"\n### Question: {r.get('question', 'N/A')}\n"
-                if r.get("error"):
-                    synthesis_context += f"Error: {r['error']}\n"
-                else:
-                    synthesis_context += f"SQL: {r.get('sql_query', 'N/A')}\n"
-                    synthesis_context += f"Rows returned: {r.get('row_count', 0)}\n"
-                    if r.get("rows"):
-                        synthesis_context += f"Data:\n```json\n{json.dumps(r['rows'][:10], default=str, indent=1)}\n```\n"
-                    if r.get("description"):
-                        synthesis_context += f"Description: {r['description']}\n"
-        else:
-            synthesis_context += "Genie sub-agent did not return results.\n"
+            try:
+                genie_result = genie_future.result()
+            except Exception as e:
+                print(f"[Supervisor] Genie sub-agent error: {e}")
+                traceback.print_exc()
 
-        synthesis_context += "\n## GEMINI ANALYST SUB-AGENT (Medical Policy & Clinical Analysis)\n"
-        if gemini_result:
-            synthesis_context += f"Model: {gemini_result.get('model', 'unknown')}\n"
-            synthesis_context += f"Tools used: {gemini_result.get('tools_used', [])}\n"
-            synthesis_context += f"Tables queried: {gemini_result.get('tables_queried', 0)}\n\n"
-            synthesis_context += f"Analysis:\n{gemini_result.get('answer', 'No analysis provided.')}\n"
-        else:
-            synthesis_context += "Gemini sub-agent did not return results.\n"
+            try:
+                gemini_result = gemini_future.result()
+            except Exception as e:
+                print(f"[Supervisor] Gemini sub-agent error: {e}")
+                traceback.print_exc()
 
-        # Phase 3: Supervisor synthesizes
-        with mlflow.start_span(name="supervisor_synthesis", span_type="LLM") as synth_span:
-            synth_span.set_inputs({"model": LLM_ENDPOINT, "sub_agents": ["genie", "gemini"]})
-            t0 = time.time()
-            data = _sdk_request("POST", f"/serving-endpoints/{LLM_ENDPOINT}/invocations", {
-                "messages": [
-                    {"role": "system", "content": SUPERVISOR_SYSTEM_PROMPT},
-                    {"role": "user", "content": synthesis_context},
-                ],
-                "max_tokens": 4000,
-                "temperature": 0.1,
-            })
-            usage = data.get("usage", {})
-            synth_span.set_outputs({
-                "tokens_input": usage.get("prompt_tokens", 0),
-                "tokens_output": usage.get("completion_tokens", 0),
-                "latency_ms": int((time.time() - t0) * 1000),
-            })
-
-        answer = data.get("choices", [{}])[0].get("message", {}).get("content", "No response.")
-
-        # Build sources metadata
-        sources = [
-            {
-                "type": "supervisor_agent",
-                "supervisor_model": LLM_ENDPOINT,
-                "gemini_model": GEMINI_ENDPOINT,
-                "genie_questions": genie_result.get("questions_asked", 0) if genie_result else 0,
-                "gemini_tables_queried": gemini_result.get("tables_queried", 0) if gemini_result else 0,
-                "gemini_tools_used": gemini_result.get("tools_used", []) if gemini_result else [],
-            }
-        ]
-
-        # Pass raw policy chunks from VS retrieval to frontend
+        # Phase 2 + 3: Synthesize the final briefing from both sub-agents.
+        answer = _synthesize(target_id, target_type, question, genie_result, gemini_result)
+        sources = _build_sources(genie_result, gemini_result)
         policy_chunks = gemini_result.get("policy_chunks", []) if gemini_result else []
 
         return {
@@ -732,6 +831,88 @@ def query_fwa_agent(target_id: str, target_type: str, question: str, model_endpo
         print(f"[Supervisor] ERROR: {e}")
         traceback.print_exc()
         return {"answer": f"Error: {str(e)}", "sources": [], "model_used": LLM_ENDPOINT}
+
+
+@mlflow.trace(span_type="AGENT", name="fwa_supervisor_agent_stream")
+def stream_fwa_agent(target_id: str, target_type: str, question: str):
+    """Streaming variant of query_fwa_agent — yields milestone events.
+
+    Emits events as each stage completes so the UI can render progress and the
+    early-finishing Gemini analysis long before the slower Genie query lands:
+
+        status   → {"stage": "...", "message": "..."}
+        gemini   → clinical analysis + policy_chunks (arrives ~18s)
+        genie    → structured claims data (arrives ~40s)
+        final    → synthesized briefing + sources
+        error    → {"message": "..."}
+
+    Each yielded value is a (event_type, payload) tuple; the route serializes
+    them as Server-Sent Events.
+    """
+    try:
+        yield ("status", {"stage": "dispatching",
+                          "message": "Routing to Genie + Gemini sub-agents in parallel…"})
+
+        parent_span = mlflow.get_current_active_span()
+
+        def _dispatch(fn):
+            return _run_with_parent_span(parent_span, fn, target_id, target_type, question)
+
+        genie_result = None
+        gemini_result = None
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = {
+                pool.submit(_dispatch, _run_genie_subagent): "genie",
+                pool.submit(_dispatch, _run_gemini_subagent): "gemini",
+            }
+            # Emit each sub-agent's result the moment it finishes, regardless of
+            # order — Gemini (~18s) lands well before Genie (~40s).
+            for fut in as_completed(futures):
+                which = futures[fut]
+                try:
+                    res = fut.result()
+                except Exception as e:
+                    print(f"[Supervisor:stream] {which} sub-agent error: {e}")
+                    traceback.print_exc()
+                    yield ("status", {"stage": f"{which}_error",
+                                      "message": f"{which} sub-agent failed: {e}"})
+                    continue
+
+                if which == "gemini":
+                    gemini_result = res
+                    yield ("gemini", {
+                        "analysis": res.get("answer", "") if res else "",
+                        "tools_used": res.get("tools_used", []) if res else [],
+                        "tables_queried": res.get("tables_queried", 0) if res else 0,
+                        "policy_chunks": res.get("policy_chunks", []) if res else [],
+                        "model": res.get("model", GEMINI_ENDPOINT) if res else GEMINI_ENDPOINT,
+                    })
+                    yield ("status", {"stage": "gemini_complete",
+                                      "message": "Clinical policy analysis ready — waiting on claims data…"})
+                else:
+                    genie_result = res
+                    yield ("genie", {"results": res.get("results", []) if res else [],
+                                     "questions_asked": res.get("questions_asked", 0) if res else 0})
+                    yield ("status", {"stage": "genie_complete",
+                                      "message": "Structured claims data retrieved."})
+
+        yield ("status", {"stage": "synthesizing",
+                          "message": "Synthesizing unified investigation briefing…"})
+
+        answer = _synthesize(target_id, target_type, question, genie_result, gemini_result)
+
+        yield ("final", {
+            "answer": answer,
+            "sources": _build_sources(genie_result, gemini_result),
+            "model_used": f"{LLM_ENDPOINT} (supervisor) + {GEMINI_ENDPOINT} (analyst)",
+            "policy_chunks": gemini_result.get("policy_chunks", []) if gemini_result else [],
+        })
+
+    except Exception as e:
+        print(f"[Supervisor:stream] ERROR: {e}")
+        traceback.print_exc()
+        yield ("error", {"message": str(e)})
 
 
 # ---------------------------------------------------------------------------

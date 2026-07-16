@@ -148,6 +148,27 @@ export interface AgentResponse {
   policy_chunks?: PolicyChunk[];
 }
 
+// --- Streaming agent events (SSE) ---
+export type AgentStreamEvent =
+  | { type: "status"; stage: string; message: string }
+  | {
+      type: "gemini";
+      analysis: string;
+      tools_used: string[];
+      tables_queried: number;
+      policy_chunks: PolicyChunk[];
+      model: string;
+    }
+  | { type: "genie"; results: Record<string, unknown>[]; questions_asked: number }
+  | {
+      type: "final";
+      answer: string;
+      sources: Record<string, unknown>[];
+      model_used?: string;
+      policy_chunks?: PolicyChunk[];
+    }
+  | { type: "error"; message: string };
+
 export interface PolicySection {
   chunk_id: string;
   policy_name: string;
@@ -284,6 +305,61 @@ export const api = {
         target_type: targetType,
       }),
     }),
+
+  // Streaming agent: invokes onEvent for each SSE milestone as it arrives.
+  queryAgentStream: async (
+    question: string,
+    targetId: string | undefined,
+    targetType: string | undefined,
+    onEvent: (event: AgentStreamEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    const res = await fetch(`${API_BASE}/agent/query/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, target_id: targetId, target_type: targetType }),
+      signal,
+    });
+    if (!res.ok || !res.body) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || `API error: ${res.status}`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    // Parse SSE frames: blocks separated by a blank line, each with
+    // "event: <type>" and "data: <json>" lines.
+    const flush = (block: string) => {
+      let eventType = "message";
+      const dataLines: string[] = [];
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event:")) eventType = line.slice(6).trim();
+        else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+      }
+      if (!dataLines.length) return;
+      try {
+        const payload = JSON.parse(dataLines.join("\n"));
+        onEvent({ type: eventType, ...payload } as AgentStreamEvent);
+      } catch {
+        // ignore malformed frame
+      }
+    };
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let sep: number;
+      while ((sep = buffer.indexOf("\n\n")) !== -1) {
+        const block = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        if (block.trim()) flush(block);
+      }
+    }
+    if (buffer.trim()) flush(buffer);
+  },
 
   // Genie
   askGenie: (question: string, conversationId?: string) =>

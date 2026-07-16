@@ -1,12 +1,14 @@
 """FastAPI routes for the FWA Investigation Portal."""
 
 import asyncio
+import json
 import logging
 import os
 from typing import Optional
 
 from databricks.sdk import WorkspaceClient
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 
 from .database import db
@@ -17,6 +19,7 @@ from .env_config import (
 from .agent import (
     query_fwa_agent,
     query_fwa_agent_via_endpoint,
+    stream_fwa_agent,
     get_provider_risk_profile,
     get_provider_flagged_claims,
     get_provider_ml_scores,
@@ -701,6 +704,53 @@ async def query_agent(query_in: AgentQueryIn):
     return AgentQueryOut(**result)
 
 
+@api.post("/agent/query/stream", operation_id="queryFWAAgentStream")
+async def query_agent_stream(query_in: AgentQueryIn):
+    """Server-Sent Events variant of /agent/query.
+
+    Emits milestone events as each sub-agent finishes so the UI can render the
+    early Gemini clinical analysis (~18s) while the slower Genie claims query
+    (~40s) is still running, then the final synthesized briefing.
+    """
+    target_id = query_in.target_id or ""
+    target_type = query_in.target_type or "investigation"
+    question = query_in.question
+
+    async def event_source():
+        # Bridge the blocking sync generator onto a worker thread so each
+        # yielded event reaches the client as soon as it is produced without
+        # blocking the event loop.
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+        _SENTINEL = object()
+
+        def _produce():
+            try:
+                for event_type, payload in stream_fwa_agent(target_id, target_type, question):
+                    loop.call_soon_threadsafe(queue.put_nowait, (event_type, payload))
+            except Exception as e:  # pragma: no cover - defensive
+                loop.call_soon_threadsafe(queue.put_nowait, ("error", {"message": str(e)}))
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
+
+        producer = loop.run_in_executor(None, _produce)
+        try:
+            while True:
+                item = await queue.get()
+                if item is _SENTINEL:
+                    break
+                event_type, payload = item
+                yield f"event: {event_type}\ndata: {json.dumps(payload, default=str)}\n\n"
+        finally:
+            await producer
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @api.get("/agent/models", operation_id="getAvailableModels")
 async def get_available_models():
     return {"models": GATEWAY_MODELS}
@@ -770,9 +820,9 @@ async def get_observability_costs():
                   WHEN 'databricks-llama-4-maverick'
                     THEN ROUND(SUM(eu.input_token_count) * 0.40 / 1000000
                              + SUM(eu.output_token_count) * 1.60 / 1000000, 4)
-                  WHEN 'databricks-gemini-2-5-pro'
-                    THEN ROUND(SUM(eu.input_token_count) * 1.25 / 1000000
-                             + SUM(eu.output_token_count) * 10.00 / 1000000, 4)
+                  WHEN 'databricks-gemini-2-5-flash'
+                    THEN ROUND(SUM(eu.input_token_count) * 0.30 / 1000000
+                             + SUM(eu.output_token_count) * 2.50 / 1000000, 4)
                   ELSE 0
                 END AS estimated_cost_usd
             FROM system.serving.endpoint_usage eu
