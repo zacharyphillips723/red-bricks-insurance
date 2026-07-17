@@ -87,6 +87,18 @@ LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT") or "databricks-llama-4-maverick"
 # tool-calling behavior. Overridable via env.
 PA_AGENT_ENDPOINT = os.environ.get("PA_AGENT_ENDPOINT") or "databricks-gemini-2-5-flash"
 
+# MLflow UC trace storage — the app links its experiment to these UC OTel
+# tables so PA agent + document-adjudication traces stream into Unity Catalog
+# in real-time. Tables are `{UC_TRACE_TABLE_PREFIX}_otel_spans`, etc., in
+# `{UC_CATALOG}.{UC_TRACE_SCHEMA}`. Provisioned by bootstrap_workspace.py; the
+# app performs an idempotent re-link on startup. The experiment name must be a
+# fresh one that has never had legacy trace-storage tags set on it.
+UC_TRACE_SCHEMA = os.environ.get("UC_TRACE_SCHEMA", "analytics")
+UC_TRACE_TABLE_PREFIX = os.environ.get("UC_TRACE_TABLE_PREFIX", "pa_agent")
+MLFLOW_UC_EXPERIMENT = os.environ.get(
+    "MLFLOW_UC_EXPERIMENT", "/Shared/red-bricks-pa-agent-traces-uc"
+)
+
 # UC Volume for uploaded medical records (PA document auto-adjudication feature).
 UC_SCHEMA = os.environ.get("UC_SCHEMA", "prior_auth")
 PA_DOC_VOLUME = os.environ.get("PA_DOC_VOLUME", f"{UC_CATALOG}.{UC_SCHEMA}.pa_documents")
@@ -98,3 +110,6 @@ print(f"[env_config] GENIE_SPACE_ID={GENIE_SPACE_ID}")
 print(f"[env_config] LLM_ENDPOINT={LLM_ENDPOINT}")
 print(f"[env_config] PA_AGENT_ENDPOINT={PA_AGENT_ENDPOINT}")
 print(f"[env_config] PA_DOC_VOLUME_PATH={PA_DOC_VOLUME_PATH}")
+print(f"[env_config] UC_TRACE_SCHEMA={UC_TRACE_SCHEMA}")
+print(f"[env_config] UC_TRACE_TABLE_PREFIX={UC_TRACE_TABLE_PREFIX}")
+print(f"[env_config] MLFLOW_UC_EXPERIMENT={MLFLOW_UC_EXPERIMENT}")

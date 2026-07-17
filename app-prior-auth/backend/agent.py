@@ -10,6 +10,7 @@ import re
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 
+import mlflow
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import StatementParameterListItem
 
@@ -228,6 +229,7 @@ def _validate_sql(sql: str) -> str | None:
     return None
 
 
+@mlflow.trace(span_type="TOOL", name="query_uc_table")
 def _execute_tool(tool_name: str, tool_args: dict) -> str:
     if tool_name == "query_uc_table":
         sql = tool_args.get("sql", "").strip()
@@ -386,6 +388,7 @@ def _get_tier1_evaluation(auth_request_id: str) -> dict | None:
         return None
 
 
+@mlflow.trace(span_type="TOOL", name="prefetch_pa_context")
 def _build_pa_context(auth_request_id: str, question: str) -> tuple[str, dict]:
     """Assemble the agent's user-message context, pre-fetching deterministic data.
 
@@ -467,6 +470,7 @@ def _build_pa_context(auth_request_id: str, question: str) -> tuple[str, dict]:
 # Tool-calling agent
 # ---------------------------------------------------------------------------
 
+@mlflow.trace(span_type="AGENT", name="pa_review_agent")
 def query_pa_agent(auth_request_id: str, question: str) -> dict:
     """PA review agent with tool-calling for dynamic UC table access."""
     try:
@@ -569,6 +573,7 @@ def query_pa_agent(auth_request_id: str, question: str) -> dict:
         return {"answer": f"Error: {str(e)}", "sources": []}
 
 
+@mlflow.trace(span_type="AGENT", name="pa_review_agent_stream")
 def stream_pa_agent(auth_request_id: str, question: str):
     """Streaming variant of query_pa_agent — yields (event_type, payload) tuples.
 

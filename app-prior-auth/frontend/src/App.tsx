@@ -9,6 +9,7 @@ import { AgentChat } from "@/pages/AgentChat";
 import { CaseloadView } from "@/pages/CaseloadView";
 import { Compliance } from "@/pages/Compliance";
 import { DocumentIntake } from "@/pages/DocumentIntake";
+import { Observability } from "@/pages/Observability";
 import { useHashRouter } from "@/lib/useHashRouter";
 import { api } from "@/lib/api";
 
@@ -56,6 +57,8 @@ export default function App() {
         return <CaseloadView />;
       case "compliance":
         return <Compliance onSelectRequest={handleSelectRequest} />;
+      case "observability":
+        return <Observability />;
       default:
         return <Dashboard onSelectRequest={handleSelectRequest} />;
     }

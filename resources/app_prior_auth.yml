@@ -29,6 +29,14 @@ resources:
             value: ${var.catalog}
           - name: UC_SCHEMA
             value: prior_auth
+          - name: MLFLOW_TRACKING_URI
+            value: databricks
+          - name: MLFLOW_UC_EXPERIMENT
+            value: /Shared/red-bricks-pa-agent-traces-uc
+          - name: UC_TRACE_SCHEMA
+            value: analytics
+          - name: UC_TRACE_TABLE_PREFIX
+            value: pa_agent
       resources:
         - name: llm-endpoint
           serving_endpoint:

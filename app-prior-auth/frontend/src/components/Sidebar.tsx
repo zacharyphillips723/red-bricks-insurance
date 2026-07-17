@@ -6,6 +6,7 @@ import {
   Users,
   ShieldCheck,
   FileUp,
+  Activity,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -22,6 +23,7 @@ const NAV_ITEMS = [
   { id: "agent", label: "PA Review Agent", icon: Bot },
   { id: "caseload", label: "Caseload", icon: Users },
   { id: "compliance", label: "CMS Compliance", icon: ShieldCheck },
+  { id: "observability", label: "Observability", icon: Activity },
 ];
 
 export function Sidebar({ activePage, onNavigate, pendingCount }: SidebarProps) {

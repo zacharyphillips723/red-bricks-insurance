@@ -1304,6 +1304,75 @@ else:
 
 # COMMAND ----------
 
+print("=" * 60)
+print("STEP 3b-2: Provision MLflow UC Trace Storage (PA Review Agent)")
+print("=" * 60)
+
+# These MUST stay in sync with app-prior-auth/backend/env_config.py defaults and
+# the MLFLOW_UC_EXPERIMENT / UC_TRACE_* env vars in resources/app_prior_auth.yml.
+PA_TRACE_EXPERIMENT = "/Shared/red-bricks-pa-agent-traces-uc"
+PA_TRACE_SCHEMA = "analytics"
+PA_TRACE_TABLE_PREFIX = "pa_agent"
+
+if not warehouse_id:
+    print("  Skipped — no warehouse_id available (required to provision UC trace tables).")
+else:
+    try:
+        import os as _os
+        import mlflow
+        from mlflow.entities import UnityCatalog
+
+        mlflow.set_tracking_uri("databricks")
+        _os.environ["MLFLOW_TRACING_SQL_WAREHOUSE_ID"] = warehouse_id
+
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog_sql}.{PA_TRACE_SCHEMA}")
+
+        exp = mlflow.set_experiment(
+            PA_TRACE_EXPERIMENT,
+            trace_location=UnityCatalog(
+                catalog_name=catalog,
+                schema_name=PA_TRACE_SCHEMA,
+                table_prefix=PA_TRACE_TABLE_PREFIX,
+            ),
+        )
+        print(f"  Experiment linked: {PA_TRACE_EXPERIMENT} (ID: {exp.experiment_id})")
+
+        _otel_tables = [
+            f"{PA_TRACE_TABLE_PREFIX}_otel_spans",
+            f"{PA_TRACE_TABLE_PREFIX}_otel_logs",
+            f"{PA_TRACE_TABLE_PREFIX}_otel_annotations",
+        ]
+        _existing = {
+            r["tableName"]
+            for r in spark.sql(
+                f"SHOW TABLES IN {catalog_sql}.{PA_TRACE_SCHEMA} LIKE '{PA_TRACE_TABLE_PREFIX}_otel_*'"
+            ).collect()
+        }
+        _missing = [t for t in _otel_tables if t not in _existing]
+        if _missing:
+            print(f"  WARNING: expected OTel tables missing: {_missing}. "
+                  "Choose a fresh PA_TRACE_EXPERIMENT name and re-run.")
+        else:
+            print(f"  Verified OTel tables exist: {sorted(_existing)}")
+
+        if app_sps:
+            print("\n  Granting app SPs access to PA trace tables...")
+            for _sp in app_sps:
+                _sp_name = _sp["sp_name"]
+                for _tbl in sorted(_existing):
+                    _fq = f"{catalog_sql}.{PA_TRACE_SCHEMA}.`{_tbl}`"
+                    try:
+                        spark.sql(f"GRANT SELECT, MODIFY ON TABLE {_fq} TO `{_sp_name}`")
+                    except Exception as _ge:
+                        print(f"    {_sp_name} on {_tbl}: {_ge}")
+            print(f"    SELECT + MODIFY granted to {len(app_sps)} SP(s) on {len(_existing)} table(s)")
+    except Exception as _te:
+        import traceback as _tb
+        print(f"  WARNING: PA UC trace storage provisioning failed: {_te}")
+        _tb.print_exc()
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Step 4: Create Empty ML Predictions Table
 

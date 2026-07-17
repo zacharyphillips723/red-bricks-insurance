@@ -20,6 +20,7 @@ import re
 import uuid
 from typing import Any
 
+import mlflow
 from databricks.sdk import WorkspaceClient
 
 from .env_config import UC_CATALOG, UC_SCHEMA, SQL_WAREHOUSE_ID, PA_DOC_VOLUME_PATH
@@ -73,6 +74,7 @@ def upload_document(file_bytes: bytes, filename: str) -> dict:
 # 2. Parse — ai_parse_document
 # ---------------------------------------------------------------------------
 
+@mlflow.trace(span_type="TOOL", name="ai_parse_document")
 def parse_document(volume_path: str) -> str:
     """Parse an uploaded document to plain text via ai_parse_document.
 
@@ -135,6 +137,7 @@ def _regex_codes_from_text(document_text: str) -> tuple[list[str], list[str]]:
     return _dedupe(proc), _dedupe(icd)
 
 
+@mlflow.trace(span_type="TOOL", name="ai_extract_clinical_facts")
 def extract_clinical_facts(document_text: str) -> dict:
     """Extract structured clinical facts from parsed text via ai_extract.
 
@@ -254,6 +257,7 @@ def _match_policy(procedure_codes: list[str], diagnosis_codes: list[str]) -> dic
     return best
 
 
+@mlflow.trace(span_type="TOOL", name="tier1_adjudicate")
 def adjudicate(facts: dict, document_text: str = "") -> dict:
     """Apply Tier-1 deterministic rules to extracted facts.
 

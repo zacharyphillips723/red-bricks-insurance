@@ -124,6 +124,22 @@ export type AgentStreamEvent =
   | { type: "review"; answer: string; sources: Record<string, unknown>[] }
   | { type: "error"; message: string };
 
+export interface ObservabilityTrace {
+  request_id: string;
+  timestamp_ms: number;
+  execution_time_ms: number;
+  status: string;
+  span_count: number;
+}
+
+export interface CostSummary {
+  endpoint: string;
+  request_count: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  estimated_cost_usd?: number;
+}
+
 export interface DocumentHandle {
   document_id: string;
   filename: string;
@@ -280,6 +296,10 @@ export const api = {
 
   getComplianceMetrics: () => fetchApi<ComplianceMetrics>("/compliance/metrics"),
   getOverdueRequests: () => fetchApi<OverdueRequest[]>("/compliance/overdue"),
+
+  // --- Observability ---
+  getTraces: () => fetchApi<{ traces: ObservabilityTrace[] }>("/observability/traces"),
+  getCostSummary: () => fetchApi<{ costs: CostSummary[] }>("/observability/costs"),
 
   // --- Document Intake ---
   listSampleScenarios: () =>

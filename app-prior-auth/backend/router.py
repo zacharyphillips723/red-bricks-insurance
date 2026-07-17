@@ -5,14 +5,23 @@ import json
 from decimal import Decimal
 from typing import Optional
 
+from databricks.sdk import WorkspaceClient
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse, Response
 from sqlalchemy import text
 
 from .database import db
 from .agent import query_pa_agent, stream_pa_agent, get_pa_analytics, get_policy_rules, get_ml_prediction
+from .agent import _execute_sql
 from . import documents as docs
 from .sample_records import generate_sample_pdf, list_scenarios
+from .env_config import (
+    PA_AGENT_ENDPOINT, LLM_ENDPOINT, UC_CATALOG,
+    UC_TRACE_SCHEMA, UC_TRACE_TABLE_PREFIX,
+)
+
+# Models this app invokes — used to scope the cost query.
+OBSERVED_MODELS = [PA_AGENT_ENDPOINT, LLM_ENDPOINT]
 from .models import (
     ActionLogOut,
     AddNoteIn,
@@ -577,6 +586,85 @@ async def query_agent_stream(query_in: AgentQueryIn):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ===================================================================
+# Observability — traces + model cost/usage
+# ===================================================================
+
+@api.get("/observability/traces", operation_id="getObservabilityTraces")
+async def get_observability_traces():
+    """Recent agent + document traces from the UC OTel span tables."""
+    spans_table = f"`{UC_CATALOG}`.`{UC_TRACE_SCHEMA}`.`{UC_TRACE_TABLE_PREFIX}_otel_spans`"
+    sql = f"""
+        SELECT trace_id,
+               MIN(start_time_unix_nano) AS trace_start_ns,
+               MAX(end_time_unix_nano) AS trace_end_ns,
+               COUNT(*) AS span_count,
+               CASE WHEN SUM(CASE WHEN status.code = 'STATUS_CODE_ERROR' THEN 1 ELSE 0 END) > 0
+                    THEN 'ERROR' ELSE 'OK' END AS trace_status
+        FROM {spans_table}
+        GROUP BY trace_id
+        ORDER BY trace_start_ns DESC
+        LIMIT 25
+    """
+    try:
+        rows = await asyncio.to_thread(_execute_sql, sql)
+        records = []
+        for d in rows:
+            start_ns = int(d.get("trace_start_ns") or 0)
+            end_ns = int(d.get("trace_end_ns") or 0)
+            records.append({
+                "request_id": d.get("trace_id", ""),
+                "timestamp_ms": start_ns // 1_000_000 if start_ns else 0,
+                "execution_time_ms": (end_ns - start_ns) // 1_000_000 if start_ns and end_ns else 0,
+                "status": d.get("trace_status", "UNKNOWN"),
+                "span_count": int(d.get("span_count") or 0),
+            })
+        return {"traces": records}
+    except Exception as e:
+        print(f"[observability] Trace fetch error: {e}")
+        return {"traces": [], "error": str(e)}
+
+
+@api.get("/observability/costs", operation_id="getObservabilityCosts")
+async def get_observability_costs():
+    """Token usage + estimated cost per model, scoped to this workspace."""
+    endpoints = ", ".join(f"'{m}'" for m in OBSERVED_MODELS)
+    try:
+        try:
+            workspace_id = WorkspaceClient().get_workspace_id()
+            workspace_filter = f"AND eu.workspace_id = '{workspace_id}'" if workspace_id else ""
+        except Exception:
+            workspace_filter = ""
+        rows = await asyncio.to_thread(_execute_sql, f"""
+            SELECT
+                se.endpoint_name AS endpoint,
+                COUNT(*) AS request_count,
+                COALESCE(SUM(eu.input_token_count), 0) AS total_input_tokens,
+                COALESCE(SUM(eu.output_token_count), 0) AS total_output_tokens,
+                CASE se.endpoint_name
+                  WHEN 'databricks-llama-4-maverick'
+                    THEN ROUND(SUM(eu.input_token_count) * 0.40 / 1000000
+                             + SUM(eu.output_token_count) * 1.60 / 1000000, 4)
+                  WHEN 'databricks-gemini-2-5-flash'
+                    THEN ROUND(SUM(eu.input_token_count) * 0.30 / 1000000
+                             + SUM(eu.output_token_count) * 2.50 / 1000000, 4)
+                  ELSE 0
+                END AS estimated_cost_usd
+            FROM system.serving.endpoint_usage eu
+            JOIN system.serving.served_entities se
+              ON eu.served_entity_id = se.served_entity_id
+            WHERE se.endpoint_name IN ({endpoints})
+              AND eu.request_time >= DATE_SUB(CURRENT_TIMESTAMP(), 30)
+              {workspace_filter}
+            GROUP BY se.endpoint_name
+            ORDER BY request_count DESC
+        """)
+        return {"costs": rows}
+    except Exception as e:
+        print(f"[observability] Cost query error: {e}")
+        return {"costs": [], "error": str(e)}
 
 
 # ===================================================================
