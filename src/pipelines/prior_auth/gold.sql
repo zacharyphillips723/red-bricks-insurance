@@ -263,24 +263,28 @@ SELECT
   r.determination,
   r.determination_tier,
 
-  -- Rule 1: Procedure code exists in the policy's covered procedures
+  -- Rule 1: Procedure code is EXACTLY one of the policy's covered procedures.
+  -- Codes are pipe-delimited; split and match exactly to avoid substring false
+  -- positives (e.g. '27447' must not match '274470'). Policy rules are stored
+  -- with rule_type 'clinical_criteria'.
   CASE
     WHEN EXISTS (
       SELECT 1 FROM LIVE.silver_medical_policy_rules pr
       WHERE pr.policy_id = r.policy_id
-        AND pr.rule_type = 'coverage_criteria'
-        AND pr.procedure_codes LIKE CONCAT('%', r.procedure_code, '%')
+        AND pr.rule_type = 'clinical_criteria'
+        AND ARRAY_CONTAINS(SPLIT(pr.procedure_codes, '[|]'), r.procedure_code)
     ) THEN TRUE
     ELSE FALSE
   END AS procedure_code_match,
 
-  -- Rule 2: Diagnosis code aligns with policy requirements
+  -- Rule 2: Any submitted diagnosis code exactly matches a covered indication.
   CASE
     WHEN EXISTS (
       SELECT 1 FROM LIVE.silver_medical_policy_rules pr
       WHERE pr.policy_id = r.policy_id
+        AND pr.rule_type = 'clinical_criteria'
         AND pr.diagnosis_codes IS NOT NULL
-        AND pr.diagnosis_codes LIKE CONCAT('%', SPLIT(r.diagnosis_codes, '\\|')[0], '%')
+        AND ARRAYS_OVERLAP(SPLIT(pr.diagnosis_codes, '[|]'), SPLIT(r.diagnosis_codes, '[|]'))
     ) THEN TRUE
     ELSE FALSE
   END AS diagnosis_code_match,
@@ -296,14 +300,15 @@ SELECT
     WHEN EXISTS (
       SELECT 1 FROM LIVE.silver_medical_policy_rules pr
       WHERE pr.policy_id = r.policy_id
-        AND pr.rule_type = 'coverage_criteria'
-        AND pr.procedure_codes LIKE CONCAT('%', r.procedure_code, '%')
+        AND pr.rule_type = 'clinical_criteria'
+        AND ARRAY_CONTAINS(SPLIT(pr.procedure_codes, '[|]'), r.procedure_code)
     )
     AND EXISTS (
       SELECT 1 FROM LIVE.silver_medical_policy_rules pr
       WHERE pr.policy_id = r.policy_id
+        AND pr.rule_type = 'clinical_criteria'
         AND pr.diagnosis_codes IS NOT NULL
-        AND pr.diagnosis_codes LIKE CONCAT('%', SPLIT(r.diagnosis_codes, '\\|')[0], '%')
+        AND ARRAYS_OVERLAP(SPLIT(pr.diagnosis_codes, '[|]'), SPLIT(r.diagnosis_codes, '[|]'))
     )
     AND LENGTH(COALESCE(r.clinical_summary, '')) > 50
     THEN TRUE
@@ -316,22 +321,23 @@ SELECT
     AND EXISTS (
       SELECT 1 FROM LIVE.silver_medical_policy_rules pr
       WHERE pr.policy_id = r.policy_id
-        AND pr.rule_type = 'coverage_criteria'
-        AND pr.procedure_codes LIKE CONCAT('%', r.procedure_code, '%')
+        AND pr.rule_type = 'clinical_criteria'
+        AND ARRAY_CONTAINS(SPLIT(pr.procedure_codes, '[|]'), r.procedure_code)
     )
     AND EXISTS (
       SELECT 1 FROM LIVE.silver_medical_policy_rules pr
       WHERE pr.policy_id = r.policy_id
+        AND pr.rule_type = 'clinical_criteria'
         AND pr.diagnosis_codes IS NOT NULL
-        AND pr.diagnosis_codes LIKE CONCAT('%', SPLIT(r.diagnosis_codes, '\\|')[0], '%')
+        AND ARRAYS_OVERLAP(SPLIT(pr.diagnosis_codes, '[|]'), SPLIT(r.diagnosis_codes, '[|]'))
     )
     THEN 'correct_approve'
     WHEN r.determination = 'denied'
     AND NOT EXISTS (
       SELECT 1 FROM LIVE.silver_medical_policy_rules pr
       WHERE pr.policy_id = r.policy_id
-        AND pr.rule_type = 'coverage_criteria'
-        AND pr.procedure_codes LIKE CONCAT('%', r.procedure_code, '%')
+        AND pr.rule_type = 'clinical_criteria'
+        AND ARRAY_CONTAINS(SPLIT(pr.procedure_codes, '[|]'), r.procedure_code)
     )
     THEN 'correct_deny'
     ELSE 'needs_review'

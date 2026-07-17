@@ -116,25 +116,48 @@ _PROC_CODE_RE = re.compile(r"\b([A-Z]?\d{4,5})\b")
 _ICD10_RE = re.compile(r"\b([A-TV-Z]\d{2}(?:\.\d{1,4})?)\b")
 
 
+def _known_procedure_codes() -> set[str]:
+    """The universe of procedure codes referenced by any medical policy rule.
+
+    Used to filter regex fallback candidates so free-text numbers like years
+    ('2025') or dosages ('1000mg' -> '1000') can't be mistaken for CPT codes.
+    """
+    try:
+        rows = _execute_sql(
+            f"SELECT procedure_codes FROM {_RULES_TABLE} "
+            "WHERE rule_type IN ('clinical_criteria', 'coverage_criteria')"
+        )
+    except Exception:
+        return set()
+    codes: set[str] = set()
+    for r in rows:
+        codes.update(_split_codes(r.get("procedure_codes")))
+    return codes
+
+
 def _regex_codes_from_text(document_text: str) -> tuple[list[str], list[str]]:
     """Deterministic fallback: pull procedure/diagnosis codes straight from text.
 
     ai_extract occasionally omits a field on a multi-field call. Codes follow
-    strict formats, so a regex over the parsed text is a reliable backstop that
-    keeps adjudication deterministic for the demo.
+    strict formats, so a regex over the parsed text is a reliable backstop.
+    Procedure candidates are validated against the known policy code universe so
+    incidental numbers (years, dosages) are not treated as CPT/HCPCS codes.
     """
-    icd = _ICD10_RE.findall(document_text)
-    icd_set = set(icd)
-    # Procedure codes = numeric/HCPCS tokens that are NOT ICD-10 codes.
-    proc = [c for c in _PROC_CODE_RE.findall(document_text) if c not in icd_set]
-    # De-dupe preserving order.
     def _dedupe(seq):
         seen, out = set(), []
         for x in seq:
             if x not in seen:
                 seen.add(x); out.append(x)
         return out
-    return _dedupe(proc), _dedupe(icd)
+
+    icd = _dedupe(m.upper() for m in _ICD10_RE.findall(document_text))
+    icd_set = set(icd)
+    known = _known_procedure_codes()
+    proc_candidates = [c.upper() for c in _PROC_CODE_RE.findall(document_text) if c.upper() not in icd_set]
+    # Keep only candidates that are real policy procedure codes when we have the
+    # universe; if the lookup failed, fall back to all candidates.
+    proc = [c for c in proc_candidates if c in known] if known else proc_candidates
+    return _dedupe(proc), icd
 
 
 @mlflow.trace(span_type="TOOL", name="ai_extract_clinical_facts")
@@ -164,13 +187,38 @@ def extract_clinical_facts(document_text: str) -> dict:
                 return {"_raw": raw}
         return raw or {}
 
-    # ai_extract occasionally omits fields on a multi-field call. Retry once if
-    # an adjudication-critical field is missing before falling back to regex.
+    # ai_extract is unreliable at returning all 11 fields on one call — it often
+    # returns only the codes and drops the narrative fields. Retry once and keep
+    # the more complete result.
+    def _completeness(f: dict) -> int:
+        return (
+            (1 if _split_codes(f.get("procedure_codes")) else 0)
+            + (1 if _split_codes(f.get("diagnosis_codes")) else 0)
+            + (1 if (f.get("clinical_summary") or "").strip() else 0)
+        )
+
     facts = _run_extract()
-    if not _split_codes(facts.get("procedure_codes")):
+    if _completeness(facts) < 3:
         retry = _run_extract()
-        if _split_codes(retry.get("procedure_codes")):
+        if _completeness(retry) > _completeness(facts):
             facts = retry
+
+    # If the multi-field call still dropped the clinical summary, recover it with
+    # a dedicated single-field extraction — far more reliable than 1-of-11.
+    if not (facts.get("clinical_summary") or "").strip():
+        try:
+            s_rows = _execute_sql(
+                f"SELECT ai_extract('{text_esc}', array('clinical_summary')) AS s"
+            )
+            if s_rows:
+                raw = s_rows[0].get("s")
+                parsed = json.loads(raw) if isinstance(raw, str) else (raw or {})
+                summary = (parsed.get("clinical_summary") or "").strip()
+                if summary:
+                    facts["clinical_summary"] = summary
+                    facts["_clinical_summary_source"] = "single_field_extract"
+        except Exception as e:
+            print(f"[PA docs] clinical_summary re-extract failed: {e}")
 
     # Backstop: if ai_extract still missed the codes, recover them from the text.
     if not _split_codes(facts.get("procedure_codes")) or not _split_codes(facts.get("diagnosis_codes")):
@@ -188,6 +236,16 @@ def extract_clinical_facts(document_text: str) -> dict:
 # ---------------------------------------------------------------------------
 # 4. Adjudicate — Tier-1 deterministic rules (EXACT code matching)
 # ---------------------------------------------------------------------------
+
+def _has_value(value: Any) -> bool:
+    """True if an ai_extract field holds real content (not null/empty/'[]'/'{}')."""
+    if value is None:
+        return False
+    if isinstance(value, (list, dict)):
+        return len(value) > 0
+    s = str(value).strip()
+    return s not in ("", "null", "None", "[]", "{}", '""')
+
 
 def _split_codes(value: Any) -> list[str]:
     """Normalize a code field to a list of upper-cased codes.
@@ -269,7 +327,15 @@ def adjudicate(facts: dict, document_text: str = "") -> dict:
     procedure_codes = _split_codes(facts.get("procedure_codes"))
     diagnosis_codes = _split_codes(facts.get("diagnosis_codes"))
     clinical_summary = (facts.get("clinical_summary") or "").strip()
-    has_documentation = len(clinical_summary) > 50 or bool(facts.get("treatments_tried"))
+    # Documentation is sufficient if there's a real clinical narrative OR the
+    # extraction surfaced concrete clinical evidence (treatments tried, labs,
+    # functional status). This stays robust when ai_extract drops the summary
+    # field, without passing a sparse record (e.g. "Knee pain.") that has none
+    # of these signals.
+    has_clinical_evidence = any(
+        _has_value(facts.get(k)) for k in ("treatments_tried", "lab_values", "functional_status")
+    )
+    has_documentation = len(clinical_summary) > 50 or has_clinical_evidence
 
     reasons: list[str] = []
     policy = _match_policy(procedure_codes, diagnosis_codes) if procedure_codes else None
@@ -347,6 +413,16 @@ async def write_back_to_queue(session, facts: dict, result: dict, handle: dict) 
     dx_codes = result.get("extracted_diagnosis_codes") or []
     reason_text = " ".join(result.get("reasons", []))
 
+    # Uploaded requests default to standard urgency; compute the CMS deadline
+    # from the urgency SLA rather than hardcoding it.
+    urgency = "standard"
+    deadline_hours = _URGENCY_DEADLINE_HOURS.get(urgency, 168)
+    # Human-readable procedure description (codes + matched policy), not the raw
+    # JSON-array string ai_extract returns.
+    proc_desc = ", ".join(proc_codes) if proc_codes else "Uploaded document"
+    if policy.get("policy_name"):
+        proc_desc = f"{proc_desc} — {policy['policy_name']}"
+
     await session.execute(
         text("""
             INSERT INTO pa_review_queue (
@@ -363,11 +439,11 @@ async def write_back_to_queue(session, facts: dict, result: dict, handle: dict) 
                 :npi, :provider_name,
                 :service_type, :proc_code, :proc_desc,
                 :dx, :policy_id, :policy_name, :lob,
-                :clinical, 'standard'::pa_urgency, CAST(:status AS pa_review_status),
+                :clinical, CAST(:urgency AS pa_urgency), CAST(:status AS pa_review_status),
                 CAST(:tier AS pa_determination_tier),
                 :ai_rec, :ai_conf, :auto_eligible,
                 :extraction, :det_reason,
-                now(), NULL, now() + interval '168 hours', TRUE
+                now(), NULL, now() + make_interval(hours => :deadline_hours), TRUE
             )
             ON CONFLICT (auth_request_id) DO NOTHING
         """),
@@ -379,7 +455,9 @@ async def write_back_to_queue(session, facts: dict, result: dict, handle: dict) 
             "provider_name": facts.get("requesting_provider"),
             "service_type": policy.get("service_category") or "uploaded_document",
             "proc_code": proc_codes[0] if proc_codes else "UNKNOWN",
-            "proc_desc": facts.get("procedure_codes"),
+            "proc_desc": proc_desc,
+            "urgency": urgency,
+            "deadline_hours": deadline_hours,
             "dx": "|".join(dx_codes) if dx_codes else None,
             "policy_id": policy.get("policy_id"),
             "policy_name": policy.get("policy_name"),
