@@ -8,11 +8,12 @@ import json
 import os
 import re
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import StatementParameterListItem
 
-from .env_config import UC_CATALOG, SQL_WAREHOUSE_ID, LLM_ENDPOINT
+from .env_config import UC_CATALOG, SQL_WAREHOUSE_ID, LLM_ENDPOINT, PA_AGENT_ENDPOINT
 
 _CAT = f"`{UC_CATALOG}`"
 
@@ -105,7 +106,7 @@ TOOLS = [
     },
 ]
 
-MAX_TOOL_ROUNDS = 6
+MAX_TOOL_ROUNDS = 3
 
 
 _KNOWN_HEADERS = [
@@ -179,6 +180,33 @@ def _execute_sql(sql: str, params: list | None = None, poll_timeout_s: int = 120
 def _sdk_request(method: str, path: str, body: dict | None = None) -> dict:
     w = WorkspaceClient()
     return w.api_client.do(method, path, body=body) if body else w.api_client.do(method, path)
+
+
+def _content_to_text(content) -> str:
+    """Normalize an LLM message `content` to plain text.
+
+    Gemini (via the Gateway) returns content as a list of typed blocks —
+    [{"type": "text", "text": "..."}] — rather than a bare string. Flatten so
+    downstream regex/markdown handling always receives a string.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                parts.append(block.get("text") or block.get("content") or "")
+            elif isinstance(block, str):
+                parts.append(block)
+        return "\n".join(p for p in parts if p)
+    return str(content) if content is not None else ""
+
+
+def _msg_content(data: dict) -> str:
+    """Extract the assistant message content as text from an invocations response."""
+    return _content_to_text(
+        data.get("choices", [{}])[0].get("message", {}).get("content", "")
+    )
 
 
 def _validate_sql(sql: str) -> str | None:
@@ -339,6 +367,103 @@ def _fetch_pa_request_from_lakebase(auth_request_id: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Parallel pre-fetch of the deterministic review data
+# ---------------------------------------------------------------------------
+
+def _get_tier1_evaluation(auth_request_id: str) -> dict | None:
+    """Get the Tier-1 deterministic rule evaluation for a PA request."""
+    try:
+        rows = _execute_sql(
+            f"""SELECT procedure_code_match, diagnosis_code_match, cms_compliant,
+                       has_documentation, tier1_auto_eligible, tier1_accuracy
+                FROM {_CAT}.prior_auth.gold_pa_tier1_evaluation
+                WHERE auth_request_id = :aid LIMIT 1""",
+            [{"name": "aid", "value": auth_request_id}],
+        )
+        return rows[0] if rows else None
+    except Exception as e:
+        print(f"[PA] Tier1 eval error: {e}")
+        return None
+
+
+def _build_pa_context(auth_request_id: str, question: str) -> tuple[str, dict]:
+    """Assemble the agent's user-message context, pre-fetching deterministic data.
+
+    The PA request, its policy rules, ML prediction, and Tier-1 evaluation are
+    fetched up front and in parallel, so the LLM rarely needs a tool round to
+    gather them — collapsing several serial round-trips into one fan-out.
+    Returns (context_hint, prefetched_meta).
+    """
+    context_hint = f"Question: {question}\n"
+    context_hint += f"The Unity Catalog is: {_CAT}\n\n"
+    meta: dict = {"prefetched": []}
+
+    if not auth_request_id:
+        context_hint += (
+            "No specific PA request was provided. Use the query_uc_table tool to "
+            "gather any data needed to answer the question.\n"
+        )
+        return context_hint, meta
+
+    # 1. Lakebase request record (needed first — gives us the policy_id).
+    lb_data = _fetch_pa_request_from_lakebase(auth_request_id)
+    policy_id = None
+    if lb_data:
+        try:
+            policy_id = json.loads(lb_data).get("policy_id")
+        except (json.JSONDecodeError, AttributeError):
+            pass
+
+    if not lb_data:
+        context_hint += (
+            f"PA request {auth_request_id} was not found in Lakebase. "
+            f"Query {_CAT}.prior_auth.gold_pa_requests WHERE auth_request_id = "
+            f"'{auth_request_id}' and gather the rest via tools.\n"
+        )
+        return context_hint, meta
+
+    # 2. Fan out the deterministic lookups in parallel.
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        rules_f = pool.submit(get_policy_rules, policy_id) if policy_id else None
+        ml_f = pool.submit(get_ml_prediction, auth_request_id)
+        tier1_f = pool.submit(_get_tier1_evaluation, auth_request_id)
+        policy_rules = rules_f.result() if rules_f else []
+        ml_pred = ml_f.result()
+        tier1 = tier1_f.result()
+
+    context_hint += (
+        "PA request record (from the operational database):\n"
+        f"```json\n{lb_data}\n```\n\n"
+    )
+    meta["prefetched"].append("pa_request")
+
+    if policy_rules:
+        context_hint += (
+            f"Medical policy rules for {policy_id} (pre-fetched):\n"
+            f"```json\n{json.dumps(policy_rules, default=str, indent=1)}\n```\n\n"
+        )
+        meta["prefetched"].append("policy_rules")
+    if ml_pred:
+        context_hint += (
+            f"ML model prediction (pre-fetched):\n```json\n{json.dumps(ml_pred, default=str)}\n```\n\n"
+        )
+        meta["prefetched"].append("ml_prediction")
+    if tier1:
+        context_hint += (
+            f"Tier-1 deterministic rule evaluation (pre-fetched):\n"
+            f"```json\n{json.dumps(tier1, default=str)}\n```\n\n"
+        )
+        meta["prefetched"].append("tier1_evaluation")
+
+    context_hint += (
+        "The data above is already gathered — do NOT re-query it. Only use "
+        "query_uc_table if you need something genuinely missing (e.g. member "
+        "clinical history or provider patterns), then synthesize your review.\n"
+    )
+    return context_hint, meta
+
+
+# ---------------------------------------------------------------------------
 # Tool-calling agent
 # ---------------------------------------------------------------------------
 
@@ -347,26 +472,7 @@ def query_pa_agent(auth_request_id: str, question: str) -> dict:
     try:
         print(f"[PA Agent] Processing query for {auth_request_id}: {question[:80]}...")
 
-        context_hint = f"Question: {question}\n"
-        context_hint += f"The Unity Catalog is: {_CAT}\n"
-        context_hint += "Use the query_uc_table tool to gather all relevant data before generating your analysis.\n\n"
-
-        if auth_request_id:
-            lb_data = _fetch_pa_request_from_lakebase(auth_request_id)
-            if lb_data:
-                context_hint += (
-                    f"Here is the PA request record from the operational database:\n"
-                    f"```json\n{lb_data}\n```\n\n"
-                    "Use this data as the basis for your review. "
-                    "Now query UC tables for: medical policy rules, ML predictions, "
-                    "provider PA patterns, tier1 evaluation results, and member clinical history.\n"
-                )
-            else:
-                context_hint += (
-                    f"PA request {auth_request_id} was not found in Lakebase. "
-                    f"Try querying: SELECT * FROM {_CAT}.prior_auth.gold_pa_requests "
-                    f"WHERE auth_request_id = '{auth_request_id}' LIMIT 1\n"
-                )
+        context_hint, prefetch_meta = _build_pa_context(auth_request_id, question)
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -376,7 +482,7 @@ def query_pa_agent(auth_request_id: str, question: str) -> dict:
         tables_queried = 0
 
         for _ in range(MAX_TOOL_ROUNDS):
-            data = _sdk_request("POST", f"/serving-endpoints/{LLM_ENDPOINT}/invocations", {
+            data = _sdk_request("POST", f"/serving-endpoints/{PA_AGENT_ENDPOINT}/invocations", {
                 "messages": messages,
                 "tools": TOOLS,
                 "max_tokens": 4000,
@@ -392,12 +498,21 @@ def query_pa_agent(auth_request_id: str, question: str) -> dict:
             if not tool_calls:
                 # Model stopped making tool calls — check if the response
                 # is a real synthesis or just raw tool-call text
-                answer = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                answer = _msg_content(data)
                 has_synthesis = bool(re.search(r'^#+\s+', answer, re.MULTILINE))
 
-                if has_synthesis and tables_queried > 0:
-                    # Model produced a proper structured answer
-                    return {"answer": _clean_answer(answer), "sources": [{"type": "pa_tool_calling", "tables_queried": tables_queried}]}
+                # A structured answer is valid if the model either queried tables
+                # or had data pre-fetched into its context.
+                has_data = tables_queried > 0 or bool(prefetch_meta.get("prefetched"))
+                if has_synthesis and has_data:
+                    return {
+                        "answer": _clean_answer(answer),
+                        "sources": [{
+                            "type": "pa_tool_calling",
+                            "tables_queried": tables_queried,
+                            "prefetched": prefetch_meta.get("prefetched", []),
+                        }],
+                    }
                 # Otherwise fall through to the forced synthesis call below
                 break
 
@@ -433,15 +548,101 @@ def query_pa_agent(auth_request_id: str, question: str) -> dict:
                 "Do NOT make any more tool calls. Synthesize the data you already have."
             ),
         })
-        data = _sdk_request("POST", f"/serving-endpoints/{LLM_ENDPOINT}/invocations", {
+        data = _sdk_request("POST", f"/serving-endpoints/{PA_AGENT_ENDPOINT}/invocations", {
             "messages": messages,
             "max_tokens": 3000,
             "temperature": 0.05,
         })
-        answer = data.get("choices", [{}])[0].get("message", {}).get("content", "No response generated.")
-        return {"answer": _clean_answer(answer), "sources": [{"type": "pa_tool_calling", "tables_queried": tables_queried}]}
+        answer = _msg_content(data) or "No response generated."
+        return {
+            "answer": _clean_answer(answer),
+            "sources": [{
+                "type": "pa_tool_calling",
+                "tables_queried": tables_queried,
+                "prefetched": prefetch_meta.get("prefetched", []),
+            }],
+        }
 
     except Exception as e:
         print(f"[PA Agent] ERROR: {e}")
         traceback.print_exc()
         return {"answer": f"Error: {str(e)}", "sources": []}
+
+
+def stream_pa_agent(auth_request_id: str, question: str):
+    """Streaming variant of query_pa_agent — yields (event_type, payload) tuples.
+
+    Milestones:
+        status  -> {"stage": "...", "message": "..."}
+        review  -> {"answer": "...", "sources": [...]}   (final briefing)
+        error   -> {"message": "..."}
+    """
+    try:
+        yield ("status", {"stage": "gathering",
+                          "message": "Gathering PA request, policy rules, ML prediction, Tier-1 eval…"})
+        context_hint, prefetch_meta = _build_pa_context(auth_request_id, question)
+        if prefetch_meta.get("prefetched"):
+            yield ("status", {"stage": "gathered",
+                              "message": f"Pre-fetched: {', '.join(prefetch_meta['prefetched'])}."})
+
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": context_hint},
+        ]
+        tables_queried = 0
+
+        for _ in range(MAX_TOOL_ROUNDS):
+            data = _sdk_request("POST", f"/serving-endpoints/{PA_AGENT_ENDPOINT}/invocations", {
+                "messages": messages, "tools": TOOLS, "max_tokens": 4000, "temperature": 0.05,
+            })
+            tool_calls = data.get("choices", [{}])[0].get("message", {}).get("tool_calls", [])
+
+            if not tool_calls:
+                answer = _msg_content(data)
+                has_data = tables_queried > 0 or bool(prefetch_meta.get("prefetched"))
+                if bool(re.search(r'^#+\s+', answer, re.MULTILINE)) and has_data:
+                    yield ("review", {
+                        "answer": _clean_answer(answer),
+                        "sources": [{"type": "pa_tool_calling", "tables_queried": tables_queried,
+                                     "prefetched": prefetch_meta.get("prefetched", [])}],
+                    })
+                    return
+                break
+
+            messages.append(data["choices"][0]["message"])
+            for tc in tool_calls:
+                tool_name = tc.get("function", {}).get("name", "")
+                try:
+                    tool_args = json.loads(tc.get("function", {}).get("arguments", "{}"))
+                except json.JSONDecodeError:
+                    tool_args = {}
+                yield ("status", {"stage": "querying",
+                                  "message": f"Querying additional data: {tool_args.get('purpose', tool_name)}"})
+                result = _execute_tool(tool_name, tool_args)
+                tables_queried += 1
+                messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": result})
+
+        yield ("status", {"stage": "synthesizing", "message": "Synthesizing clinical review…"})
+        messages.append({
+            "role": "user",
+            "content": (
+                "Based on ALL the data gathered above, provide your final clinical review. "
+                "Structure your response with these markdown sections:\n"
+                "## REQUEST SUMMARY\n## CLINICAL EVIDENCE\n## POLICY ANALYSIS\n"
+                "## AI ASSESSMENT\n## RECOMMENDATION\n"
+                "Do NOT make any more tool calls. Synthesize the data you already have."
+            ),
+        })
+        data = _sdk_request("POST", f"/serving-endpoints/{PA_AGENT_ENDPOINT}/invocations", {
+            "messages": messages, "max_tokens": 3000, "temperature": 0.05,
+        })
+        answer = _msg_content(data) or "No response generated."
+        yield ("review", {
+            "answer": _clean_answer(answer),
+            "sources": [{"type": "pa_tool_calling", "tables_queried": tables_queried,
+                         "prefetched": prefetch_meta.get("prefetched", [])}],
+        })
+    except Exception as e:
+        print(f"[PA Agent:stream] ERROR: {e}")
+        traceback.print_exc()
+        yield ("error", {"message": str(e)})

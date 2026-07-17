@@ -82,6 +82,11 @@ GENIE_SPACE_ID = _genie if _genie not in _SENTINEL else _auto_detect_genie_space
 
 LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT") or "databricks-llama-4-maverick"
 
+# PA review agent endpoint — Gemini 2.5 Flash is ~3x faster per tool-calling
+# round than Llama 4 Maverick on this workload (benchmarked), with the same
+# tool-calling behavior. Overridable via env.
+PA_AGENT_ENDPOINT = os.environ.get("PA_AGENT_ENDPOINT") or "databricks-gemini-2-5-flash"
+
 # UC Volume for uploaded medical records (PA document auto-adjudication feature).
 UC_SCHEMA = os.environ.get("UC_SCHEMA", "prior_auth")
 PA_DOC_VOLUME = os.environ.get("PA_DOC_VOLUME", f"{UC_CATALOG}.{UC_SCHEMA}.pa_documents")
@@ -91,4 +96,5 @@ print(f"[env_config] SQL_WAREHOUSE_ID={SQL_WAREHOUSE_ID}")
 print(f"[env_config] UC_CATALOG={UC_CATALOG}")
 print(f"[env_config] GENIE_SPACE_ID={GENIE_SPACE_ID}")
 print(f"[env_config] LLM_ENDPOINT={LLM_ENDPOINT}")
+print(f"[env_config] PA_AGENT_ENDPOINT={PA_AGENT_ENDPOINT}")
 print(f"[env_config] PA_DOC_VOLUME_PATH={PA_DOC_VOLUME_PATH}")

@@ -23,6 +23,8 @@ resources:
             value: ${var.warehouse_id}
           - name: LLM_ENDPOINT
             value: databricks-llama-4-maverick
+          - name: PA_AGENT_ENDPOINT
+            value: databricks-gemini-2-5-flash
           - name: UC_CATALOG
             value: ${var.catalog}
           - name: UC_SCHEMA
@@ -31,4 +33,8 @@ resources:
         - name: llm-endpoint
           serving_endpoint:
             name: databricks-llama-4-maverick
+            permission: CAN_QUERY
+        - name: pa-agent-endpoint
+          serving_endpoint:
+            name: databricks-gemini-2-5-flash
             permission: CAN_QUERY

@@ -21,6 +21,7 @@ export function AgentChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [statusMsg, setStatusMsg] = useState("");
   const [_lastResponse, setLastResponse] = useState<AgentResponse | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -36,16 +37,26 @@ export function AgentChat() {
     setInput("");
     setLoading(true);
 
+    setStatusMsg("Starting review…");
     try {
-      // Extract PA request ID from question if present (e.g. "PA-2025-005424")
-      const paMatch = q.match(/PA-\d{4}-\d{5,}/i);
-      const resp = await api.queryAgent(q, paMatch?.[0]);
-      setLastResponse(resp);
-      setMessages((prev) => [...prev, { role: "assistant", content: resp.answer }]);
+      // Extract PA request ID from question if present (e.g. "PA-2025-005424"
+      // or an uploaded-document request like "UPL-ABC123").
+      const paMatch = q.match(/(PA-\d{4}-\d{5,}|UPL-[A-Z0-9]+)/i);
+      await api.queryAgentStream(q, paMatch?.[0], (ev) => {
+        if (ev.type === "status") {
+          setStatusMsg(ev.message);
+        } else if (ev.type === "review") {
+          setLastResponse({ answer: ev.answer, sources: ev.sources });
+          setMessages((prev) => [...prev, { role: "assistant", content: ev.answer }]);
+        } else if (ev.type === "error") {
+          setMessages((prev) => [...prev, { role: "assistant", content: `Error: ${ev.message}` }]);
+        }
+      });
     } catch (e) {
       setMessages((prev) => [...prev, { role: "assistant", content: `Error: ${e}` }]);
     } finally {
       setLoading(false);
+      setStatusMsg("");
     }
   };
 
@@ -123,7 +134,7 @@ export function AgentChat() {
             <div className="bg-gray-50 rounded-lg px-4 py-3">
               <div className="flex items-center gap-2 text-sm text-gray-500">
                 <div className="animate-spin h-4 w-4 border-2 border-databricks-red border-t-transparent rounded-full" />
-                Querying PA data and analyzing...
+                {statusMsg || "Querying PA data and analyzing..."}
               </div>
             </div>
           </div>

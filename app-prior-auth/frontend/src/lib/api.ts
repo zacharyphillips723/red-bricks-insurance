@@ -118,6 +118,12 @@ export interface AgentResponse {
   sources: Record<string, unknown>[];
 }
 
+// SSE events from the streaming PA agent.
+export type AgentStreamEvent =
+  | { type: "status"; stage: string; message: string }
+  | { type: "review"; answer: string; sources: Record<string, unknown>[] }
+  | { type: "error"; message: string };
+
 export interface DocumentHandle {
   document_id: string;
   filename: string;
@@ -223,6 +229,54 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ question, auth_request_id: authRequestId }),
     }),
+
+  // Streaming PA agent: invokes onEvent for each SSE milestone.
+  queryAgentStream: async (
+    question: string,
+    authRequestId: string | undefined,
+    onEvent: (event: AgentStreamEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    const res = await fetch(`${API_BASE}/agent/query/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, auth_request_id: authRequestId }),
+      signal,
+    });
+    if (!res.ok || !res.body) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || `API error: ${res.status}`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    const flush = (block: string) => {
+      let eventType = "message";
+      const dataLines: string[] = [];
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event:")) eventType = line.slice(6).trim();
+        else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+      }
+      if (!dataLines.length) return;
+      try {
+        onEvent({ type: eventType, ...JSON.parse(dataLines.join("\n")) } as AgentStreamEvent);
+      } catch {
+        /* ignore malformed frame */
+      }
+    };
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let sep: number;
+      while ((sep = buffer.indexOf("\n\n")) !== -1) {
+        const block = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        if (block.trim()) flush(block);
+      }
+    }
+    if (buffer.trim()) flush(buffer);
+  },
 
   getComplianceMetrics: () => fetchApi<ComplianceMetrics>("/compliance/metrics"),
   getOverdueRequests: () => fetchApi<OverdueRequest[]>("/compliance/overdue"),

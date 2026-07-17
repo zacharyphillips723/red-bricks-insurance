@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse, Response
 from sqlalchemy import text
 
 from .database import db
-from .agent import query_pa_agent, get_pa_analytics, get_policy_rules, get_ml_prediction
+from .agent import query_pa_agent, stream_pa_agent, get_pa_analytics, get_policy_rules, get_ml_prediction
 from . import documents as docs
 from .sample_records import generate_sample_pdf, list_scenarios
 from .models import (
@@ -539,6 +539,44 @@ async def query_agent(query_in: AgentQueryIn):
         query_in.question,
     )
     return AgentQueryOut(**result)
+
+
+@api.post("/agent/query/stream", operation_id="queryPAAgentStream")
+async def query_agent_stream(query_in: AgentQueryIn):
+    """SSE variant of /agent/query — streams progress milestones then the review."""
+    auth_request_id = query_in.auth_request_id or ""
+    question = query_in.question
+
+    async def event_source():
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+        _SENTINEL = object()
+
+        def _produce():
+            try:
+                for event_type, payload in stream_pa_agent(auth_request_id, question):
+                    loop.call_soon_threadsafe(queue.put_nowait, (event_type, payload))
+            except Exception as e:  # pragma: no cover - defensive
+                loop.call_soon_threadsafe(queue.put_nowait, ("error", {"message": str(e)}))
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
+
+        producer = loop.run_in_executor(None, _produce)
+        try:
+            while True:
+                item = await queue.get()
+                if item is _SENTINEL:
+                    break
+                event_type, payload = item
+                yield f"event: {event_type}\ndata: {json.dumps(payload, default=str)}\n\n"
+        finally:
+            await producer
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ===================================================================
