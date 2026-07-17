@@ -118,6 +118,37 @@ export interface AgentResponse {
   sources: Record<string, unknown>[];
 }
 
+export interface DocumentHandle {
+  document_id: string;
+  filename: string;
+  volume_path: string;
+}
+
+export interface SampleScenario {
+  scenario: string;
+  title: string;
+  procedure: string;
+}
+
+// SSE events emitted by the document adjudication pipeline.
+export type AdjudicationEvent =
+  | { type: "status"; stage: string; message: string }
+  | { type: "parsed"; text: string; char_count: number }
+  | { type: "extracted"; facts: Record<string, unknown> }
+  | {
+      type: "decision";
+      decision: string;
+      confidence: number;
+      reasons: string[];
+      matched_policy: Record<string, unknown> | null;
+      extracted_procedure_codes: string[];
+      extracted_diagnosis_codes: string[];
+      has_documentation: boolean;
+    }
+  | { type: "persisted"; auth_request_id: string }
+  | { type: "done"; decision: string }
+  | { type: "error"; message: string };
+
 export interface ComplianceMetrics {
   compliance_rate: number | null;
   avg_turnaround_standard: number | null;
@@ -195,4 +226,70 @@ export const api = {
 
   getComplianceMetrics: () => fetchApi<ComplianceMetrics>("/compliance/metrics"),
   getOverdueRequests: () => fetchApi<OverdueRequest[]>("/compliance/overdue"),
+
+  // --- Document Intake ---
+  listSampleScenarios: () =>
+    fetchApi<{ scenarios: SampleScenario[] }>("/documents/scenarios"),
+
+  sampleDownloadUrl: (scenario: string) =>
+    `${API_BASE}/documents/sample?scenario=${encodeURIComponent(scenario)}`,
+
+  uploadDocument: async (file: File): Promise<DocumentHandle> => {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`${API_BASE}/documents/upload`, { method: "POST", body: form });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || `Upload failed: ${res.status}`);
+    }
+    return res.json();
+  },
+
+  // Stream the parse -> extract -> adjudicate -> persist pipeline as SSE.
+  adjudicateStream: async (
+    handle: DocumentHandle,
+    onEvent: (event: AdjudicationEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    const res = await fetch(`${API_BASE}/documents/adjudicate/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(handle),
+      signal,
+    });
+    if (!res.ok || !res.body) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || `Adjudication failed: ${res.status}`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    const flush = (block: string) => {
+      let eventType = "message";
+      const dataLines: string[] = [];
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event:")) eventType = line.slice(6).trim();
+        else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+      }
+      if (!dataLines.length) return;
+      try {
+        const payload = JSON.parse(dataLines.join("\n"));
+        onEvent({ type: eventType, ...payload } as AdjudicationEvent);
+      } catch {
+        /* ignore malformed frame */
+      }
+    };
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let sep: number;
+      while ((sep = buffer.indexOf("\n\n")) !== -1) {
+        const block = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        if (block.trim()) flush(block);
+      }
+    }
+    if (buffer.trim()) flush(buffer);
+  },
 };

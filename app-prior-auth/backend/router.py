@@ -1,14 +1,18 @@
 """FastAPI routes for the PA Review Portal."""
 
 import asyncio
+import json
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi.responses import StreamingResponse, Response
 from sqlalchemy import text
 
 from .database import db
 from .agent import query_pa_agent, get_pa_analytics, get_policy_rules, get_ml_prediction
+from . import documents as docs
+from .sample_records import generate_sample_pdf, list_scenarios
 from .models import (
     ActionLogOut,
     AddNoteIn,
@@ -535,6 +539,103 @@ async def query_agent(query_in: AgentQueryIn):
         query_in.question,
     )
     return AgentQueryOut(**result)
+
+
+# ===================================================================
+# Document Intake — upload, sample generation, auto-adjudication (SSE)
+# ===================================================================
+
+@api.get("/documents/scenarios", operation_id="listSampleScenarios")
+async def list_sample_scenarios():
+    """List the available sample-record scenarios for the generator."""
+    return {"scenarios": list_scenarios()}
+
+
+@api.get("/documents/sample", operation_id="downloadSampleRecord")
+async def download_sample_record(scenario: str = "approvable"):
+    """Generate a synthetic pre-populated medical-record PDF for download.
+
+    Scenarios deliberately exercise the Auto-Approve / Needs-Review / Auto-Deny
+    paths so a demo always has a document to upload.
+    """
+    pdf_bytes, filename = await asyncio.to_thread(generate_sample_pdf, scenario)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@api.post("/documents/upload", operation_id="uploadDocument")
+async def upload_document(file: UploadFile = File(...)):
+    """Upload a medical record to the UC Volume; returns a document handle."""
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Empty file")
+    handle = await asyncio.to_thread(docs.upload_document, file_bytes, file.filename or "upload.pdf")
+    return handle
+
+
+@api.post("/documents/adjudicate/stream", operation_id="adjudicateDocumentStream")
+async def adjudicate_document_stream(payload: dict):
+    """Stream the parse -> extract -> adjudicate -> write-back pipeline as SSE.
+
+    Body: {document_id, filename, volume_path} (from /documents/upload).
+    Emits milestone events so the UI shows each AI step executing in real time.
+    """
+    handle = {
+        "document_id": payload.get("document_id", ""),
+        "filename": payload.get("filename", "upload.pdf"),
+        "volume_path": payload.get("volume_path", ""),
+    }
+    if not handle["volume_path"]:
+        raise HTTPException(status_code=400, detail="volume_path is required")
+
+    async def event_source():
+        def sse(event_type: str, data: dict) -> str:
+            return f"event: {event_type}\ndata: {json.dumps(data, default=str)}\n\n"
+
+        try:
+            yield sse("status", {"stage": "parsing",
+                                 "message": "Parsing document with ai_parse_document…"})
+            text_body = await asyncio.to_thread(docs.parse_document, handle["volume_path"])
+            if not text_body:
+                yield sse("error", {"message": "Document could not be parsed (no text extracted)."})
+                return
+            yield sse("parsed", {"text": text_body[:4000], "char_count": len(text_body)})
+
+            yield sse("status", {"stage": "extracting",
+                                 "message": "Extracting clinical facts with ai_extract…"})
+            facts = await asyncio.to_thread(docs.extract_clinical_facts, text_body)
+            yield sse("extracted", {"facts": facts})
+
+            yield sse("status", {"stage": "adjudicating",
+                                 "message": "Matching against medical policies (Tier-1 rules)…"})
+            result = await asyncio.to_thread(docs.adjudicate, facts, text_body)
+            yield sse("decision", result)
+
+            # Write-back: create a real queue row + audit action.
+            yield sse("status", {"stage": "persisting",
+                                 "message": "Creating PA request in the review queue…"})
+            try:
+                async with db.session() as session:
+                    auth_request_id = await docs.write_back_to_queue(session, facts, result, handle)
+                yield sse("persisted", {"auth_request_id": auth_request_id})
+            except Exception as e:
+                yield sse("status", {"stage": "persist_error",
+                                     "message": f"Queue write-back failed: {e}"})
+
+            yield sse("done", {"decision": result["decision"]})
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            yield sse("error", {"message": str(e)})
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ===================================================================

@@ -82,7 +82,13 @@ GENIE_SPACE_ID = _genie if _genie not in _SENTINEL else _auto_detect_genie_space
 
 LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT") or "databricks-llama-4-maverick"
 
+# UC Volume for uploaded medical records (PA document auto-adjudication feature).
+UC_SCHEMA = os.environ.get("UC_SCHEMA", "prior_auth")
+PA_DOC_VOLUME = os.environ.get("PA_DOC_VOLUME", f"{UC_CATALOG}.{UC_SCHEMA}.pa_documents")
+PA_DOC_VOLUME_PATH = f"/Volumes/{PA_DOC_VOLUME.replace('.', '/')}"
+
 print(f"[env_config] SQL_WAREHOUSE_ID={SQL_WAREHOUSE_ID}")
 print(f"[env_config] UC_CATALOG={UC_CATALOG}")
 print(f"[env_config] GENIE_SPACE_ID={GENIE_SPACE_ID}")
 print(f"[env_config] LLM_ENDPOINT={LLM_ENDPOINT}")
+print(f"[env_config] PA_DOC_VOLUME_PATH={PA_DOC_VOLUME_PATH}")

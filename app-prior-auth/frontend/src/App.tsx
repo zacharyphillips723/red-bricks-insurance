@@ -8,6 +8,7 @@ import { PolicyLibrary } from "@/pages/PolicyLibrary";
 import { AgentChat } from "@/pages/AgentChat";
 import { CaseloadView } from "@/pages/CaseloadView";
 import { Compliance } from "@/pages/Compliance";
+import { DocumentIntake } from "@/pages/DocumentIntake";
 import { useHashRouter } from "@/lib/useHashRouter";
 import { api } from "@/lib/api";
 
@@ -36,6 +37,8 @@ export default function App() {
         return <Dashboard onSelectRequest={handleSelectRequest} />;
       case "queue":
         return <ReviewQueue onSelectRequest={handleSelectRequest} />;
+      case "intake":
+        return <DocumentIntake onSelectRequest={handleSelectRequest} />;
       case "request-detail":
         return selectedReqId ? (
           <RequestDetail

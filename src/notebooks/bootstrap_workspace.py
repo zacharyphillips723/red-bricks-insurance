@@ -724,6 +724,40 @@ if app_sps:
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ### Create PA Document Upload Volume & Grant App SPs
+# MAGIC
+# MAGIC The PA Review Portal lets users upload medical records that are parsed with
+# MAGIC `ai_parse_document` / `ai_extract` and auto-adjudicated in real time. Uploaded
+# MAGIC files land in this UC Volume. App SPs need READ+WRITE VOLUME to store and read
+# MAGIC the uploaded blobs.
+
+# COMMAND ----------
+
+# Volume for uploaded medical records (PA document auto-adjudication feature).
+PA_DOC_VOLUME = f"{catalog_sql}.prior_auth.pa_documents"
+try:
+    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog_sql}.prior_auth")
+    spark.sql(
+        f"CREATE VOLUME IF NOT EXISTS {PA_DOC_VOLUME} "
+        "COMMENT 'Uploaded medical records for PA auto-adjudication (synthetic PHI only)'"
+    )
+    print(f"  Volume ready: {catalog}.prior_auth.pa_documents")
+
+    if app_sps:
+        for sp_info in app_sps:
+            sp_name = sp_info["sp_name"]
+            try:
+                spark.sql(f"GRANT READ VOLUME ON VOLUME {PA_DOC_VOLUME} TO `{sp_name}`")
+                spark.sql(f"GRANT WRITE VOLUME ON VOLUME {PA_DOC_VOLUME} TO `{sp_name}`")
+                print(f"    READ + WRITE VOLUME granted to {sp_info['app_name']}")
+            except Exception as e:
+                print(f"    {sp_name} on pa_documents volume: {e}")
+except Exception as e:
+    print(f"  WARNING: PA document volume provisioning failed: {e}")
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ### Grant SQL Warehouse Permissions
 
 # COMMAND ----------

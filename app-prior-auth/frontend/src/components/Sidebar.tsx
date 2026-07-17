@@ -5,6 +5,7 @@ import {
   Bot,
   Users,
   ShieldCheck,
+  FileUp,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -16,6 +17,7 @@ interface SidebarProps {
 const NAV_ITEMS = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: "queue", label: "Review Queue", icon: ClipboardList, badge: true },
+  { id: "intake", label: "Document Intake", icon: FileUp },
   { id: "policies", label: "Policy Library", icon: BookOpen },
   { id: "agent", label: "PA Review Agent", icon: Bot },
   { id: "caseload", label: "Caseload", icon: Users },

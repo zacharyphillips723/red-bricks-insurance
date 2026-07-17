@@ -136,7 +136,10 @@ def _clean_answer(text: str) -> str:
     return text.strip()
 
 
-def _execute_sql(sql: str, params: list | None = None) -> list[dict]:
+def _execute_sql(sql: str, params: list | None = None, poll_timeout_s: int = 120) -> list[dict]:
+    import time as _time
+    from databricks.sdk.service.sql import StatementState
+
     w = WorkspaceClient()
     kwargs = {
         "warehouse_id": SQL_WAREHOUSE_ID,
@@ -149,6 +152,22 @@ def _execute_sql(sql: str, params: list | None = None) -> list[dict]:
             for p in params
         ]
     stmt = w.statement_execution.execute_statement(**kwargs)
+
+    # If the query outlives the 30s wait_timeout it comes back PENDING/RUNNING
+    # with no result. Poll until it finishes rather than silently returning [].
+    # (AI functions like ai_parse_document / ai_extract routinely exceed 30s.)
+    statement_id = stmt.statement_id
+    deadline = _time.monotonic() + poll_timeout_s
+    while stmt.status and stmt.status.state in (StatementState.PENDING, StatementState.RUNNING):
+        if _time.monotonic() > deadline:
+            raise TimeoutError(f"SQL statement {statement_id} did not finish within {poll_timeout_s}s")
+        _time.sleep(1.5)
+        stmt = w.statement_execution.get_statement(statement_id)
+
+    if stmt.status and stmt.status.state != StatementState.SUCCEEDED:
+        err = stmt.status.error.message if stmt.status.error else "unknown error"
+        raise RuntimeError(f"SQL statement failed ({stmt.status.state}): {err}")
+
     if not stmt.result or not stmt.result.data_array:
         return []
     col_names = [c.name for c in stmt.manifest.schema.columns] if stmt.manifest and stmt.manifest.schema else []
