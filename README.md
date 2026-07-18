@@ -108,7 +108,7 @@ Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB
 
 ## Pipeline DAG
 
-The full demo job (`red_bricks_full_demo`) orchestrates 42 tasks:
+The full demo job (`red_bricks_full_demo`) orchestrates 43 tasks:
 
 ```
 synthea_generation (ROOT — generates FHIR bundles + extracts demographics + assigns MBR IDs)
@@ -123,6 +123,7 @@ synthea_generation (ROOT — generates FHIR bundles + extracts demographics + as
   → fwa_pipeline (depends on data_generation — bronze/silver/gold FWA signals + provider profiles)
   → gold_analytics_pipeline (depends on all domain pipelines + member months + fwa_pipeline + network_adequacy_pipeline)
       → create_metric_views (governed semantic layer + FWA risk metrics)
+      → build_pricing_factors (governed UC rate-factor table for the underwriting rate build-up)
   → train_fwa_model (depends on fwa_pipeline + gold_analytics — XGBoost fraud scorer)
   → setup_medical_policy_vs (depends on data_generation + prior_auth_pipeline — medical policy Vector Search index for FWA agent RAG)
   → setup_ai_gateway (ROOT — AI Gateway external model endpoints, runs in parallel with no dependencies)
@@ -312,9 +313,9 @@ Sales enablement application for account executives preparing employer group ren
 
 SIU-focused application for fraud, waste, and abuse investigation:
 
-- **Backend**: FastAPI (Python), connects to Lakebase Autoscaling (`fwa_cases` database), SQL warehouse (Statement Execution API for gold table queries), and Foundation Model API — Llama 4 Maverick (supervisor + synthesis) and Gemini 2.5 Flash (clinical analyst sub-agent)
+- **Backend**: FastAPI (Python), connects to Lakebase Autoscaling (`fwa_cases` database), SQL warehouse (Statement Execution API for gold table queries), and Foundation Model API — Llama 4 Maverick (supervisor + synthesis) and Claude Haiku 4.5 (clinical analyst sub-agent)
 - **Frontend**: React + Vite + Tailwind (Databricks-branded dark theme)
-- **Supervisor agent**: A supervisor orchestrates two sub-agents that run **in parallel** — a Genie NL→SQL sub-agent (structured claims data) and a Gemini 2.5 Flash tool-calling sub-agent (medical-policy RAG + FWA classification) — then synthesizes a unified briefing. Provider risk/claims/ML data is pre-fetched concurrently and injected into context to eliminate serial tool rounds. Results stream to the UI over Server-Sent Events (SSE), surfacing the early Gemini analysis while the slower Genie query is still running. MLflow tracing preserves the full supervisor→sub-agent span tree across threads
+- **Supervisor agent**: A supervisor orchestrates two sub-agents that run **in parallel** — a Genie NL→SQL sub-agent (structured claims data) and a Claude Haiku 4.5 tool-calling sub-agent (medical-policy RAG + FWA classification) — then synthesizes a unified briefing. Provider risk/claims/ML data is pre-fetched concurrently and injected into context to eliminate serial tool rounds. Results stream to the UI over Server-Sent Events (SSE), surfacing the early clinical analysis while the slower Genie query is still running. MLflow tracing preserves the full supervisor→sub-agent span tree across threads
 - **Pages**:
   - **Dashboard** — KPIs (total/open/critical/closed investigations), financial metrics (estimated overpayment, recovered, recovery rate), breakdowns by status/severity/type
   - **Investigation Queue** — filterable/searchable table with status, severity, type, investigator filters; sorted by severity + risk score
@@ -332,35 +333,36 @@ SIU-focused application for fraud, waste, and abuse investigation:
 
 What-if analysis tool for actuaries and underwriters to model pricing scenarios in real time:
 
-- **Backend**: FastAPI (Python), Lakebase PostgreSQL (async SQLAlchemy + OAuth token refresh), Statement Execution API with 15-min in-memory cache, Foundation Model API (Llama 4 Maverick)
+- **Backend**: FastAPI (Python), Lakebase PostgreSQL (async SQLAlchemy + OAuth token refresh), Statement Execution API with 15-min in-memory cache, Foundation Model API — Claude Haiku 4.5 for the agent (via `UW_AGENT_ENDPOINT`), Llama 4 Maverick available as fallback
 - **Frontend**: React 19 + Vite 6 + Tailwind (Databricks-branded dark theme)
-- **Simulation Engine**: 10 pure-Python simulation types with sub-100ms execution (no Spark required):
-  - Premium Rate, Benefit Design, Group Renewal, Population Mix, Medical Trend, Stop-Loss, Risk Adjustment, Utilization Change, New Group Quote, IBNR Reserve
+- **Simulation Engine**: 11 pure-Python simulation types with sub-100ms execution (no Spark required):
+  - Premium Rate, Benefit Design, Group Renewal, Population Mix, Medical Trend, Stop-Loss, Risk Adjustment, Utilization Change, New Group Quote, IBNR Reserve, Aggregate Stop-Loss (reinsurance layering over total claims)
   - All return baseline vs. projected with delta, narrative summary, and warnings
-- **Pricing Engine**: Modular rate buildup engine (`pricing_engine.py`) — community-rated base, age/gender factors, area factors, industry SIC adjustments, group experience modifications, benefit richness multipliers, risk adjustment, trend projection, and margin/tax loading. Returns a transparent step-by-step rate buildup waterfall
+- **Pricing Engine**: Modular rate buildup engine (`pricing_engine.py`) — community-rated base, age factors, area factors, industry SIC adjustments, group experience modifications, risk adjustment, and trend projection. Factors are sourced from a **governed Unity Catalog table** (`analytics.gold_pricing_factors`) — seeded by `build_pricing_factors.py`, with the module dicts as fallback — so actuaries can audit and version rate assumptions without a code deploy. Returns a transparent step-by-step rate buildup waterfall
 - **Pages**:
   - **Dashboard** — KPI cards (total premium, claims, MLR, member count), baseline summary, recent simulations, quick-sim launcher
   - **Simulation Builder** — dynamic form per simulation type with parameter inputs, delta-colored results, save dialog
-  - **Rate Buildup** — transparent premium rate construction showing each pricing factor (base rate → age/gender → area → SIC → experience → benefits → risk adjustment → trend → margin) as a waterfall chart with drill-down into each component
+  - **Rate Buildup** — transparent premium rate construction showing each pricing factor (base rate → age → area → SIC → experience → trend) as a waterfall, with the governed-factor source (UC table vs. fallback) surfaced
   - **Risk Pool** — Population risk distribution analysis with age band breakdowns, risk tier stratification, cost concentration curves, and actuarial equivalence metrics
   - **Scenario Comparison** — side-by-side comparison of 2–4 simulations
-  - **Simulation History** — list/detail view with status management (draft/computed/approved/archived), notes, and immutable audit trail
-  - **Agent Chat** — conversational interface with tool-calling (`run_simulation`, `get_baseline`, `get_group_detail`, `query_uc_table`); SQL validation blocks write operations
-- **Genie Integration**: natural language SQL exploration against UC gold tables (graceful degradation if GENIE_SPACE_ID not set)
-- **Data Architecture**: Hybrid — Lakebase for transactional state (simulations, comparisons, audit log) + Statement Execution API for gold table aggregates (`gold_pmpm`, `gold_mlr`, `gold_enrollment_summary`, `gold_utilization_per_1000`, `gold_risk_adjustment_analysis`, etc.)
+  - **Simulation History** — list/detail view with status management (draft/computed/approved/archived), notes, and immutable audit trail attributed to the real end user (Databricks Apps forwarded identity)
+  - **Agent Chat** — conversational tool-calling agent (`run_simulation`, `get_baseline`, `get_group_detail`, `query_uc_table`); SQL validation blocks writes. Streams tool-progress milestones over SSE, then the answer
+  - **Genie Search** — natural language SQL exploration over the underwriting gold tables (generated SQL + result grid)
+  - **Observability** — MLflow trace + model cost/usage dashboard (traces streamed to UC OTel tables `analytics.uw_agent_otel_*`)
+- **Data Architecture**: Hybrid — Lakebase for transactional state (simulations, comparisons, audit log) + Statement Execution API for gold table aggregates (`gold_pmpm`, `gold_mlr`, `gold_pricing_factors`, `gold_utilization_per_1000`, `gold_risk_adjustment_analysis`, etc.)
 - **Config**: `app-underwriting-sim/app.yml`, DAB resource: `resources/app_underwriting_sim.yml`
 
 ### Prior Authorization Portal (`app-prior-auth/`)
 
 Prior authorization review and auto-adjudication portal for UM nurses and PA reviewers:
 
-- **Backend**: FastAPI (Python), connects to Lakebase (`pa_reviews` database), SQL warehouse (Statement Execution API for PA gold tables + `ai_parse_document`/`ai_extract`), UC Volume (`prior_auth.pa_documents` for uploaded records), and Foundation Model API — Gemini 2.5 Flash (PA review agent, via `PA_AGENT_ENDPOINT`) with Llama 4 Maverick available as a fallback
+- **Backend**: FastAPI (Python), connects to Lakebase (`pa_reviews` database), SQL warehouse (Statement Execution API for PA gold tables + `ai_parse_document`/`ai_extract`), UC Volume (`prior_auth.pa_documents` for uploaded records), and Foundation Model API — Claude Haiku 4.5 (PA review agent, via `PA_AGENT_ENDPOINT`) with Llama 4 Maverick available as a fallback
 - **Frontend**: React + Vite + Tailwind (Databricks-branded dark theme)
 - **Auto-Adjudication**: 3-tier determination model:
   - **Tier 1** — Deterministic rules: exact CPT/ICD-10 code matching against medical policies (pipe-delimited codes split and matched exactly via `ARRAY_CONTAINS`/`ARRAYS_OVERLAP`, not substring `LIKE`)
   - **Tier 2** — ML model (XGBoost classifier trained on historical PA decisions)
   - **Tier 3** — LLM clinical review (agent-generated briefings for complex cases)
-- **PA Review agent**: Tool-calling agent on Gemini 2.5 Flash. The PA request, its policy rules, ML prediction, and Tier-1 evaluation are pre-fetched concurrently and injected into context, so the agent typically answers in a single round; progress and the final briefing stream to the UI over SSE
+- **PA Review agent**: Tool-calling agent on Claude Haiku 4.5. The PA request, its policy rules, ML prediction, and Tier-1 evaluation are pre-fetched concurrently and injected into context, so the agent typically answers in a single round; progress and the final briefing stream to the UI over SSE
 - **Pages**:
   - **Dashboard** — KPI cards (total requests, approval rate, avg turnaround, pending queue depth), determination breakdown charts
   - **Review Queue** — filterable PA request queue sorted by urgency and turnaround SLA
@@ -1072,10 +1074,11 @@ All agent interactions, Genie queries, and tool invocations are traced with `@ml
 | **Genie Integration** | Question submission, SQL generation, result retrieval, conversation flow | Same experiment |
 | **UC Tool Calls** | Function invocations, SDK API requests, parameter/response logging | Same experiment |
 | **LangGraph Nodes** | Route, dispatch, merge, and specialist agent nodes | Same experiment |
-| **FWA Supervisor Agent** | Supervisor + parallel Genie/Gemini sub-agents, tool calls, policy retrieval, synthesis | `analytics.fwa_agent_otel_*` |
+| **FWA Supervisor Agent** | Supervisor + parallel Genie / clinical-analyst sub-agents, tool calls, policy retrieval, synthesis | `analytics.fwa_agent_otel_*` |
 | **PA Review Agent + Document Intake** | Agent calls, context pre-fetch, tool calls, and the document pipeline (`ai_parse_document`, `ai_extract`, Tier-1 adjudication) | `analytics.pa_agent_otel_*` |
+| **Underwriting Agent** | Conversational agent calls, tool calls (`run_simulation`, `get_baseline`, `query_uc_table`) | `analytics.uw_agent_otel_*` |
 
-Traces are written to Unity Catalog Delta tables via MLflow's OpenTelemetry backend. The Care Intelligence traces live in the MLflow Experiment UI at `/Shared/red-bricks-insurance/agent-traces`; the FWA and PA apps link their experiments to UC OTel span tables (`analytics.{fwa,pa}_agent_otel_spans`) and each surface an in-app **Observability** page over them.
+Traces are written to Unity Catalog Delta tables via MLflow's OpenTelemetry backend. The Care Intelligence traces live in the MLflow Experiment UI at `/Shared/red-bricks-insurance/agent-traces`; the FWA, PA, and Underwriting apps link their experiments to UC OTel span tables (`analytics.{fwa,pa,uw}_agent_otel_spans`) and each surface an in-app **Observability** page over them. All three agents run on Claude Haiku 4.5 (with Llama 4 Maverick as the FWA/PA supervisor and synthesis model).
 
 ### FastAPI OpenTelemetry
 
