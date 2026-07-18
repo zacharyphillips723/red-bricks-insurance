@@ -312,15 +312,16 @@ Sales enablement application for account executives preparing employer group ren
 
 SIU-focused application for fraud, waste, and abuse investigation:
 
-- **Backend**: FastAPI (Python), connects to Lakebase Autoscaling (`fwa_cases` database), SQL warehouse (Statement Execution API for gold table queries), Foundation Model API (Llama 4 Maverick), and AI Gateway external model endpoints
+- **Backend**: FastAPI (Python), connects to Lakebase Autoscaling (`fwa_cases` database), SQL warehouse (Statement Execution API for gold table queries), and Foundation Model API — Llama 4 Maverick (supervisor + synthesis) and Gemini 2.5 Flash (clinical analyst sub-agent)
 - **Frontend**: React + Vite + Tailwind (Databricks-branded dark theme)
+- **Supervisor agent**: A supervisor orchestrates two sub-agents that run **in parallel** — a Genie NL→SQL sub-agent (structured claims data) and a Gemini 2.5 Flash tool-calling sub-agent (medical-policy RAG + FWA classification) — then synthesizes a unified briefing. Provider risk/claims/ML data is pre-fetched concurrently and injected into context to eliminate serial tool rounds. Results stream to the UI over Server-Sent Events (SSE), surfacing the early Gemini analysis while the slower Genie query is still running. MLflow tracing preserves the full supervisor→sub-agent span tree across threads
 - **Pages**:
   - **Dashboard** — KPIs (total/open/critical/closed investigations), financial metrics (estimated overpayment, recovered, recovery rate), breakdowns by status/severity/type
   - **Investigation Queue** — filterable/searchable table with status, severity, type, investigator filters; sorted by severity + risk score
   - **Investigation Detail** — full case view with key metrics, fraud types, inline agent chat with styled markdown rendering, evidence list, immutable audit trail, and action sidebar (assign investigator, update status, add notes, record recovery)
   - **Provider Analysis** — NPI search with risk scorecard, metrics grid (18 metrics), ML model predictions table, rules-based flagged claims table, provider network graph showing referral patterns and ring detection
   - **Network Graph** — Interactive fraud network graph (canvas-based, `react-force-graph-2d`) showing provider→member connections from Unity Catalog `gold_fwa_claim_flags`. Zoom-responsive node sizing, click-to-highlight provider neighborhoods, drag-to-pan, scroll-to-zoom, auto-fit on load. Provider nodes sized by risk score; member nodes from real flagged claims data; edges colored by fraud score
-  - **FWA Agent** — standalone AI agent chat with `[INV-XXXX]`/`[PRV-NPI]` prefix targeting; the agent dynamically queries Unity Catalog tables via tool-calling
+  - **FWA Agent** — standalone AI agent chat with `[INV-XXXX]`/`[PRV-NPI]` prefix targeting; the supervisor fans out to the parallel Genie + Gemini sub-agents (see above) and streams progress + the synthesized briefing over SSE
   - **Genie Search** — natural language SQL exploration over FWA gold tables
   - **Observability** — MLflow trace metrics dashboard showing agent query volume, P50/P95 latencies, token costs, error rates, and model comparison from materialized trace data
   - **Caseload** — investigator capacity dashboard with utilization bars
@@ -353,21 +354,24 @@ What-if analysis tool for actuaries and underwriters to model pricing scenarios 
 
 Prior authorization review and auto-adjudication portal for UM nurses and PA reviewers:
 
-- **Backend**: FastAPI (Python), connects to Lakebase (`pa_reviews` database), SQL warehouse (Statement Execution API for PA gold tables), and Foundation Model API (Llama 4 Maverick)
+- **Backend**: FastAPI (Python), connects to Lakebase (`pa_reviews` database), SQL warehouse (Statement Execution API for PA gold tables + `ai_parse_document`/`ai_extract`), UC Volume (`prior_auth.pa_documents` for uploaded records), and Foundation Model API — Gemini 2.5 Flash (PA review agent, via `PA_AGENT_ENDPOINT`) with Llama 4 Maverick available as a fallback
 - **Frontend**: React + Vite + Tailwind (Databricks-branded dark theme)
 - **Auto-Adjudication**: 3-tier determination model:
-  - **Tier 1** — Deterministic rules (CPT/ICD-10 code matching against medical policies)
+  - **Tier 1** — Deterministic rules: exact CPT/ICD-10 code matching against medical policies (pipe-delimited codes split and matched exactly via `ARRAY_CONTAINS`/`ARRAYS_OVERLAP`, not substring `LIKE`)
   - **Tier 2** — ML model (XGBoost classifier trained on historical PA decisions)
   - **Tier 3** — LLM clinical review (agent-generated briefings for complex cases)
+- **PA Review agent**: Tool-calling agent on Gemini 2.5 Flash. The PA request, its policy rules, ML prediction, and Tier-1 evaluation are pre-fetched concurrently and injected into context, so the agent typically answers in a single round; progress and the final briefing stream to the UI over SSE
 - **Pages**:
   - **Dashboard** — KPI cards (total requests, approval rate, avg turnaround, pending queue depth), determination breakdown charts
   - **Review Queue** — filterable PA request queue sorted by urgency and turnaround SLA
+  - **Document Intake** — upload a medical record (PDF/image) and watch it auto-adjudicate in real time: `ai_parse_document` (OCR) → `ai_extract` (structured clinical facts) → Tier-1 policy matching → **Auto-Approve / Needs Clinical Review / Auto-Deny** with cited policy and reasoning, each step streamed over SSE. Includes a synthetic sample-record generator (approvable / incomplete / non-covered scenarios) so a demo always has a document to try. An adjudicated upload is written back to the Lakebase queue as a real `UPL-…` request with an audit action
   - **Request Detail** — full PA request view with clinical summary, service details, determination history, reviewer notes, side-by-side clinical criteria comparison (policy rules vs patient data with match/mismatch indicators), and appeal tracking with status timeline
   - **CMS Compliance** — CMS-0057-F interoperability compliance dashboard with KPIs (compliance rate, avg turnaround hours, expedited/standard/retrospective breakdowns), turnaround distribution charts, weekly trend analysis, and SLA deadline tracking (72h expedited / 168h standard / 30d retrospective)
   - **Caseload View** — reviewer workload management with assignment tracking
   - **Policy Library** — medical policy reference with searchable clinical criteria
-  - **Agent Chat** — PA Review agent interface for clinical review briefings and determination recommendations
-- **Data Architecture**: Hybrid — Lakebase for transactional review state (assignments, status changes, reviewer notes, audit trail) + Statement Execution API for analytics (PA gold tables, medical policy lookups)
+  - **Agent Chat** — PA Review agent interface for clinical review briefings and determination recommendations (SSE-streamed)
+  - **Observability** — MLflow trace + model cost/usage dashboard (traces streamed to UC OTel tables `analytics.pa_agent_otel_*`; per-model token usage and estimated spend for the agent + document pipeline)
+- **Data Architecture**: Hybrid — Lakebase for transactional review state (assignments, status changes, reviewer notes, audit trail, auto-adjudicated uploads) + Statement Execution API for analytics (PA gold tables, medical policy lookups, `ai_parse_document`/`ai_extract`) + UC Volume for uploaded documents
 - **Config**: `app-prior-auth/app.yml`, DAB resource: `resources/app_prior_auth.yml`
 
 ### Network Adequacy Portal (`app-network-adequacy/`)
@@ -1062,14 +1066,16 @@ The Command Center app is instrumented with **MLflow 3 tracing** (OpenTelemetry-
 
 All agent interactions, Genie queries, and tool invocations are traced with `@mlflow.trace` decorators:
 
-| Component | Traced Operations | Experiment |
+| Component | Traced Operations | Experiment / UC OTel tables |
 |-----------|-------------------|------------|
 | **Care Intelligence Agent** | End-to-end agent calls, SQL queries, Vector Search retrieval, LLM calls | `/Shared/red-bricks-insurance/agent-traces` |
 | **Genie Integration** | Question submission, SQL generation, result retrieval, conversation flow | Same experiment |
 | **UC Tool Calls** | Function invocations, SDK API requests, parameter/response logging | Same experiment |
 | **LangGraph Nodes** | Route, dispatch, merge, and specialist agent nodes | Same experiment |
+| **FWA Supervisor Agent** | Supervisor + parallel Genie/Gemini sub-agents, tool calls, policy retrieval, synthesis | `analytics.fwa_agent_otel_*` |
+| **PA Review Agent + Document Intake** | Agent calls, context pre-fetch, tool calls, and the document pipeline (`ai_parse_document`, `ai_extract`, Tier-1 adjudication) | `analytics.pa_agent_otel_*` |
 
-Traces are written to Unity Catalog Delta tables via MLflow's OpenTelemetry backend. View traces in the MLflow Experiment UI at `/Shared/red-bricks-insurance/agent-traces`.
+Traces are written to Unity Catalog Delta tables via MLflow's OpenTelemetry backend. The Care Intelligence traces live in the MLflow Experiment UI at `/Shared/red-bricks-insurance/agent-traces`; the FWA and PA apps link their experiments to UC OTel span tables (`analytics.{fwa,pa}_agent_otel_spans`) and each surface an in-app **Observability** page over them.
 
 ### FastAPI OpenTelemetry
 
