@@ -5,7 +5,7 @@ import json
 from typing import Optional
 
 from databricks.sdk import WorkspaceClient
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from .agent import query_underwriting_agent, stream_underwriting_agent, _execute_sql
@@ -56,6 +56,22 @@ from .simulation_engine import run_simulation
 api = APIRouter(prefix="/api")
 
 
+def _actor(request: Request) -> str:
+    """Resolve the acting user from Databricks Apps forwarded identity headers.
+
+    Databricks Apps inject the end user's identity on every request; prefer the
+    email, then the preferred username, falling back to a generic label when the
+    app is run outside the Apps proxy (e.g. local dev).
+    """
+    hdr = request.headers
+    return (
+        hdr.get("X-Forwarded-Email")
+        or hdr.get("X-Forwarded-Preferred-Username")
+        or hdr.get("X-Forwarded-User")
+        or "underwriter"
+    )
+
+
 # ===================================================================
 # Health
 # ===================================================================
@@ -93,7 +109,7 @@ async def refresh_baseline():
 # ===================================================================
 
 @api.post("/simulate", response_model=SimulateOut)
-async def simulate(body: SimulateIn):
+async def simulate(body: SimulateIn, request: Request):
     """Run a what-if simulation and optionally save to Lakebase."""
     result = await asyncio.to_thread(
         run_simulation,
@@ -118,7 +134,7 @@ async def simulate(body: SimulateIn):
                 parameters=body.parameters,
                 results=result,
                 baseline_snapshot=result.get("baseline", {}),
-                created_by="underwriter",
+                created_by=_actor(request),
                 scope_lob=body.parameters.get("lob"),
                 scope_group_id=body.parameters.get("group_id"),
             )
@@ -174,14 +190,14 @@ async def get_sim(sim_id: str):
 
 
 @api.patch("/simulations/{sim_id}", response_model=SimulationDetailOut)
-async def update_sim(sim_id: str, body: SimulationUpdateIn):
+async def update_sim(sim_id: str, body: SimulationUpdateIn, request: Request):
     if not db._initialized:
         raise HTTPException(503, "Database not initialized")
     async with db.session() as session:
         row = await update_simulation(
             session,
             sim_id,
-            actor="underwriter",
+            actor=_actor(request),
             status=body.status.value if body.status else None,
             notes=body.notes,
         )
@@ -215,7 +231,7 @@ async def get_sim_audit(sim_id: str):
 # ===================================================================
 
 @api.post("/comparisons", response_model=ComparisonOut)
-async def create_comp(body: ComparisonIn):
+async def create_comp(body: ComparisonIn, request: Request):
     if not db._initialized:
         raise HTTPException(503, "Database not initialized")
     async with db.session() as session:
@@ -223,7 +239,7 @@ async def create_comp(body: ComparisonIn):
             session,
             comparison_name=body.comparison_name,
             simulation_ids=[str(s) for s in body.simulation_ids],
-            created_by="underwriter",
+            created_by=_actor(request),
             notes=body.notes,
         )
         return ComparisonOut(**comp)
