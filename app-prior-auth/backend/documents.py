@@ -443,7 +443,9 @@ async def write_back_to_queue(session, facts: dict, result: dict, handle: dict) 
                 CAST(:tier AS pa_determination_tier),
                 :ai_rec, :ai_conf, :auto_eligible,
                 :extraction, :det_reason,
-                now(), NULL, now() + make_interval(hours => :deadline_hours), TRUE
+                now(),
+                CASE WHEN :is_determined THEN now() ELSE NULL END,
+                now() + make_interval(hours => :deadline_hours), TRUE
             )
             ON CONFLICT (auth_request_id) DO NOTHING
         """),
@@ -470,16 +472,9 @@ async def write_back_to_queue(session, facts: dict, result: dict, handle: dict) 
             "auto_eligible": result["decision"] in ("Auto-Approve", "Auto-Deny"),
             "extraction": json.dumps(facts, default=str),
             "det_reason": reason_text if is_determined else None,
+            "is_determined": is_determined,
         },
     )
-
-    # determination_date is set via a follow-up UPDATE (now() can't be a bind param).
-    if is_determined:
-        await session.execute(
-            text("UPDATE pa_review_queue SET determination_date = now() "
-                 "WHERE auth_request_id = :aid AND determination_date IS NULL"),
-            {"aid": auth_request_id},
-        )
 
     await session.execute(
         text("""
