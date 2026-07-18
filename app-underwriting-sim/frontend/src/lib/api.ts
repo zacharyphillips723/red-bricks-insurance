@@ -92,6 +92,28 @@ export interface AgentResponse {
   simulation_results?: SimulationResult[];
 }
 
+// SSE events from the streaming underwriting agent.
+export type AgentStreamEvent =
+  | { type: "status"; stage: string; message: string }
+  | { type: "final"; response: string; simulation_results?: SimulationResult[] }
+  | { type: "error"; message: string };
+
+export interface ObservabilityTrace {
+  request_id: string;
+  timestamp_ms: number;
+  execution_time_ms: number;
+  status: string;
+  span_count: number;
+}
+
+export interface CostSummary {
+  endpoint: string;
+  request_count: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  estimated_cost_usd?: number;
+}
+
 export interface GenieResponse {
   conversation_id?: string;
   message_id?: string;
@@ -268,6 +290,58 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ message, conversation_history: conversationHistory }),
     }),
+
+  // Streaming agent: invokes onEvent for each SSE milestone.
+  chatAgentStream: async (
+    message: string,
+    conversationHistory: Array<{ role: string; content: string }>,
+    onEvent: (event: AgentStreamEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    const res = await fetch(`${API_BASE}/agent/chat/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, conversation_history: conversationHistory }),
+      signal,
+    });
+    if (!res.ok || !res.body) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || `API error: ${res.status}`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    const flush = (block: string) => {
+      let eventType = "message";
+      const dataLines: string[] = [];
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event:")) eventType = line.slice(6).trim();
+        else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+      }
+      if (!dataLines.length) return;
+      try {
+        onEvent({ type: eventType, ...JSON.parse(dataLines.join("\n")) } as AgentStreamEvent);
+      } catch {
+        /* ignore malformed frame */
+      }
+    };
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let sep: number;
+      while ((sep = buffer.indexOf("\n\n")) !== -1) {
+        const block = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        if (block.trim()) flush(block);
+      }
+    }
+    if (buffer.trim()) flush(buffer);
+  },
+
+  // Observability
+  getTraces: () => fetchApi<{ traces: ObservabilityTrace[] }>("/observability/traces"),
+  getCostSummary: () => fetchApi<{ costs: CostSummary[] }>("/observability/costs"),
 
   // Genie
   askGenie: (question: string, conversationId?: string) =>

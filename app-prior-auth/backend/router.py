@@ -647,9 +647,9 @@ async def get_observability_costs():
                   WHEN 'databricks-llama-4-maverick'
                     THEN ROUND(SUM(eu.input_token_count) * 0.40 / 1000000
                              + SUM(eu.output_token_count) * 1.60 / 1000000, 4)
-                  WHEN 'databricks-gemini-2-5-flash'
-                    THEN ROUND(SUM(eu.input_token_count) * 0.30 / 1000000
-                             + SUM(eu.output_token_count) * 2.50 / 1000000, 4)
+                  WHEN 'databricks-claude-haiku-4-5'
+                    THEN ROUND(SUM(eu.input_token_count) * 1.00 / 1000000
+                             + SUM(eu.output_token_count) * 5.00 / 1000000, 4)
                   ELSE 0
                 END AS estimated_cost_usd
             FROM system.serving.endpoint_usage eu

@@ -14,7 +14,7 @@ const COST_PER_1K: Record<string, { input: number; output: number }> = {
   "databricks-claude-haiku-4-5": { input: 0.001, output: 0.005 },
 };
 
-export function Observability() {
+export default function Observability() {
   const [traces, setTraces] = useState<ObservabilityTrace[]>([]);
   const [costs, setCosts] = useState<CostSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -46,14 +46,14 @@ export function Observability() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="p-8 space-y-6">
       <div>
-        <h2 className="text-2xl font-bold text-databricks-dark flex items-center gap-2">
-          <Activity className="w-6 h-6 text-databricks-red" /> Observability
-        </h2>
-        <p className="text-sm text-gray-500 mt-1">
-          MLflow traces and model usage for the PA review agent and document
-          auto-adjudication, captured in Unity Catalog OTel tables.
+        <h1 className="text-xl font-bold text-databricks-dark flex items-center gap-2">
+          <Activity className="w-5 h-5 text-databricks-red" /> Observability
+        </h1>
+        <p className="text-sm text-gray-500 mt-0.5">
+          MLflow traces and model usage for the underwriting agent, captured in
+          Unity Catalog OTel tables.
         </p>
       </div>
 
@@ -161,7 +161,7 @@ export function Observability() {
               {traces.length === 0 && (
                 <tr>
                   <td colSpan={5} className="px-4 py-8 text-center text-gray-400">
-                    No traces yet. Run a PA agent query or adjudicate a document to generate traces.
+                    No traces yet. Ask the Underwriting Agent a question to generate traces.
                   </td>
                 </tr>
               )}

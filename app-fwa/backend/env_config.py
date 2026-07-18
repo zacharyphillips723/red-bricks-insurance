@@ -93,7 +93,10 @@ GENIE_SPACE_ID = _genie if _genie not in _SENTINEL else _auto_detect_genie_space
 )
 
 LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT") or "databricks-llama-4-maverick"
-GEMINI_ENDPOINT = os.environ.get("GEMINI_ENDPOINT") or "databricks-gemini-2-5-flash"
+# The clinical-analyst sub-agent endpoint. Name is retained as GEMINI_ENDPOINT
+# for compatibility, but now points at Claude Haiku 4.5 — the prior
+# databricks-gemini-2-5-flash endpoint was deprecated. Overridable via env.
+GEMINI_ENDPOINT = os.environ.get("GEMINI_ENDPOINT") or "databricks-claude-haiku-4-5"
 FWA_MODEL_ENDPOINT = os.environ.get("FWA_MODEL_ENDPOINT") or "fwa-fraud-scorer"
 
 VS_INDEX_NAME = os.environ.get("VS_INDEX_NAME", f"{UC_CATALOG}.prior_auth.medical_policy_vs_index")

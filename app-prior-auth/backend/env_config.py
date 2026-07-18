@@ -82,10 +82,10 @@ GENIE_SPACE_ID = _genie if _genie not in _SENTINEL else _auto_detect_genie_space
 
 LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT") or "databricks-llama-4-maverick"
 
-# PA review agent endpoint — Gemini 2.5 Flash is ~3x faster per tool-calling
-# round than Llama 4 Maverick on this workload (benchmarked), with the same
-# tool-calling behavior. Overridable via env.
-PA_AGENT_ENDPOINT = os.environ.get("PA_AGENT_ENDPOINT") or "databricks-gemini-2-5-flash"
+# PA review agent endpoint — Claude Haiku 4.5 is fast + reliable at tool
+# calling and synthesis, and replaces the now-deprecated
+# databricks-gemini-2-5-flash. Overridable via env.
+PA_AGENT_ENDPOINT = os.environ.get("PA_AGENT_ENDPOINT") or "databricks-claude-haiku-4-5"
 
 # MLflow UC trace storage — the app links its experiment to these UC OTel
 # tables so PA agent + document-adjudication traces stream into Unity Catalog

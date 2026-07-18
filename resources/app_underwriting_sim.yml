@@ -23,14 +23,28 @@ resources:
             value: ${var.warehouse_id}
           - name: LLM_ENDPOINT
             value: databricks-llama-4-maverick
+          - name: UW_AGENT_ENDPOINT
+            value: databricks-claude-haiku-4-5
           - name: UC_CATALOG
             value: ${var.catalog}
           - name: UC_SCHEMA
             value: analytics
+          - name: MLFLOW_TRACKING_URI
+            value: databricks
+          - name: MLFLOW_UC_EXPERIMENT
+            value: /Shared/red-bricks-uw-agent-traces-uc
+          - name: UC_TRACE_SCHEMA
+            value: analytics
+          - name: UC_TRACE_TABLE_PREFIX
+            value: uw_agent
       resources:
         - name: llm-endpoint
           serving_endpoint:
             name: databricks-llama-4-maverick
+            permission: CAN_QUERY
+        - name: uw-agent-endpoint
+          serving_endpoint:
+            name: databricks-claude-haiku-4-5
             permission: CAN_QUERY
         # Lakebase — SP access granted by bootstrap script (DAB doesn't support Autoscaling resource blocks yet)
         - name: sql-warehouse

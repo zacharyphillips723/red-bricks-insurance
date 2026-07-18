@@ -9,11 +9,12 @@ import json
 import re
 import traceback
 
+import mlflow
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import StatementParameterListItem
 
 from .data_loader import data_cache
-from .env_config import UC_CATALOG, SQL_WAREHOUSE_ID, LLM_ENDPOINT
+from .env_config import UC_CATALOG, SQL_WAREHOUSE_ID, UW_AGENT_ENDPOINT
 from .simulation_engine import run_simulation, SIMULATION_FUNCTIONS
 
 _CAT = f"`{UC_CATALOG}`"  # SQL-safe quoting (handles hyphens in catalog names)
@@ -122,7 +123,27 @@ TOOLS = [
     },
 ]
 
-MAX_TOOL_ROUNDS = 6
+MAX_TOOL_ROUNDS = 4
+
+
+def _content_to_text(content) -> str:
+    """Normalize an LLM message `content` to plain text.
+
+    Some endpoints return content as a list of typed blocks
+    ([{"type": "text", "text": "..."}]) rather than a bare string. Flatten so
+    downstream markdown/handling always receives a string.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                parts.append(block.get("text") or block.get("content") or "")
+            elif isinstance(block, str):
+                parts.append(block)
+        return "\n".join(p for p in parts if p)
+    return str(content) if content is not None else ""
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +185,7 @@ def _sdk_request(method: str, path: str, body: dict | None = None) -> dict:
 # Tool execution
 # ---------------------------------------------------------------------------
 
+@mlflow.trace(span_type="TOOL", name="uw_agent_tool")
 def _execute_tool(tool_name: str, tool_args: dict) -> str:
     if tool_name == "run_simulation":
         sim_type = tool_args.get("simulation_type", "")
@@ -222,89 +244,132 @@ def _execute_tool(tool_name: str, tool_args: dict) -> str:
 # Agent entry point
 # ---------------------------------------------------------------------------
 
+_FRIENDLY_TOOL = {
+    "run_simulation": "Running simulation",
+    "get_baseline": "Fetching book-level financials",
+    "get_group_detail": "Looking up group experience",
+    "query_uc_table": "Querying Unity Catalog",
+}
+
+
+def _friendly_tool_label(fn_name: str, fn_args: dict) -> str:
+    if fn_name == "run_simulation":
+        return f"Running {fn_args.get('simulation_type', 'simulation')}"
+    if fn_name == "query_uc_table" and fn_args.get("purpose"):
+        return f"Querying Unity Catalog: {fn_args['purpose']}"
+    return _FRIENDLY_TOOL.get(fn_name, fn_name)
+
+
+@mlflow.trace(span_type="AGENT", name="underwriting_agent")
 def query_underwriting_agent(
     message: str,
     conversation_history: list[dict] | None = None,
 ) -> dict:
-    """Underwriting agent with multi-turn tool-calling."""
+    """Underwriting agent with multi-turn tool-calling (blocking)."""
     try:
         print(f"[UW Agent] Processing: {message[:80]}...")
-
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        if conversation_history:
-            messages.extend(conversation_history)
-        messages.append({"role": "user", "content": message})
-
-        tools_used = 0
-        simulation_results = []
-
-        for _ in range(MAX_TOOL_ROUNDS):
-            data = _sdk_request("POST", f"/serving-endpoints/{LLM_ENDPOINT}/invocations", {
-                "messages": messages,
-                "tools": TOOLS,
-                "max_tokens": 4000,
-                "temperature": 0.05,
-            })
-
-            tool_calls = (
-                data.get("choices", [{}])[0]
-                .get("message", {})
-                .get("tool_calls", [])
-            )
-
-            if not tool_calls:
-                answer = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                return {
-                    "response": answer,
-                    "simulation_results": simulation_results or None,
+        # Drain the streaming generator to a final result — single source of truth.
+        result = {"response": "", "simulation_results": None}
+        for event_type, payload in _run_agent(message, conversation_history):
+            if event_type == "final":
+                result = {
+                    "response": payload["response"],
+                    "simulation_results": payload.get("simulation_results"),
                 }
-
-            messages.append(data["choices"][0]["message"])
-
-            for tc in tool_calls:
-                fn_name = tc.get("function", {}).get("name", "")
-                try:
-                    fn_args = json.loads(tc.get("function", {}).get("arguments", "{}"))
-                except json.JSONDecodeError:
-                    fn_args = {}
-                tool_call_id = tc.get("id", "")
-
-                result_str = _execute_tool(fn_name, fn_args)
-                tools_used += 1
-
-                # Capture simulation results for structured return
-                if fn_name == "run_simulation":
-                    try:
-                        sim_result = json.loads(result_str)
-                        if "error" not in sim_result:
-                            sim_result["simulation_type"] = fn_args.get("simulation_type", "")
-                            simulation_results.append(sim_result)
-                    except json.JSONDecodeError:
-                        pass
-
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "content": result_str,
-                })
-
-        # Exhausted rounds
-        messages.append({
-            "role": "user",
-            "content": "Please provide your final analysis based on all the data gathered.",
-        })
-        data = _sdk_request("POST", f"/serving-endpoints/{LLM_ENDPOINT}/invocations", {
-            "messages": messages,
-            "max_tokens": 3000,
-            "temperature": 0.05,
-        })
-        answer = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        return {
-            "response": answer,
-            "simulation_results": simulation_results or None,
-        }
-
+            elif event_type == "error":
+                return {"response": f"Error: {payload['message']}", "simulation_results": None}
+        return result
     except Exception as e:
         print(f"[UW Agent] ERROR: {e}")
         traceback.print_exc()
         return {"response": f"Error: {str(e)}", "simulation_results": None}
+
+
+@mlflow.trace(span_type="AGENT", name="underwriting_agent_stream")
+def stream_underwriting_agent(
+    message: str,
+    conversation_history: list[dict] | None = None,
+):
+    """Streaming variant — yields (event_type, payload) tuples.
+
+    Milestones:
+        status  -> {"stage": "...", "message": "..."}
+        final   -> {"response": "...", "simulation_results": [...] | None}
+        error   -> {"message": "..."}
+    """
+    try:
+        yield from _run_agent(message, conversation_history)
+    except Exception as e:
+        print(f"[UW Agent:stream] ERROR: {e}")
+        traceback.print_exc()
+        yield ("error", {"message": str(e)})
+
+
+def _run_agent(message: str, conversation_history: list[dict] | None):
+    """Shared multi-round tool loop. Yields status milestones then a final event."""
+    print(f"[UW Agent] Processing: {message[:80]}...")
+
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    if conversation_history:
+        messages.extend(conversation_history)
+    messages.append({"role": "user", "content": message})
+
+    simulation_results = []
+
+    for _ in range(MAX_TOOL_ROUNDS):
+        yield ("status", {"stage": "thinking", "message": "Analyzing your question…"})
+        data = _sdk_request("POST", f"/serving-endpoints/{UW_AGENT_ENDPOINT}/invocations", {
+            "messages": messages,
+            "tools": TOOLS,
+            "max_tokens": 4000,
+            "temperature": 0.05,
+        })
+
+        tool_calls = data.get("choices", [{}])[0].get("message", {}).get("tool_calls", [])
+
+        if not tool_calls:
+            answer = _content_to_text(data.get("choices", [{}])[0].get("message", {}).get("content", ""))
+            yield ("final", {"response": answer, "simulation_results": simulation_results or None})
+            return
+
+        messages.append(data["choices"][0]["message"])
+
+        for tc in tool_calls:
+            fn_name = tc.get("function", {}).get("name", "")
+            try:
+                fn_args = json.loads(tc.get("function", {}).get("arguments", "{}"))
+            except json.JSONDecodeError:
+                fn_args = {}
+            tool_call_id = tc.get("id", "")
+
+            yield ("status", {"stage": "tool", "message": _friendly_tool_label(fn_name, fn_args)})
+            result_str = _execute_tool(fn_name, fn_args)
+
+            if fn_name == "run_simulation":
+                try:
+                    sim_result = json.loads(result_str)
+                    if "error" not in sim_result:
+                        sim_result["simulation_type"] = fn_args.get("simulation_type", "")
+                        simulation_results.append(sim_result)
+                except json.JSONDecodeError:
+                    pass
+
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": result_str,
+            })
+
+    # Exhausted rounds — force a final synthesis without tools.
+    yield ("status", {"stage": "synthesizing", "message": "Synthesizing final analysis…"})
+    messages.append({
+        "role": "user",
+        "content": "Please provide your final analysis based on all the data gathered.",
+    })
+    data = _sdk_request("POST", f"/serving-endpoints/{UW_AGENT_ENDPOINT}/invocations", {
+        "messages": messages,
+        "max_tokens": 3000,
+        "temperature": 0.05,
+    })
+    answer = _content_to_text(data.get("choices", [{}])[0].get("message", {}).get("content", ""))
+    yield ("final", {"response": answer, "simulation_results": simulation_results or None})

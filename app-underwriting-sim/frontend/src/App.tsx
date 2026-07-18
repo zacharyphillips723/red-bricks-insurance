@@ -8,10 +8,11 @@ import SimulationHistory from "./pages/SimulationHistory";
 import Agent from "./pages/Agent";
 import RateBuildup from "./pages/RateBuildup";
 import RiskPool from "./pages/RiskPool";
+import Observability from "./pages/Observability";
 import { useHashRouter } from "./lib/useHashRouter";
 import { api } from "./lib/api";
 
-type Page = "dashboard" | "builder" | "comparison" | "history" | "agent" | "rate-buildup" | "risk-pool";
+type Page = "dashboard" | "builder" | "comparison" | "history" | "agent" | "rate-buildup" | "risk-pool" | "observability";
 
 export default function App() {
   const [page, setPage] = useHashRouter<Page>("dashboard");
@@ -51,6 +52,7 @@ export default function App() {
             <SimulationHistory onCountChange={setSavedCount} />
           )}
           {page === "agent" && <Agent />}
+          {page === "observability" && <Observability />}
         </main>
       </div>
     </ErrorBoundary>

@@ -20,11 +20,12 @@ export default function Agent() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [statusMsg, setStatusMsg] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, statusMsg]);
 
   const handleSend = async () => {
     const msg = input.trim();
@@ -34,22 +35,28 @@ export default function Agent() {
     const userMsg: ChatMessage = { role: "user", content: msg };
     setMessages((prev) => [...prev, userMsg]);
     setLoading(true);
+    setStatusMsg("Analyzing your question…");
+
+    // Build conversation history for context (before appending the new user msg)
+    const history = messages.map((m) => ({ role: m.role, content: m.content }));
 
     try {
-      // Build conversation history for context
-      const history = messages.map((m) => ({
-        role: m.role,
-        content: m.content,
-      }));
-
-      const result = await api.chatAgent(msg, history);
-
-      const assistantMsg: ChatMessage = {
-        role: "assistant",
-        content: result.response,
-        simResults: result.simulation_results || undefined,
-      };
-      setMessages((prev) => [...prev, assistantMsg]);
+      await api.chatAgentStream(msg, history, (ev) => {
+        if (ev.type === "status") {
+          setStatusMsg(ev.message);
+        } else if (ev.type === "final") {
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "assistant",
+              content: ev.response,
+              simResults: ev.simulation_results || undefined,
+            },
+          ]);
+        } else if (ev.type === "error") {
+          setMessages((prev) => [...prev, { role: "assistant", content: `Error: ${ev.message}` }]);
+        }
+      });
     } catch (err) {
       setMessages((prev) => [
         ...prev,
@@ -57,6 +64,7 @@ export default function Agent() {
       ]);
     } finally {
       setLoading(false);
+      setStatusMsg("");
     }
   };
 
@@ -154,8 +162,9 @@ export default function Agent() {
             <div className="w-8 h-8 rounded-full bg-databricks-dark flex items-center justify-center flex-shrink-0">
               <Bot className="w-4 h-4 text-white" />
             </div>
-            <div className="bg-white border border-gray-200 rounded-xl px-4 py-3">
-              <RefreshCw className="w-4 h-4 animate-spin text-gray-400" />
+            <div className="bg-white border border-gray-200 rounded-xl px-4 py-3 flex items-center gap-2">
+              <RefreshCw className="w-4 h-4 animate-spin text-databricks-red" />
+              <span className="text-sm text-gray-500">{statusMsg || "Thinking…"}</span>
             </div>
           </div>
         )}

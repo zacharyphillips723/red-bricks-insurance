@@ -5,13 +5,13 @@ import type { ObservabilityTrace, CostSummary } from "@/lib/api";
 
 const MODEL_LABELS: Record<string, string> = {
   "databricks-llama-4-maverick": "Llama 4 Maverick",
-  "databricks-gemini-2-5-flash": "Gemini 2.5 Flash",
+  "databricks-claude-haiku-4-5": "Claude Haiku 4.5",
 };
 
 // FMAPI pay-per-token pricing per 1K tokens
 const COST_PER_1K: Record<string, { input: number; output: number }> = {
   "databricks-llama-4-maverick": { input: 0.0004, output: 0.0016 },
-  "databricks-gemini-2-5-flash": { input: 0.0003, output: 0.0025 },
+  "databricks-claude-haiku-4-5": { input: 0.001, output: 0.005 },
 };
 
 export function ObservabilityPage() {
@@ -52,7 +52,7 @@ export function ObservabilityPage() {
           <Activity className="w-6 h-6 text-databricks-red" /> Observability
         </h2>
         <p className="text-sm text-gray-500 mt-1">
-          Model usage, costs, and traces across Llama 4 Maverick and Gemini 2.5 Flash.
+          Model usage, costs, and traces across Llama 4 Maverick and Claude Haiku 4.5.
         </p>
       </div>
 
@@ -60,7 +60,7 @@ export function ObservabilityPage() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {(costs.length > 0 ? costs : [
           { endpoint: "databricks-llama-4-maverick", request_count: 0, total_input_tokens: 0, total_output_tokens: 0, avg_latency_ms: 0 },
-          { endpoint: "databricks-gemini-2-5-flash", request_count: 0, total_input_tokens: 0, total_output_tokens: 0, avg_latency_ms: 0 },
+          { endpoint: "databricks-claude-haiku-4-5", request_count: 0, total_input_tokens: 0, total_output_tokens: 0, avg_latency_ms: 0 },
         ]).map((c) => {
           const rates = COST_PER_1K[c.endpoint] || { input: 0, output: 0 };
           const inputTokens = Number(c.total_input_tokens || 0);

@@ -129,7 +129,7 @@ function AgentArchitectureBadge({ sources }: { sources: Record<string, unknown>[
       </span>
       <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200">
         <Brain className="w-3 h-3" />
-        Gemini Analyst ({geminiTables} tables, {geminiTools.length} tools)
+        Clinical Analyst ({geminiTables} tables, {geminiTools.length} tools)
       </span>
     </div>
   );
@@ -150,7 +150,7 @@ export function AgentChat() {
     if (!text.trim()) return;
 
     setLoading(true);
-    setStatusMsg("Routing to Genie + Gemini sub-agents in parallel…");
+    setStatusMsg("Routing to Genie + Clinical Analyst sub-agents in parallel…");
     setGeniePending(true);
     setGeminiPending(true);
     setEarlyGemini(null);
@@ -241,7 +241,7 @@ export function AgentChat() {
         </h2>
         <p className="text-sm text-gray-500 mt-1">
           Supervisor agent routes to <strong>Genie</strong> (structured claims SQL) and{" "}
-          <strong>Gemini 2.5 Flash</strong> (medical policy RAG) in parallel, then synthesizes a unified briefing.
+          <strong>Claude Haiku 4.5</strong> (medical policy RAG) in parallel, then synthesizes a unified briefing.
         </p>
       </div>
 
@@ -264,7 +264,7 @@ export function AgentChat() {
               </div>
               <div className="text-left p-3 rounded-lg border border-blue-200 bg-blue-50 max-w-xs">
                 <div className="flex items-center gap-2 text-sm font-semibold text-blue-800 mb-1">
-                  <Brain className="w-4 h-4" /> Gemini 2.5 Flash (Tool-Calling)
+                  <Brain className="w-4 h-4" /> Claude Haiku 4.5 (Tool-Calling)
                 </div>
                 <p className="text-xs text-blue-700">Searches medical policies via Vector Search, analyzes compliance, classifies Fraud/Waste/Abuse</p>
               </div>
@@ -327,7 +327,7 @@ export function AgentChat() {
               <div className={`flex-1 p-2 rounded-md border ${geminiPending ? "bg-blue-50 border-blue-200" : "bg-blue-100 border-blue-300"}`}>
                 <div className="flex items-center gap-1 text-xs text-blue-700">
                   <Brain className="w-3 h-3" />
-                  <span className="font-medium">Gemini Analyst</span>
+                  <span className="font-medium">Clinical Analyst</span>
                   {geminiPending
                     ? <Loader2 className="w-3 h-3 animate-spin ml-auto" />
                     : <CheckCircle2 className="w-3 h-3 ml-auto" />}
@@ -340,7 +340,7 @@ export function AgentChat() {
             {earlyGemini && (
               <div className="mt-4 border-t border-gray-100 pt-3">
                 <div className="flex items-center gap-2 mb-2 text-xs font-semibold text-blue-800">
-                  <Brain className="w-3.5 h-3.5" /> Preliminary clinical analysis (Gemini)
+                  <Brain className="w-3.5 h-3.5" /> Preliminary clinical analysis
                   <FwaClassificationBadge answer={earlyGemini.analysis} />
                 </div>
                 <div className="text-sm text-gray-700 opacity-90">

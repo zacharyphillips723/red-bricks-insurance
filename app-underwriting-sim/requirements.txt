@@ -4,3 +4,6 @@ sqlalchemy[asyncio]>=2.0
 psycopg[binary]>=3.1
 databricks-sdk>=0.81.0
 pydantic>=2.0
+# mlflow>=3.14 for the UnityCatalog trace_location API (agent + simulation
+# traces streamed into UC OTel tables).
+mlflow>=3.14.0

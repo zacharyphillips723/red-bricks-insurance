@@ -7,9 +7,10 @@ import {
   TrendingUp,
   DollarSign,
   BarChart3,
+  Activity,
 } from "lucide-react";
 
-type Page = "dashboard" | "builder" | "comparison" | "history" | "agent" | "rate-buildup" | "risk-pool";
+type Page = "dashboard" | "builder" | "comparison" | "history" | "agent" | "rate-buildup" | "risk-pool" | "observability";
 
 interface SidebarProps {
   currentPage: Page;
@@ -25,6 +26,7 @@ const NAV_ITEMS: { page: Page; label: string; icon: React.ElementType; section?:
   { page: "comparison", label: "Compare Scenarios", icon: GitCompareArrows, section: "Management" },
   { page: "history", label: "Simulation History", icon: History },
   { page: "agent", label: "Underwriting Agent", icon: Bot },
+  { page: "observability", label: "Observability", icon: Activity },
 ];
 
 export default function Sidebar({ currentPage, onNavigate, savedCount }: SidebarProps) {

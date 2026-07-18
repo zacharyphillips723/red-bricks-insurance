@@ -1025,7 +1025,7 @@ GENIE_SPACE_CONFIGS = [
     },
     {
         "title": "Red Bricks AI Ops — Agent Observability",
-        "description": "Observability for the FWA Investigation Agent system. Query token consumption, cost estimates, request volumes, inference table logs (every agent request/response automatically captured), evaluation scores, ML predictions, and AI classifications across Llama 4 Maverick (supervisor), Gemini 2.5 Pro (analyst), and the XGBoost fraud scorer. JOIN system.serving.endpoint_usage eu with system.serving.served_entities se on eu.served_entity_id = se.served_entity_id to get endpoint names. IMPORTANT: Always filter system tables by workspace_id = '7474660722665158' to scope to this workspace. Filter to FWA endpoints: WHERE se.endpoint_name IN ('databricks-llama-4-maverick', 'databricks-gemini-2-5-pro', 'fwa-fraud-scorer', 'fwa-supervisor-agent') AND eu.workspace_id = '7474660722665158'. Cost rates: Llama $0.40/$1.60 per 1M input/output tokens, Gemini $1.25/$10.00 per 1M. Evaluation table scores are 1-5 scale from Claude Sonnet 4 judge. The fwa_supervisor_payload table contains every request/response to the FWA agent endpoint with execution_time_ms, status_code, and full request/response JSON.",
+        "description": "Observability for the FWA Investigation Agent system. Query token consumption, cost estimates, request volumes, inference table logs (every agent request/response automatically captured), evaluation scores, ML predictions, and AI classifications across Llama 4 Maverick (supervisor), Claude Haiku 4.5 (analyst), and the XGBoost fraud scorer. JOIN system.serving.endpoint_usage eu with system.serving.served_entities se on eu.served_entity_id = se.served_entity_id to get endpoint names. IMPORTANT: Always filter system tables by workspace_id = '7474660722665158' to scope to this workspace. Filter to FWA endpoints: WHERE se.endpoint_name IN ('databricks-llama-4-maverick', 'databricks-claude-haiku-4-5', 'fwa-fraud-scorer', 'fwa-supervisor-agent') AND eu.workspace_id = '7474660722665158'. Cost rates: Llama $0.40/$1.60 per 1M input/output tokens, Claude Haiku 4.5 $1.00/$5.00 per 1M. Evaluation table scores are 1-5 scale from Claude Sonnet 4 judge. The fwa_supervisor_payload table contains every request/response to the FWA agent endpoint with execution_time_ms, status_code, and full request/response JSON.",
         "tables": sorted([
             "system.serving.endpoint_usage",
             "system.serving.served_entities",
@@ -1369,6 +1369,76 @@ else:
     except Exception as _te:
         import traceback as _tb
         print(f"  WARNING: PA UC trace storage provisioning failed: {_te}")
+        _tb.print_exc()
+
+# COMMAND ----------
+
+print("=" * 60)
+print("STEP 3b-3: Provision MLflow UC Trace Storage (Underwriting Agent)")
+print("=" * 60)
+
+# These MUST stay in sync with app-underwriting-sim/backend/env_config.py
+# defaults and the MLFLOW_UC_EXPERIMENT / UC_TRACE_* env vars in
+# resources/app_underwriting_sim.yml.
+UW_TRACE_EXPERIMENT = "/Shared/red-bricks-uw-agent-traces-uc"
+UW_TRACE_SCHEMA = "analytics"
+UW_TRACE_TABLE_PREFIX = "uw_agent"
+
+if not warehouse_id:
+    print("  Skipped — no warehouse_id available (required to provision UC trace tables).")
+else:
+    try:
+        import os as _os
+        import mlflow
+        from mlflow.entities import UnityCatalog
+
+        mlflow.set_tracking_uri("databricks")
+        _os.environ["MLFLOW_TRACING_SQL_WAREHOUSE_ID"] = warehouse_id
+
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog_sql}.{UW_TRACE_SCHEMA}")
+
+        exp = mlflow.set_experiment(
+            UW_TRACE_EXPERIMENT,
+            trace_location=UnityCatalog(
+                catalog_name=catalog,
+                schema_name=UW_TRACE_SCHEMA,
+                table_prefix=UW_TRACE_TABLE_PREFIX,
+            ),
+        )
+        print(f"  Experiment linked: {UW_TRACE_EXPERIMENT} (ID: {exp.experiment_id})")
+
+        _otel_tables = [
+            f"{UW_TRACE_TABLE_PREFIX}_otel_spans",
+            f"{UW_TRACE_TABLE_PREFIX}_otel_logs",
+            f"{UW_TRACE_TABLE_PREFIX}_otel_annotations",
+        ]
+        _existing = {
+            r["tableName"]
+            for r in spark.sql(
+                f"SHOW TABLES IN {catalog_sql}.{UW_TRACE_SCHEMA} LIKE '{UW_TRACE_TABLE_PREFIX}_otel_*'"
+            ).collect()
+        }
+        _missing = [t for t in _otel_tables if t not in _existing]
+        if _missing:
+            print(f"  WARNING: expected OTel tables missing: {_missing}. "
+                  "Choose a fresh UW_TRACE_EXPERIMENT name and re-run.")
+        else:
+            print(f"  Verified OTel tables exist: {sorted(_existing)}")
+
+        if app_sps:
+            print("\n  Granting app SPs access to UW trace tables...")
+            for _sp in app_sps:
+                _sp_name = _sp["sp_name"]
+                for _tbl in sorted(_existing):
+                    _fq = f"{catalog_sql}.{UW_TRACE_SCHEMA}.`{_tbl}`"
+                    try:
+                        spark.sql(f"GRANT SELECT, MODIFY ON TABLE {_fq} TO `{_sp_name}`")
+                    except Exception as _ge:
+                        print(f"    {_sp_name} on {_tbl}: {_ge}")
+            print(f"    SELECT + MODIFY granted to {len(app_sps)} SP(s) on {len(_existing)} table(s)")
+    except Exception as _te:
+        import traceback as _tb
+        print(f"  WARNING: UW UC trace storage provisioning failed: {_te}")
         _tb.print_exc()
 
 # COMMAND ----------

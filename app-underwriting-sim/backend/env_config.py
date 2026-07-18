@@ -92,7 +92,25 @@ GENIE_SPACE_ID = _genie if _genie not in _SENTINEL else _auto_detect_genie_space
 
 LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT") or "databricks-llama-4-maverick"
 
+# Underwriting agent endpoint — Claude Haiku 4.5 is fast + reliable at tool
+# calling and synthesis (benchmarked ~2x faster synthesis than Llama 4 Maverick),
+# and replaces the now-deprecated databricks-gemini-2-5-flash. Overridable via env.
+UW_AGENT_ENDPOINT = os.environ.get("UW_AGENT_ENDPOINT") or "databricks-claude-haiku-4-5"
+
+# MLflow UC trace storage — the app links its experiment to these UC OTel tables
+# so agent + simulation traces stream into Unity Catalog. Provisioned by
+# bootstrap_workspace.py; the app performs an idempotent re-link on startup.
+UC_TRACE_SCHEMA = os.environ.get("UC_TRACE_SCHEMA", "analytics")
+UC_TRACE_TABLE_PREFIX = os.environ.get("UC_TRACE_TABLE_PREFIX", "uw_agent")
+MLFLOW_UC_EXPERIMENT = os.environ.get(
+    "MLFLOW_UC_EXPERIMENT", "/Shared/red-bricks-uw-agent-traces-uc"
+)
+
 print(f"[env_config] SQL_WAREHOUSE_ID={SQL_WAREHOUSE_ID}")
 print(f"[env_config] UC_CATALOG={UC_CATALOG}")
 print(f"[env_config] GENIE_SPACE_ID={GENIE_SPACE_ID}")
 print(f"[env_config] LLM_ENDPOINT={LLM_ENDPOINT}")
+print(f"[env_config] UW_AGENT_ENDPOINT={UW_AGENT_ENDPOINT}")
+print(f"[env_config] UC_TRACE_SCHEMA={UC_TRACE_SCHEMA}")
+print(f"[env_config] UC_TRACE_TABLE_PREFIX={UC_TRACE_TABLE_PREFIX}")
+print(f"[env_config] MLFLOW_UC_EXPERIMENT={MLFLOW_UC_EXPERIMENT}")

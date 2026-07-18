@@ -30,7 +30,7 @@ resources:
           - name: LLM_ENDPOINT
             value: databricks-llama-4-maverick
           - name: GEMINI_ENDPOINT
-            value: databricks-gemini-2-5-flash
+            value: databricks-claude-haiku-4-5
           - name: UC_CATALOG
             value: ${var.catalog}
           - name: UC_SCHEMA
@@ -40,7 +40,7 @@ resources:
           - name: VS_INDEX_NAME
             value: ${var.catalog}.prior_auth.medical_policy_vs_index
           - name: GATEWAY_MODELS
-            value: databricks-llama-4-maverick,databricks-gemini-2-5-flash
+            value: databricks-llama-4-maverick,databricks-claude-haiku-4-5
           - name: MLFLOW_TRACKING_URI
             value: databricks
           - name: MLFLOW_EXPERIMENT_NAME
@@ -66,7 +66,7 @@ resources:
             permission: CAN_QUERY
         - name: gemini-endpoint
           serving_endpoint:
-            name: databricks-gemini-2-5-pro
+            name: databricks-claude-haiku-4-5
             permission: CAN_QUERY
         # fwa-fraud-scorer serving endpoint is created at runtime by train_fwa_model task.
         # Lakebase — SP access granted by bootstrap script (DAB doesn't support Autoscaling resource blocks yet)
