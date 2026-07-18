@@ -23,6 +23,7 @@ class SimulationType(str, Enum):
     UTILIZATION_CHANGE = "utilization_change"
     NEW_GROUP_QUOTE = "new_group_quote"
     IBNR_RESERVE = "ibnr_reserve"
+    AGGREGATE_STOP_LOSS = "aggregate_stop_loss"
 
 
 class SimulationStatus(str, Enum):
@@ -217,6 +218,8 @@ class FactorTablesOut(BaseModel):
     industry_factors: FactorTable
     trend_factors: FactorTable
     experience_mod_ranges: FactorTable
+    # 'uc_table' when factors were read from the governed UC table, else 'fallback'.
+    source: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

@@ -8,9 +8,10 @@ import {
   DollarSign,
   BarChart3,
   Activity,
+  Sparkles,
 } from "lucide-react";
 
-type Page = "dashboard" | "builder" | "comparison" | "history" | "agent" | "rate-buildup" | "risk-pool" | "observability";
+type Page = "dashboard" | "builder" | "comparison" | "history" | "agent" | "rate-buildup" | "risk-pool" | "observability" | "genie";
 
 interface SidebarProps {
   currentPage: Page;
@@ -26,6 +27,7 @@ const NAV_ITEMS: { page: Page; label: string; icon: React.ElementType; section?:
   { page: "comparison", label: "Compare Scenarios", icon: GitCompareArrows, section: "Management" },
   { page: "history", label: "Simulation History", icon: History },
   { page: "agent", label: "Underwriting Agent", icon: Bot },
+  { page: "genie", label: "Genie Search", icon: Sparkles },
   { page: "observability", label: "Observability", icon: Activity },
 ];
 

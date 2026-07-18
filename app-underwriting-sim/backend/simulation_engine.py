@@ -640,6 +640,82 @@ def simulate_ibnr_reserve(cache: DataCache, params: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 11. Aggregate Stop-Loss / Reinsurance Layering
+# ---------------------------------------------------------------------------
+
+def simulate_aggregate_stop_loss(cache: DataCache, params: dict) -> dict:
+    """Model an aggregate stop-loss (reinsurance) layer over a group's claims.
+
+    Unlike specific stop-loss (per-member), aggregate stop-loss caps the group's
+    TOTAL claims at an attachment point defined as a corridor above expected
+    claims (e.g. 125%). The reinsurer reimburses claims above the attachment.
+
+    Parameters:
+        group_id (str): group to analyze
+        attachment_pct (float): aggregate attachment as % of expected claims
+            (default 125 = reinsurer pays claims above 125% of expected)
+        agg_premium_rate_pct (float, optional): aggregate cover premium as % of
+            expected claims (default 3.5)
+    """
+    group_id = params.get("group_id", "")
+    attachment_pct = _safe_float(params.get("attachment_pct"), 125.0)
+    premium_rate_pct = _safe_float(params.get("agg_premium_rate_pct"), 3.5)
+
+    experience = cache.get_group_experience(group_id)
+    member_tcoc = cache.get_member_tcoc_by_group(group_id)
+    summary = cache.get_baseline_summary()
+
+    # Expected claims: prefer group experience, else member TCOC, else book PMPM.
+    expected_claims = sum(_safe_float(r.get("total_claims_paid")) for r in experience)
+    actual_claims = sum(_safe_float(r.get("actual_cost")) for r in member_tcoc)
+    if not expected_claims:
+        expected_claims = actual_claims or summary["total_claims"]
+    if not actual_claims:
+        actual_claims = expected_claims
+
+    attachment_point = expected_claims * (attachment_pct / 100)
+    reinsurer_reimbursement = max(actual_claims - attachment_point, 0.0)
+    agg_premium = expected_claims * (premium_rate_pct / 100)
+    net_cost = agg_premium - reinsurer_reimbursement
+    loss_ratio_to_reinsurer = (
+        reinsurer_reimbursement / agg_premium * 100 if agg_premium else 0.0
+    )
+
+    baseline = {
+        "expected_claims": expected_claims,
+        "actual_claims": actual_claims,
+        "retained_claims": actual_claims,
+        "reinsurer_reimbursement": 0.0,
+    }
+    projected = {
+        "attachment_point": attachment_point,
+        "retained_claims": min(actual_claims, attachment_point),
+        "reinsurer_reimbursement": reinsurer_reimbursement,
+        "aggregate_premium": agg_premium,
+        "net_cost_of_cover": net_cost,
+    }
+
+    narrative = (
+        f"Aggregate stop-loss for group {group_id} at {attachment_pct:.0f}% of expected "
+        f"claims (${expected_claims:,.0f}) sets an attachment point of ${attachment_point:,.0f}. "
+        f"Against actual claims of ${actual_claims:,.0f}, the reinsurer reimburses "
+        f"${reinsurer_reimbursement:,.0f}. Aggregate cover premium is ${agg_premium:,.0f} "
+        f"(net cost ${net_cost:,.0f})."
+    )
+    warnings = []
+    if reinsurer_reimbursement > 0 and loss_ratio_to_reinsurer > 100:
+        warnings.append(
+            f"Reinsurer loss ratio {loss_ratio_to_reinsurer:.0f}% — expect a rate increase at renewal."
+        )
+    if not experience and not member_tcoc:
+        warnings.append("No group experience or member TCOC data found — results are estimated from book averages.")
+    if attachment_pct < 110:
+        warnings.append("Attachment below 110% of expected — cover will attach frequently and carry high premium.")
+
+    return _build_result(baseline, projected, narrative, warnings)
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -654,6 +730,7 @@ SIMULATION_FUNCTIONS = {
     "utilization_change": simulate_utilization_change,
     "new_group_quote": simulate_new_group_quote,
     "ibnr_reserve": simulate_ibnr_reserve,
+    "aggregate_stop_loss": simulate_aggregate_stop_loss,
 }
 
 

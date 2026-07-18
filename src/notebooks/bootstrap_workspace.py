@@ -987,6 +987,7 @@ GENIE_SPACE_CONFIGS = [
             f"{catalog}.analytics.gold_group_stop_loss",
             f"{catalog}.benefits.silver_benefits",
             f"{catalog}.underwriting.gold_underwriting_summary",
+            f"{catalog}.analytics.gold_pricing_factors",
         ]),
     },
     {

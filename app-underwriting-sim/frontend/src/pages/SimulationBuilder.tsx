@@ -87,6 +87,11 @@ const FORM_FIELDS: Record<string, FieldDef[]> = {
     { key: "completion_factor_shift_pct", label: "CF Shift", type: "number", default: 2, suffix: "%" },
     { key: "lob", label: "Line of Business", type: "text", hint: "Leave blank for all" },
   ],
+  aggregate_stop_loss: [
+    { key: "group_id", label: "Group ID", type: "text", default: "GRP-001" },
+    { key: "attachment_pct", label: "Aggregate Attachment", type: "number", default: 125, suffix: "%", hint: "% of expected claims" },
+    { key: "agg_premium_rate_pct", label: "Cover Premium Rate", type: "number", default: 3.5, suffix: "%" },
+  ],
 };
 
 function buildParams(simType: string, formValues: Record<string, string>): Record<string, unknown> {

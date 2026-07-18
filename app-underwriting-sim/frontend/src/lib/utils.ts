@@ -79,4 +79,5 @@ export const SIMULATION_TYPE_LABELS: Record<string, string> = {
   utilization_change: "Utilization Change",
   new_group_quote: "New Group Quote",
   ibnr_reserve: "IBNR Reserve",
+  aggregate_stop_loss: "Aggregate Stop-Loss",
 };

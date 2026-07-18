@@ -45,6 +45,7 @@ const SIM_TYPE_CARDS: {
   { type: "utilization_change", label: "Utilization", desc: "Category-level changes", icon: Activity },
   { type: "new_group_quote", label: "New Group Quote", desc: "Peer-based pricing", icon: Calculator },
   { type: "ibnr_reserve", label: "IBNR Reserve", desc: "Completion factor shifts", icon: Landmark },
+  { type: "aggregate_stop_loss", label: "Aggregate Stop-Loss", desc: "Reinsurance layer over total claims", icon: Shield },
 ];
 
 export default function Dashboard({ onNavigateToBuilder }: DashboardProps) {

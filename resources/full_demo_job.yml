@@ -202,6 +202,17 @@ resources:
               catalog: ${var.catalog}
 
 
+        # Step 3b-2: Seed governed pricing-factor table (Underwriting Sim rate build-up).
+        # Static actuarial reference data → a governed UC Delta table, not an SDP view.
+        - task_key: build_pricing_factors
+          depends_on:
+            - task_key: gold_analytics_pipeline
+          notebook_task:
+            notebook_path: ../src/notebooks/build_pricing_factors.py
+            base_parameters:
+              catalog: ${var.catalog}
+
+
         # Step 3c: Online Feature Store for low-latency agent lookups (<10ms vs 1-3s SQL warehouse)
         - task_key: setup_online_tables
           depends_on:

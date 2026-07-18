@@ -7,9 +7,10 @@ Risk pool analysis compares a group's risk profile against the book of business
 using synthetic but realistic distributions.
 """
 
+import time
 from typing import Optional
 
-from .data_loader import DataCache, _safe_float, _safe_int
+from .data_loader import DataCache, _safe_float, _safe_int, _execute_sql, _CAT
 
 
 # ---------------------------------------------------------------------------
@@ -66,37 +67,98 @@ TREND_FACTORS: dict[str, float] = {
 # Experience mod range: credibility-weighted blend bounds
 EXPERIENCE_MOD_RANGE = {"min": 0.70, "max": 1.40, "neutral": 1.00}
 
+# The dicts above are FALLBACK defaults. The source of truth is the governed UC
+# table analytics.gold_pricing_factors; _load_governed_factors() overlays it so
+# actuaries can update rate assumptions without a code deploy. If the table is
+# absent/unreadable, the hardcoded values above are used.
+_FACTORS_TABLE = f"{_CAT}.analytics.gold_pricing_factors"
+_FACTOR_CACHE: dict = {"ts": 0.0, "data": None}
+_FACTOR_TTL = 15 * 60
+
+
+def _load_governed_factors() -> dict:
+    """Load rate factors from the governed UC table, cached with a TTL.
+
+    Returns a dict of the five factor maps merged over the hardcoded fallbacks:
+    {base_rates, age_factors, area_factors, industry_factors, experience_mod, source}.
+    'source' is 'uc_table' when any governed rows were read, else 'fallback'.
+    """
+    if _FACTOR_CACHE["data"] is not None and (time.time() - _FACTOR_CACHE["ts"] < _FACTOR_TTL):
+        return _FACTOR_CACHE["data"]
+
+    merged = {
+        "base_rates": dict(BASE_RATES),
+        "age_factors": dict(AGE_FACTORS),
+        "area_factors": dict(AREA_FACTORS),
+        "industry_factors": dict(INDUSTRY_FACTORS),
+        "experience_mod": dict(EXPERIENCE_MOD_RANGE),
+        "source": "fallback",
+    }
+    _bucket = {
+        "base_rate": "base_rates",
+        "age_factor": "age_factors",
+        "area_factor": "area_factors",
+        "industry_factor": "industry_factors",
+        "experience_mod": "experience_mod",
+    }
+    try:
+        rows = _execute_sql(
+            f"SELECT factor_type, factor_key, factor_value FROM {_FACTORS_TABLE}"
+        )
+        if rows:
+            for r in rows:
+                key = _bucket.get(r.get("factor_type"))
+                if key:
+                    merged[key][r.get("factor_key")] = _safe_float(r.get("factor_value"))
+            merged["source"] = "uc_table"
+    except Exception as e:
+        print(f"[pricing] governed factor load failed, using fallback: {e}")
+
+    _FACTOR_CACHE.update(ts=time.time(), data=merged)
+    return merged
+
 
 def get_factor_tables() -> dict:
-    """Return all factor tables as structured reference data."""
+    """Return all factor tables as structured reference data (governed by UC)."""
+    gf = _load_governed_factors()
+    age = gf["age_factors"]
+    area = gf["area_factors"]
+    industry = gf["industry_factors"]
+    emod = gf["experience_mod"]
+    governed = gf["source"] == "uc_table"
+    src_note = (
+        " Sourced from the governed Unity Catalog table analytics.gold_pricing_factors."
+        if governed else " Using built-in fallback values (governed UC table not available)."
+    )
     return {
+        "source": gf["source"],
         "age_factors": {
             "table_name": "Age Rating Factors",
-            "description": "Community rating adjustment based on group average age band (ACA 3:1 ratio compliant)",
-            "factors": [{"age_band": k, "factor": v} for k, v in AGE_FACTORS.items()],
+            "description": "Community rating adjustment based on group average age band (ACA 3:1 ratio compliant)." + src_note,
+            "factors": [{"age_band": k, "factor": v} for k, v in age.items()],
         },
         "area_factors": {
             "table_name": "Geographic Area Factors",
-            "description": "Adjustment for county-level geographic cost variation",
-            "factors": [{"county_type": k, "factor": v} for k, v in AREA_FACTORS.items()],
+            "description": "Adjustment for county-level geographic cost variation." + src_note,
+            "factors": [{"county_type": k, "factor": v} for k, v in area.items()],
         },
         "industry_factors": {
             "table_name": "Industry (SIC) Factors",
-            "description": "Risk adjustment by Standard Industrial Classification code",
-            "factors": [{"industry": k, "factor": v} for k, v in INDUSTRY_FACTORS.items()],
+            "description": "Risk adjustment by Standard Industrial Classification code." + src_note,
+            "factors": [{"industry": k, "factor": v} for k, v in industry.items()],
         },
         "trend_factors": {
             "table_name": "Medical Cost Trend Factors",
-            "description": "Annual medical cost inflation projection factors",
+            "description": "Annual medical cost inflation projection factors.",
             "factors": [{"trend_rate": k, "factor": v} for k, v in TREND_FACTORS.items()],
         },
         "experience_mod_ranges": {
             "table_name": "Experience Modification Ranges",
-            "description": "Credibility-weighted experience mod bounds (blend of group vs manual rate)",
+            "description": "Credibility-weighted experience mod bounds (blend of group vs manual rate)." + src_note,
             "factors": [
-                {"label": "Minimum (best experience)", "value": EXPERIENCE_MOD_RANGE["min"]},
-                {"label": "Neutral", "value": EXPERIENCE_MOD_RANGE["neutral"]},
-                {"label": "Maximum (worst experience)", "value": EXPERIENCE_MOD_RANGE["max"]},
+                {"label": "Minimum (best experience)", "value": emod.get("min", 0.70)},
+                {"label": "Neutral", "value": emod.get("neutral", 1.00)},
+                {"label": "Maximum (worst experience)", "value": emod.get("max", 1.40)},
             ],
         },
     }
@@ -144,8 +206,15 @@ def compute_rate_buildup(
 
     Returns a dict matching RateBuildupOut schema.
     """
+    # ---- Governed factors (UC table, falling back to module defaults) ----
+    gf = _load_governed_factors()
+    base_rates = gf["base_rates"]
+    age_factors = gf["age_factors"]
+    area_factors = gf["area_factors"]
+    industry_factors = gf["industry_factors"]
+
     # ---- Base Rate ----
-    base_rate = BASE_RATES.get(lob, 385.00)
+    base_rate = base_rates.get(lob, 385.00)
 
     # ---- Resolve defaults from group data if group_id provided ----
     current_rate: Optional[float] = None
@@ -177,9 +246,9 @@ def compute_rate_buildup(
         trend_pct = 8.0
 
     # ---- Look up factors ----
-    age_factor = AGE_FACTORS.get(avg_age_band, 1.0)
-    area_factor = AREA_FACTORS.get(county_type.lower(), 1.0)
-    industry_factor = INDUSTRY_FACTORS.get(sic_code.lower(), 1.0)
+    age_factor = age_factors.get(avg_age_band, 1.0)
+    area_factor = area_factors.get(county_type.lower(), 1.0)
+    industry_factor = industry_factors.get(sic_code.lower(), 1.0)
     trend_factor = 1 + trend_pct / 100
     experience_mod = _compute_experience_mod(loss_ratio, credibility_factor)
 
