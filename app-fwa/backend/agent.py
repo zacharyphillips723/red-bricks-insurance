@@ -573,10 +573,63 @@ def _prefetch_provider_context(npi: str) -> str | None:
 
 
 @mlflow.trace(span_type="AGENT", name="gemini_subagent")
+def _build_policy_query(target_type: str, target_id: str, question: str, lb_json: str | None) -> str:
+    """Derive a medical-policy search query from the case's fraud context."""
+    terms: list[str] = []
+    if lb_json:
+        try:
+            rec = json.loads(lb_json)
+            ft = rec.get("fraud_types")
+            if isinstance(ft, str):
+                terms.append(ft.replace("|", " ").replace(",", " "))
+            elif isinstance(ft, list):
+                terms.extend(str(x) for x in ft)
+            if rec.get("service_type"):
+                terms.append(str(rec["service_type"]))
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            pass
+    base = " ".join(terms).strip()
+    # Always include common E/M billing-integrity terms so the retrieval is useful
+    # even when fraud_types is sparse.
+    return (
+        f"{base} upcoding unbundling duplicate billing E/M office visit coding standards"
+        if base else
+        f"{question} upcoding unbundling E/M office visit coding standards"
+    ).strip()
+
+
+def _prefetch_policy_chunks(query: str) -> list[dict]:
+    """Deterministically run one medical-policy search and return raw chunks.
+
+    Guarantees policy context is retrieved (and surfaced to the UI) regardless of
+    whether the analyst model later chooses to call search_medical_policies.
+    """
+    try:
+        result = _execute_tool("search_medical_policies", {"query": query, "top_k": 5})
+        parsed = json.loads(result)
+        return [
+            {
+                "chunk_id": p.get("chunk_id", ""),
+                "policy_name": p.get("policy_name", ""),
+                "service_category": p.get("service_category", ""),
+                "chunk_text": p.get("chunk_text", ""),
+            }
+            for p in parsed.get("policies", [])
+        ]
+    except Exception as e:
+        print(f"[Gemini Agent] policy pre-fetch failed: {e}")
+        return []
+
+
 def _run_gemini_subagent(target_id: str, target_type: str, question: str) -> dict:
     """Run the Gemini sub-agent with tool-calling for medical policy analysis."""
     context_hint = f"Question: {question}\nTarget: {target_id} (type: {target_type})\n\n"
     context_hint += f"The Unity Catalog is: {_CAT}\n"
+
+    tables_queried = 0
+    tools_used = []
+    policy_chunks = []  # Collect raw VS retrieval results for frontend
+    lb_data = None
 
     if target_type == "investigation":
         lb_data = _fetch_investigation_from_lakebase(target_id)
@@ -589,26 +642,40 @@ def _run_gemini_subagent(target_id: str, target_type: str, question: str) -> dic
         prefetched = _prefetch_provider_context(target_id)
         if prefetched:
             context_hint += prefetched
-            context_hint += (
-                "Now search medical policies for the procedure codes and billing "
-                "patterns in the data above, then classify each finding.\n"
-            )
         else:
             # Fall back to instructing the model to query the tables itself.
             context_hint += (
                 f"Start by querying: SELECT * FROM {PROVIDER_RISK_TABLE} WHERE provider_npi = '{target_id}' LIMIT 1\n"
                 f"Then query flagged claims from {CLAIM_FLAGS_TABLE} and ML predictions from {MODEL_INFERENCE_TABLE}.\n"
-                "After gathering data, search medical policies for relevant procedure codes.\n"
             )
+
+    # Deterministically retrieve medical-policy context up front. This guarantees
+    # the RAG step happens (and policy_chunks is populated for the UI) even if the
+    # analyst model skips the search_medical_policies tool.
+    policy_query = _build_policy_query(target_type, target_id, question, lb_data)
+    policy_chunks = _prefetch_policy_chunks(policy_query)
+    if policy_chunks:
+        tools_used.append("search_medical_policies")
+        _ctx = "\n".join(
+            f"- [{c['policy_name']}] ({c['service_category']}): {c['chunk_text']}"
+            for c in policy_chunks
+        )
+        context_hint += (
+            f"\nRetrieved medical policy context (via Vector Search for '{policy_query}'):\n"
+            f"{_ctx}\n\n"
+            "Cite these specific policies in your POLICY COMPLIANCE ANALYSIS. You may call "
+            "search_medical_policies again for a distinct fraud type if needed.\n"
+        )
+    else:
+        context_hint += (
+            "\nSearch medical policies for the procedure codes and fraud patterns, "
+            "then classify each finding.\n"
+        )
 
     messages = [
         {"role": "system", "content": GEMINI_SUBAGENT_PROMPT},
         {"role": "user", "content": context_hint},
     ]
-
-    tables_queried = 0
-    tools_used = []
-    policy_chunks = []  # Collect raw VS retrieval results for frontend
 
     for _ in range(MAX_TOOL_ROUNDS):
         t0 = time.time()
@@ -660,11 +727,15 @@ def _run_gemini_subagent(target_id: str, target_type: str, question: str) -> dic
                 result = _execute_tool(tool_name, tool_args)
                 tool_span.set_outputs({"result_length": len(result)})
 
-            # Capture raw policy chunks from VS retrieval
+            # Capture raw policy chunks from VS retrieval (dedupe against the
+            # deterministic pre-fetch by chunk_id).
             if tool_name == "search_medical_policies":
                 try:
                     parsed = json.loads(result)
+                    _seen = {c.get("chunk_id") for c in policy_chunks}
                     for p in parsed.get("policies", []):
+                        if p.get("chunk_id") in _seen:
+                            continue
                         policy_chunks.append({
                             "chunk_id": p.get("chunk_id", ""),
                             "policy_name": p.get("policy_name", ""),
