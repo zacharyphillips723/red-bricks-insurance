@@ -53,7 +53,11 @@ Summary of ML model prediction, confidence score, and Tier 1 rule evaluation res
 Approve, deny, or request additional information — with specific justification
 citing policy criteria and clinical evidence.
 
-Always cite data sources. Never fabricate clinical evidence."""
+Always cite data sources. Never fabricate clinical evidence.
+
+RESPONSE STYLE: Be concise. Keep each section to a few tight bullets with bolded
+key values (codes, dollar amounts, dates, determination). Do not pad with generic
+disclaimers or restate the request. Lead with the recommendation."""
 
 TOOLS = [
     {

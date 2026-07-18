@@ -35,6 +35,11 @@ dollar amounts and percentages. Cite data sources. Do not fabricate numbers.
 
 When running simulations, explain what the parameters mean in plain language and
 summarise the projected impact with baseline vs. projected comparison.
+
+RESPONSE STYLE: Be concise and lead with the answer. Prefer tight bullets and
+bolded key numbers over long prose. Do not restate the question, do not add
+generic caveats or a "next steps" section unless asked. Aim for under ~200 words
+unless the analysis genuinely requires more.
 """
 
 TOOLS = [
