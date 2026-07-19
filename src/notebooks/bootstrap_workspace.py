@@ -1578,6 +1578,104 @@ else:
 
 # COMMAND ----------
 
+print("=" * 60)
+print("STEP 3b-6: Provision Command Center — care-plan write-back, governed member view, UC traces")
+print("=" * 60)
+
+# In sync with app/backend/env_config.py + resources/app.yml.
+CC_TRACE_EXPERIMENT = "/Shared/red-bricks-care-agent-traces-uc"
+CC_TRACE_SCHEMA = "analytics"
+CC_TRACE_TABLE_PREFIX = "care_agent"
+
+if not warehouse_id:
+    print("  Skipped — no warehouse_id available.")
+else:
+    try:
+        import os as _os
+        import mlflow
+        from mlflow.entities import UnityCatalog
+
+        mlflow.set_tracking_uri("databricks")
+        _os.environ["MLFLOW_TRACING_SQL_WAREHOUSE_ID"] = warehouse_id
+
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog_sql}.care_management")
+
+        # Care-plan write-back table — every AI-generated care plan is persisted here
+        # for lineage, audit, and downstream analytics (Command Center has a Lakebase
+        # backend, but care plans belong in governed UC for cross-app reuse).
+        spark.sql(f"""
+            CREATE TABLE IF NOT EXISTS {catalog_sql}.care_management.care_plans (
+                plan_id STRING, member_id STRING, member_name STRING,
+                generated_by STRING, generated_at TIMESTAMP, model_endpoint STRING,
+                goal_count INT, summary STRING, plan_json STRING
+            )
+            COMMENT 'AI-generated care plans written back by the Population Health Command Center for lineage, audit, and analytics.'
+        """)
+
+        # Governed member view — masks PHI unless the caller is in phi_full_access
+        # (same group the Red Bricks governance demo uses). Powers the app's live
+        # persona-based masking demo without requiring account-admin mask functions.
+        spark.sql(f"""
+            CREATE OR REPLACE VIEW {catalog_sql}.analytics.gold_member_360_governed AS
+            SELECT
+              member_id,
+              CASE WHEN is_account_group_member('phi_full_access')
+                   THEN member_name
+                   ELSE CONCAT(LEFT(first_name, 1), '*** ', LEFT(last_name, 1), '***') END AS member_name,
+              CASE WHEN is_account_group_member('phi_full_access')
+                   THEN CAST(date_of_birth AS STRING)
+                   ELSE CONCAT(CAST(YEAR(date_of_birth) AS STRING), '-**-**') END AS date_of_birth,
+              age, gender,
+              CASE WHEN is_account_group_member('phi_full_access')
+                   THEN address_line_1 ELSE '*** REDACTED ***' END AS address,
+              CASE WHEN is_account_group_member('phi_full_access')
+                   THEN phone ELSE CONCAT('(***) ***-', RIGHT(COALESCE(phone, '0000'), 4)) END AS phone,
+              CASE WHEN is_account_group_member('phi_full_access')
+                   THEN email ELSE CONCAT(LEFT(COALESCE(email, 'x'), 2), '***@***.com') END AS email,
+              risk_tier,
+              CASE WHEN is_account_group_member('phi_full_access')
+                   THEN 'Full PHI Access' ELSE 'Restricted — PHI Masked' END AS access_level,
+              current_user() AS queried_by
+            FROM {catalog_sql}.analytics.gold_member_360
+        """)
+        print(f"  care_plans table + gold_member_360_governed view ready")
+
+        exp = mlflow.set_experiment(
+            CC_TRACE_EXPERIMENT,
+            trace_location=UnityCatalog(
+                catalog_name=catalog, schema_name=CC_TRACE_SCHEMA, table_prefix=CC_TRACE_TABLE_PREFIX,
+            ),
+        )
+        print(f"  Experiment linked: {CC_TRACE_EXPERIMENT} (ID: {exp.experiment_id})")
+
+        _existing = {
+            r["tableName"] for r in spark.sql(
+                f"SHOW TABLES IN {catalog_sql}.{CC_TRACE_SCHEMA} LIKE '{CC_TRACE_TABLE_PREFIX}_otel_*'"
+            ).collect()
+        }
+        print(f"  OTel tables: {sorted(_existing)}")
+
+        if app_sps:
+            for _sp in app_sps:
+                _sp_name = _sp["sp_name"]
+                for _tbl in sorted(_existing):
+                    try:
+                        spark.sql(f"GRANT SELECT, MODIFY ON TABLE {catalog_sql}.{CC_TRACE_SCHEMA}.`{_tbl}` TO `{_sp_name}`")
+                    except Exception as _ge:
+                        print(f"    {_sp_name} on {_tbl}: {_ge}")
+                try:
+                    spark.sql(f"GRANT SELECT, MODIFY ON TABLE {catalog_sql}.care_management.care_plans TO `{_sp_name}`")
+                    spark.sql(f"GRANT SELECT ON VIEW {catalog_sql}.analytics.gold_member_360_governed TO `{_sp_name}`")
+                except Exception as _ge:
+                    print(f"    {_sp_name} on care_plans/governed view: {_ge}")
+            print(f"    Trace + care-plan write-back + governed-view grants applied to {len(app_sps)} SP(s)")
+    except Exception as _te:
+        import traceback as _tb
+        print(f"  WARNING: Command Center UC provisioning failed: {_te}")
+        _tb.print_exc()
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Step 4: Create Empty ML Predictions Table
 

@@ -10,6 +10,9 @@ import { Member360 } from "@/pages/Member360";
 import { CarePlan } from "@/pages/CarePlan";
 import { OutreachDraft } from "@/pages/OutreachDraft";
 import { CohortBuilder } from "@/pages/CohortBuilder";
+import { Observability } from "@/pages/Observability";
+import { Governance } from "@/pages/Governance";
+import { EvalQuality } from "@/pages/EvalQuality";
 import { ToastNotifications } from "@/components/ToastNotifications";
 import { useNotifications } from "@/lib/useNotifications";
 import { useHashRouter } from "@/lib/useHashRouter";
@@ -74,6 +77,12 @@ export default function App() {
         return <GenieSearch />;
       case "caseload":
         return <Caseload />;
+      case "quality":
+        return <EvalQuality />;
+      case "governance":
+        return <Governance />;
+      case "observability":
+        return <Observability />;
       default:
         return <Dashboard />;
     }

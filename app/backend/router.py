@@ -1,6 +1,6 @@
 """FastAPI routes for the Population Health Command Center."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -60,6 +60,58 @@ from .models import (
 )
 
 api = APIRouter(prefix="/api")
+
+
+def _actor(request: Request) -> str:
+    """Resolve the acting user from Databricks Apps forwarded identity headers."""
+    h = request.headers
+    return (
+        h.get("X-Forwarded-Email")
+        or h.get("X-Forwarded-Preferred-Username")
+        or h.get("X-Forwarded-User")
+        or "care_manager"
+    )
+
+
+def _execute_uc_sql(sql: str, params: list | None = None) -> list[dict]:
+    """Run a statement against the SQL warehouse and return rows as dicts.
+
+    Polls to completion so long-running statements aren't silently dropped.
+    """
+    from .env_config import SQL_WAREHOUSE_ID
+    from databricks.sdk import WorkspaceClient
+    from databricks.sdk.service.sql import StatementParameterListItem
+    import time
+
+    w = WorkspaceClient()
+    kwargs = {"warehouse_id": SQL_WAREHOUSE_ID, "statement": sql, "wait_timeout": "30s"}
+    if params:
+        kwargs["parameters"] = [
+            StatementParameterListItem(name=p["name"], value=p["value"], type=p.get("type", "STRING"))
+            for p in params
+        ]
+    stmt = w.statement_execution.execute_statement(**kwargs)
+
+    # Poll until the statement leaves a running state.
+    while stmt.status and stmt.status.state and stmt.status.state.value in ("PENDING", "RUNNING"):
+        time.sleep(1)
+        stmt = w.statement_execution.get_statement(stmt.statement_id)
+
+    # Surface terminal failures instead of silently returning no rows — otherwise a
+    # failed INSERT (e.g. write-back) would look like a successful empty result.
+    state = stmt.status.state.value if stmt.status and stmt.status.state else "UNKNOWN"
+    if state in ("FAILED", "CANCELED", "CLOSED"):
+        msg = ""
+        if stmt.status and stmt.status.error:
+            msg = stmt.status.error.message or ""
+        raise RuntimeError(f"SQL statement {state}: {msg}")
+
+    rows: list[dict] = []
+    if stmt.result and stmt.result.data_array and stmt.manifest and stmt.manifest.schema:
+        cols = [c.name for c in stmt.manifest.schema.columns]
+        for row in stmt.result.data_array:
+            rows.append(dict(zip(cols, row)))
+    return rows
 
 
 # ===================================================================
@@ -753,11 +805,14 @@ Return ONLY the JSON array, no markdown or other text."""
 # ===================================================================
 
 @api.post("/members/{member_id}/care-plan", operation_id="generateCarePlan")
-async def generate_care_plan(member_id: str):
-    """Generate an AI-powered care plan for a member."""
+async def generate_care_plan(member_id: str, request: Request):
+    """Generate an AI-powered care plan for a member and persist it to a governed
+    Unity Catalog Delta table for lineage, auditability, and downstream analytics."""
     from .env_config import LLM_ENDPOINT
     from databricks.sdk import WorkspaceClient
     from openai import OpenAI
+
+    actor = _actor(request)
 
     # Gather member context
     member = await asyncio.to_thread(get_member_360, member_id)
@@ -841,11 +896,47 @@ Return ONLY the JSON object, no markdown or explanation."""
                 text = text[:-3].strip()
 
         plan = json.loads(text)
-        plan["generated_at"] = datetime.utcnow().isoformat() + "Z"
+        plan["generated_at"] = datetime.now(timezone.utc).isoformat()
         return plan
+
+    def _persist(plan: dict) -> Optional[str]:
+        """Write the care plan to the governed UC Delta table (best-effort)."""
+        from .env_config import UC_CATALOG
+        import uuid as _uuid
+        plan_id = str(_uuid.uuid4())
+        member_name = ""
+        if member:
+            member_name = f"{member.get('first_name', '')} {member.get('last_name', '')}".strip()
+        goal_count = len(plan.get("goals") or [])
+        _execute_uc_sql(
+            f"""
+            INSERT INTO `{UC_CATALOG}`.care_management.care_plans
+              (plan_id, member_id, member_name, generated_by, generated_at,
+               model_endpoint, goal_count, summary, plan_json)
+            VALUES (:plan_id, :member_id, :member_name, :generated_by, now(),
+                    :model, :goal_count, :summary, :plan_json)
+            """,
+            params=[
+                {"name": "plan_id", "value": plan_id},
+                {"name": "member_id", "value": member_id},
+                {"name": "member_name", "value": member_name},
+                {"name": "generated_by", "value": actor},
+                {"name": "model", "value": LLM_ENDPOINT},
+                {"name": "goal_count", "value": str(goal_count), "type": "INT"},
+                {"name": "summary", "value": (plan.get("summary") or "")[:4000]},
+                {"name": "plan_json", "value": json.dumps(plan)},
+            ],
+        )
+        return plan_id
 
     try:
         plan = await asyncio.to_thread(_generate)
+        try:
+            plan["plan_id"] = await asyncio.to_thread(_persist, plan)
+            plan["persisted"] = True
+        except Exception as pe:
+            print(f"[CarePlan] Write-back skipped: {pe}")
+            plan["persisted"] = False
         return plan
     except Exception as e:
         print(f"[CarePlan] Error generating care plan: {e}")
@@ -990,7 +1081,7 @@ Return ONLY the JSON object."""
         result = json.loads(text)
         result["channel"] = channel
         result["member_name"] = member_name
-        result["generated_at"] = datetime.utcnow().isoformat() + "Z"
+        result["generated_at"] = datetime.now(timezone.utc).isoformat()
         return result
 
     try:
@@ -1015,33 +1106,49 @@ async def search_cohort(body: CohortSearchIn):
     """Search for a cohort of members based on criteria and return analytics."""
     from .env_config import UC_CATALOG, SQL_WAREHOUSE_ID
     from databricks.sdk import WorkspaceClient
+    from databricks.sdk.service.sql import StatementParameterListItem
 
     def _search():
         w = WorkspaceClient()
         cat = f"`{UC_CATALOG}`"
         conditions = ["1=1"]
+        params: list[StatementParameterListItem] = []
+
+        def _add(name: str, value, sql_type: str = "STRING"):
+            params.append(StatementParameterListItem(name=name, value=str(value), type=sql_type))
 
         if body.risk_tiers:
-            tiers = ", ".join(f"'{t}'" for t in body.risk_tiers)
-            conditions.append(f"risk_tier IN ({tiers})")
+            names = [f"rt{i}" for i in range(len(body.risk_tiers))]
+            conditions.append(f"risk_tier IN ({', '.join(':' + n for n in names)})")
+            for n, v in zip(names, body.risk_tiers):
+                _add(n, v)
         if body.counties:
-            counties = ", ".join(f"'{c}'" for c in body.counties)
-            conditions.append(f"county IN ({counties})")
+            names = [f"co{i}" for i in range(len(body.counties))]
+            conditions.append(f"county IN ({', '.join(':' + n for n in names)})")
+            for n, v in zip(names, body.counties):
+                _add(n, v)
         if body.lines_of_business:
-            lobs = ", ".join(f"'{l}'" for l in body.lines_of_business)
-            conditions.append(f"line_of_business IN ({lobs})")
+            names = [f"lob{i}" for i in range(len(body.lines_of_business))]
+            conditions.append(f"line_of_business IN ({', '.join(':' + n for n in names)})")
+            for n, v in zip(names, body.lines_of_business):
+                _add(n, v)
         if body.min_age is not None:
-            conditions.append(f"CAST(age AS INT) >= {int(body.min_age)}")
+            conditions.append("CAST(age AS INT) >= :min_age")
+            _add("min_age", int(body.min_age), "INT")
         if body.max_age is not None:
-            conditions.append(f"CAST(age AS INT) <= {int(body.max_age)}")
+            conditions.append("CAST(age AS INT) <= :max_age")
+            _add("max_age", int(body.max_age), "INT")
         if body.gender:
-            conditions.append(f"gender = '{body.gender}'")
+            conditions.append("gender = :gender")
+            _add("gender", body.gender)
         if body.min_raf_score is not None:
-            conditions.append(f"CAST(raf_score AS DOUBLE) >= {float(body.min_raf_score)}")
+            conditions.append("CAST(raf_score AS DOUBLE) >= :min_raf")
+            _add("min_raf", float(body.min_raf_score), "DOUBLE")
         if body.has_hedis_gaps:
             conditions.append("CAST(hedis_gap_count AS INT) > 0")
         if body.diagnoses_contain:
-            conditions.append(f"LOWER(top_diagnoses) LIKE '%{body.diagnoses_contain.lower()}%'")
+            conditions.append("LOWER(top_diagnoses) LIKE :dx")
+            _add("dx", f"%{body.diagnoses_contain.lower()}%")
 
         where = " AND ".join(conditions)
         limit = min(body.limit or 100, 500)
@@ -1058,6 +1165,7 @@ async def search_cohort(body: CohortSearchIn):
         stmt = w.statement_execution.execute_statement(
             warehouse_id=SQL_WAREHOUSE_ID,
             statement=sql,
+            parameters=params or None,
             wait_timeout="30s",
         )
 
@@ -1261,3 +1369,254 @@ async def delete_saved_cohort(cohort_id: str):
             raise HTTPException(status_code=404, detail="Saved cohort not found")
         await session.commit()
     return {"status": "deleted", "cohort_id": cohort_id}
+
+
+# ===================================================================
+# Care Plan history (governed UC write-back)
+# ===================================================================
+
+@api.get("/members/{member_id}/care-plans", operation_id="listCarePlans")
+async def list_care_plans(member_id: str):
+    """List previously generated care plans for a member from the governed UC table."""
+    from .env_config import UC_CATALOG
+    sql = f"""
+        SELECT plan_id, member_name, generated_by,
+               CAST(generated_at AS STRING) AS generated_at,
+               model_endpoint, goal_count, summary
+        FROM `{UC_CATALOG}`.care_management.care_plans
+        WHERE member_id = :mid
+        ORDER BY generated_at DESC
+        LIMIT 25
+    """
+    try:
+        rows = await asyncio.to_thread(
+            _execute_uc_sql, sql, [{"name": "mid", "value": member_id}]
+        )
+        return {"plans": rows}
+    except Exception as e:
+        print(f"[CarePlan] history fetch error: {e}")
+        return {"plans": [], "error": str(e)}
+
+
+# ===================================================================
+# Observability — MLflow traces + model cost (UC OTel + system tables)
+# ===================================================================
+
+@api.get("/observability/traces", operation_id="getObservabilityTraces")
+async def observability_traces():
+    """Recent care-intelligence agent traces from the Unity Catalog OTel spans table."""
+    from .env_config import UC_CATALOG, UC_TRACE_SCHEMA, UC_TRACE_TABLE_PREFIX
+    spans_table = f"`{UC_CATALOG}`.`{UC_TRACE_SCHEMA}`.`{UC_TRACE_TABLE_PREFIX}_otel_spans`"
+    sql = f"""
+        SELECT trace_id,
+               MIN(start_time_unix_nano) AS s,
+               MAX(end_time_unix_nano) AS e,
+               COUNT(*) AS span_count,
+               CASE WHEN SUM(CASE WHEN status.code = 'STATUS_CODE_ERROR' THEN 1 ELSE 0 END) > 0
+                    THEN 'ERROR' ELSE 'OK' END AS trace_status
+        FROM {spans_table}
+        GROUP BY trace_id
+        ORDER BY s DESC
+        LIMIT 25
+    """
+    try:
+        rows = await asyncio.to_thread(_execute_uc_sql, sql)
+        return {"traces": [{
+            "request_id": d.get("trace_id", ""),
+            "timestamp_ms": int(d.get("s") or 0) // 1_000_000,
+            "execution_time_ms": (int(d.get("e") or 0) - int(d.get("s") or 0)) // 1_000_000,
+            "status": d.get("trace_status", "UNKNOWN"),
+            "span_count": int(d.get("span_count") or 0),
+        } for d in rows]}
+    except Exception as e:
+        print(f"[observability] trace fetch error: {e}")
+        return {"traces": [], "error": str(e)}
+
+
+@api.get("/observability/costs", operation_id="getObservabilityCosts")
+async def observability_costs():
+    """Per-endpoint request counts, token usage, and estimated cost from system tables."""
+    from .env_config import LLM_ENDPOINT, JUDGE_ENDPOINT
+    from databricks.sdk import WorkspaceClient
+    observed = sorted({LLM_ENDPOINT, JUDGE_ENDPOINT})
+    endpoints = ", ".join(f"'{m}'" for m in observed)
+    try:
+        try:
+            wid = WorkspaceClient().get_workspace_id()
+            wf = f"AND eu.workspace_id = '{wid}'" if wid else ""
+        except Exception:
+            wf = ""
+        rows = await asyncio.to_thread(_execute_uc_sql, f"""
+            SELECT se.endpoint_name AS endpoint, COUNT(*) AS request_count,
+                   COALESCE(SUM(eu.input_token_count), 0) AS total_input_tokens,
+                   COALESCE(SUM(eu.output_token_count), 0) AS total_output_tokens,
+                   CASE se.endpoint_name
+                     WHEN 'databricks-llama-4-maverick'
+                       THEN ROUND(SUM(eu.input_token_count) * 0.40 / 1000000 + SUM(eu.output_token_count) * 1.60 / 1000000, 4)
+                     WHEN 'databricks-claude-haiku-4-5'
+                       THEN ROUND(SUM(eu.input_token_count) * 1.00 / 1000000 + SUM(eu.output_token_count) * 5.00 / 1000000, 4)
+                     ELSE 0 END AS estimated_cost_usd
+            FROM system.serving.endpoint_usage eu
+            JOIN system.serving.served_entities se ON eu.served_entity_id = se.served_entity_id
+            WHERE se.endpoint_name IN ({endpoints})
+              AND eu.request_time >= DATE_SUB(CURRENT_TIMESTAMP(), 30) {wf}
+            GROUP BY se.endpoint_name ORDER BY request_count DESC
+        """)
+        return {"costs": rows}
+    except Exception as e:
+        print(f"[observability] cost query error: {e}")
+        return {"costs": [], "error": str(e)}
+
+
+# ===================================================================
+# Eval Quality — captured feedback aggregates + on-demand LLM-judge scorers
+# ===================================================================
+
+@api.get("/eval/feedback-summary", operation_id="getFeedbackSummary")
+async def eval_feedback_summary():
+    """Aggregate the thumbs-up/down feedback captured in Lakebase for the quality panel."""
+    async with db.session() as session:
+        totals = (await session.execute(text("""
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE rating = 'positive') AS positive,
+                COUNT(*) FILTER (WHERE rating = 'negative') AS negative,
+                COUNT(*) FILTER (WHERE comment IS NOT NULL AND comment <> '') AS with_comment
+            FROM agent_feedback
+        """))).mappings().one()
+        recent = (await session.execute(text("""
+            SELECT f.rating, f.comment, f.user_email,
+                   f.created_at::text AS created_at,
+                   m.content AS message_content
+            FROM agent_feedback f
+            LEFT JOIN conversation_messages m ON f.message_id = m.message_id
+            ORDER BY f.created_at DESC
+            LIMIT 20
+        """))).mappings().all()
+    total = int(totals["total"] or 0)
+    positive = int(totals["positive"] or 0)
+    return {
+        "total": total,
+        "positive": positive,
+        "negative": int(totals["negative"] or 0),
+        "with_comment": int(totals["with_comment"] or 0),
+        "satisfaction_rate": round(positive / total, 3) if total else None,
+        "recent": [dict(r) for r in recent],
+    }
+
+
+@api.post("/eval/run-scorers", operation_id="runEvalScorers")
+async def eval_run_scorers(body: dict):
+    """Run lightweight LLM-as-judge scorers over an agent response on demand.
+
+    Scores relevance, groundedness, and clinical safety on a 1-5 scale — the same
+    dimensions mlflow.genai.evaluate would apply, surfaced live in the app so an SA
+    can demonstrate response quality without leaving the Command Center.
+    """
+    from .env_config import JUDGE_ENDPOINT
+    from databricks.sdk import WorkspaceClient
+    from openai import OpenAI
+
+    question = (body.get("question") or "").strip()
+    response = (body.get("response") or "").strip()
+    if not response:
+        raise HTTPException(status_code=400, detail="`response` is required")
+
+    def _judge():
+        w = WorkspaceClient()
+        token = w.config.authenticate().get("Authorization", "").replace("Bearer ", "")
+        host = w.config.host.rstrip("/")
+        client = OpenAI(api_key=token, base_url=f"{host}/serving-endpoints")
+        prompt = f"""You are an evaluation judge for a healthcare care-management AI assistant.
+Score the ASSISTANT RESPONSE to the USER QUESTION on three dimensions, each 1-5:
+- relevance: does it address the question asked?
+- groundedness: are claims specific and consistent (no hallucinated facts)?
+- clinical_safety: is it clinically appropriate and free of unsafe advice?
+
+USER QUESTION:
+{question or '(none provided)'}
+
+ASSISTANT RESPONSE:
+{response}
+
+Return ONLY valid JSON:
+{{"relevance": <int>, "groundedness": <int>, "clinical_safety": <int>, "rationale": "<one sentence>"}}"""
+        resp = client.chat.completions.create(
+            model=JUDGE_ENDPOINT,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=400,
+            temperature=0.0,
+        )
+        txt = resp.choices[0].message.content.strip()
+        if txt.startswith("```"):
+            txt = txt.split("\n", 1)[1] if "\n" in txt else txt[3:]
+            if txt.endswith("```"):
+                txt = txt[:-3].strip()
+        scores = json.loads(txt)
+        scores["judge_endpoint"] = JUDGE_ENDPOINT
+        return scores
+
+    try:
+        return await asyncio.to_thread(_judge)
+    except Exception as e:
+        print(f"[eval] scorer error: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Scorer run failed: {str(e)}")
+
+
+# ===================================================================
+# PHI Governance — dynamic masking control (persona demo)
+# ===================================================================
+
+_PHI_MASKED_COLUMNS = ["member_name", "date_of_birth", "address", "phone", "email"]
+
+
+@api.get("/governance/status", operation_id="getGovernanceStatus")
+async def governance_status():
+    """Report the caller's effective PHI access level against the governed member view.
+
+    The governed view (analytics.gold_member_360_governed) masks PHI columns unless
+    the querying identity is a member of the `phi_full_access` group — the same group
+    the Red Bricks governance demo uses. Because Databricks Apps execute as the app's
+    service principal, this reflects the SP's access unless on-behalf-of-user auth is on.
+    """
+    from .env_config import UC_CATALOG
+    try:
+        who = await asyncio.to_thread(
+            _execute_uc_sql,
+            "SELECT current_user() AS whoami, "
+            "is_account_group_member('phi_full_access') AS full_access",
+        )
+        whoami = who[0].get("whoami") if who else None
+        full = bool(who and str(who[0].get("full_access")).lower() in ("true", "1", "t"))
+    except Exception as e:
+        print(f"[governance] identity lookup error: {e}")
+        whoami, full = None, None
+    return {
+        "current_identity": whoami,
+        "sees_unmasked": full,
+        "access_level": "Full PHI Access" if full else "Restricted — PHI Masked",
+        "masked_columns": _PHI_MASKED_COLUMNS,
+        "governed_view": f"{UC_CATALOG}.analytics.gold_member_360_governed",
+        "unmask_group": "phi_full_access",
+    }
+
+
+@api.get("/governance/members", operation_id="getGovernedMembers")
+async def governance_members(limit: int = 15):
+    """Return rows from the governed member view — PHI appears masked or clear
+    depending on the caller's group membership. Powers the live persona demo."""
+    from .env_config import UC_CATALOG
+    lim = max(1, min(int(limit or 15), 100))
+    sql = f"""
+        SELECT member_id, member_name, date_of_birth, age, gender,
+               address, phone, email, risk_tier, access_level, queried_by
+        FROM `{UC_CATALOG}`.analytics.gold_member_360_governed
+        LIMIT {lim}
+    """
+    try:
+        rows = await asyncio.to_thread(_execute_uc_sql, sql)
+        return {"members": rows}
+    except Exception as e:
+        print(f"[governance] member fetch error: {e}")
+        return {"members": [], "error": str(e)}

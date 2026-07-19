@@ -281,17 +281,20 @@ Clinical-focused application for care management teams:
 
 - **Backend**: FastAPI (Python), connects to Lakebase, SQL warehouse, and serving endpoints
 - **Frontend**: React + Vite + Tailwind (Databricks-branded dark theme)
-- **Observability**: MLflow 3 tracing (`@mlflow.trace`) on agent calls, Genie queries, and tool invocations; OpenTelemetry FastAPI auto-instrumentation
+- **Observability**: MLflow 3 tracing (`@mlflow.trace`) on agent calls, Genie queries, and tool invocations, streamed to UC OTel tables (`analytics.care_agent_otel_*`); OpenTelemetry FastAPI auto-instrumentation
 - **Pages**:
   - **Dashboard** — Real-time KPIs (active alerts, critical count, open cases, avg risk score), alert queue with filters, population health summary cards
   - **Alert Queue** — Filterable/sortable alerts with risk tier, status, assignment tracking
   - **Alert Detail** — Full alert view with care manager assignment, status workflow, clinical context
   - **Member 360** — Unified member view (demographics, clinical summary, claims, care gaps, risk factors, multi-turn agent chat with streaming responses)
-  - **Care Plan** — AI-generated care plans with goals, interventions, milestones, timeline visualization
+  - **Care Plan** — AI-generated care plans with goals, interventions, milestones; every plan is written back to a governed UC Delta table (`care_management.care_plans`) for lineage and audit, with per-member history surfaced in-app
   - **Outreach Draft** — AI-generated personalized outreach scripts (phone, SMS, email) based on member profile and preferred communication; SMS channel enforces PHI-free messaging
-  - **Cohort Builder** — Population cohort definition with demographic, clinical, and utilization filters; cohort analytics; save/load named cohorts to Lakebase
+  - **Cohort Builder** — Population cohort definition with demographic, clinical, and utilization filters; cohort analytics; save/load named cohorts to Lakebase. All filter values bound as SQL parameters (`StatementParameterListItem`) — no string interpolation
   - **Patient Search (Genie)** — Natural language SQL exploration via Databricks Genie custom chat UI with suggested questions, conversation threading, and SQL preview
   - **Caseload** — Care manager workload dashboard with assignment tracking
+  - **Agent Quality** — In-app evaluation panel: aggregates the thumbs-up/down feedback captured in Lakebase (satisfaction rate, recent ratings) and runs on-demand LLM-as-judge scorers (relevance / groundedness / clinical-safety on 1–5) via `databricks-claude-haiku-4-5` — the same dimensions `mlflow.genai.evaluate` applies, surfaced live
+  - **PHI Governance** — Live persona demo of Unity Catalog column masking. Reads a governed view (`analytics.gold_member_360_governed`) that masks name, DOB, address, phone, and email unless the querying identity is in the `phi_full_access` account group — the same policy enforces from the app, a notebook, or a BI dashboard
+  - **Observability** — MLflow trace + model cost/usage dashboard (traces from UC OTel tables `analytics.care_agent_otel_*`; per-model token usage and estimated spend from `system.serving` billing tables)
 - **Agent Architecture**: Multi-agent supervisor with Route→Dispatch→Merge pattern (`agent_graph.py`). SSE token-by-token streaming. 4 specialist agents (Clinical, Financial, Care Management, Document) with UC function tool-calling (`agent_tools.py`). Parallel specialist dispatch with async streaming merge. Lakebase-backed conversation persistence (`conversation_store.py`)
 - **Config**: `app/app.yml`
 
@@ -912,6 +915,7 @@ The `bootstrap_workspace` task runs automatically at the end of both the full de
 7. **Vector search endpoint grants** — `CAN_USE` on the vector search endpoint (resolves endpoint UUID dynamically for Azure compatibility)
 8. **Genie spaces** — Creates 5 Genie spaces (Analytics Assistant, FWA Analytics, Group Reporting, Financial Analytics, Network Analytics) with catalog table references including metric views (`mv_financial_overview`, `mv_mlr_compliance`, etc.). Validates tables exist before adding. Grants `CAN_RUN` to all app SPs. Skips spaces that already exist (matched by title).
 9. **MLflow UC trace storage (FWA agent)** — Links the `/Shared/red-bricks-fwa-agent-traces-uc2` experiment to Unity Catalog OTel tables via `mlflow.set_experiment(trace_location=UnityCatalog(...))`, provisioning `analytics.fwa_agent_otel_spans` (+ `_otel_logs`, `_otel_annotations`, `_otel_metrics`) and granting each app SP `SELECT, MODIFY`. This is what lets the FWA app stream agent traces (supervisor + Genie + Gemini spans) into UC in real-time. Idempotent. **Note:** the experiment name must be one that has never had legacy `databricksTrace*StorageTable` tags — a polluted experiment silently skips table creation.
+9b. **MLflow UC trace storage + write-backs (Group Reporting, Network Adequacy, Command Center agents)** — Same UC OTel linking for each remaining agent (`group_agent`, `network_agent`, `care_agent`), plus the governed write-back objects those apps use: `analytics.group_renewal_scenarios`, `network.provider_recruitment_status`, `care_management.care_plans` (care-plan write-back), and the `analytics.gold_member_360_governed` view that powers the Command Center PHI-masking persona demo. Each app SP is granted `SELECT, MODIFY` on its trace + write-back tables and `SELECT` on the governed view. Idempotent.
 10. **ML predictions table** — Pre-creates `analytics.fwa_ml_predictions` for gold MV compatibility
 11. **Operational data seeding** — Populates Lakebase with risk alerts (from gold tables), FWA investigation cases (from silver/gold FWA tables), and PA review queue entries (from PA gold tables with reviewer assignments)
 12. **App source code deployment** — Deploys source code to each of the 6 apps and restarts them so they pick up all grants and Lakebase connectivity
@@ -1070,15 +1074,14 @@ All agent interactions, Genie queries, and tool invocations are traced with `@ml
 
 | Component | Traced Operations | Experiment / UC OTel tables |
 |-----------|-------------------|------------|
-| **Care Intelligence Agent** | End-to-end agent calls, SQL queries, Vector Search retrieval, LLM calls | `/Shared/red-bricks-insurance/agent-traces` |
-| **Genie Integration** | Question submission, SQL generation, result retrieval, conversation flow | Same experiment |
-| **UC Tool Calls** | Function invocations, SDK API requests, parameter/response logging | Same experiment |
-| **LangGraph Nodes** | Route, dispatch, merge, and specialist agent nodes | Same experiment |
+| **Care Intelligence Agent** | End-to-end agent calls, SQL queries, Vector Search retrieval, LLM calls, Route→Dispatch→Merge nodes, Genie, and UC tool calls | `analytics.care_agent_otel_*` |
 | **FWA Supervisor Agent** | Supervisor + parallel Genie / clinical-analyst sub-agents, tool calls, policy retrieval, synthesis | `analytics.fwa_agent_otel_*` |
 | **PA Review Agent + Document Intake** | Agent calls, context pre-fetch, tool calls, and the document pipeline (`ai_parse_document`, `ai_extract`, Tier-1 adjudication) | `analytics.pa_agent_otel_*` |
 | **Underwriting Agent** | Conversational agent calls, tool calls (`run_simulation`, `get_baseline`, `query_uc_table`) | `analytics.uw_agent_otel_*` |
+| **Group Reporting Agent** | Report-card Q&A, plan-document retrieval, renewal reasoning | `analytics.group_agent_otel_*` |
+| **Network Adequacy Agent** | Tool-calling agent (compliance, ghost-network, geospatial recruitment what-if) | `analytics.network_agent_otel_*` |
 
-Traces are written to Unity Catalog Delta tables via MLflow's OpenTelemetry backend. The Care Intelligence traces live in the MLflow Experiment UI at `/Shared/red-bricks-insurance/agent-traces`; the FWA, PA, and Underwriting apps link their experiments to UC OTel span tables (`analytics.{fwa,pa,uw}_agent_otel_spans`) and each surface an in-app **Observability** page over them. All three agents run on Claude Haiku 4.5 (with Llama 4 Maverick as the FWA/PA supervisor and synthesis model).
+Traces are written to Unity Catalog Delta tables via MLflow's OpenTelemetry backend. Every app links its MLflow experiment to a UC OTel span table (`analytics.{care,fwa,pa,uw,group,network}_agent_otel_spans`) and surfaces an in-app **Observability** page over it — trace list + per-model token usage and estimated spend from `system.serving` billing tables. The agents run on Claude Haiku 4.5 (with Llama 4 Maverick as the FWA/PA supervisor, Command Center care-intelligence model, and synthesis model).
 
 ### FastAPI OpenTelemetry
 

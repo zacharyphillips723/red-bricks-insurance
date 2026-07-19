@@ -8,6 +8,8 @@ import {
   Activity,
   Mail,
   UsersRound,
+  ShieldCheck,
+  Gauge,
 } from "lucide-react";
 
 const navItems = [
@@ -19,6 +21,9 @@ const navItems = [
   { id: "cohorts", label: "Cohort Builder", icon: UsersRound },
   { id: "genie", label: "Patient Search", icon: Search },
   { id: "caseload", label: "Caseload", icon: Users },
+  { id: "quality", label: "Agent Quality", icon: Gauge },
+  { id: "governance", label: "PHI Governance", icon: ShieldCheck },
+  { id: "observability", label: "Observability", icon: Activity },
 ];
 
 interface SidebarProps {

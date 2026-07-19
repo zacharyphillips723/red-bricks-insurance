@@ -504,4 +504,87 @@ export const api = {
 
   // Embed config
   getEmbedConfig: () => fetchApi<EmbedConfig>("/embed-config"),
+
+  // Care plan history (governed UC write-back)
+  getCarePlanHistory: (memberId: string) =>
+    fetchApi<{ plans: CarePlanHistoryItem[]; error?: string }>(`/members/${memberId}/care-plans`),
+
+  // Observability
+  getObservabilityTraces: () =>
+    fetchApi<{ traces: ObservabilityTrace[]; error?: string }>("/observability/traces"),
+  getObservabilityCosts: () =>
+    fetchApi<{ costs: CostSummary[]; error?: string }>("/observability/costs"),
+
+  // Eval quality
+  getFeedbackSummary: () => fetchApi<FeedbackSummary>("/eval/feedback-summary"),
+  runEvalScorers: (question: string, response: string) =>
+    fetchApi<EvalScores>("/eval/run-scorers", {
+      method: "POST",
+      body: JSON.stringify({ question, response }),
+    }),
+
+  // PHI governance
+  getGovernanceStatus: () => fetchApi<GovernanceStatus>("/governance/status"),
+  getGovernedMembers: (limit = 15) =>
+    fetchApi<{ members: Record<string, string>[]; error?: string }>(`/governance/members?limit=${limit}`),
 };
+
+// --- Extended types for new capabilities ---
+
+export interface CarePlanHistoryItem {
+  plan_id: string;
+  member_name: string | null;
+  generated_by: string | null;
+  generated_at: string;
+  model_endpoint: string | null;
+  goal_count: number | null;
+  summary: string | null;
+}
+
+export interface ObservabilityTrace {
+  request_id: string;
+  timestamp_ms: number;
+  execution_time_ms: number;
+  status: string;
+  span_count: number;
+}
+
+export interface CostSummary {
+  endpoint: string;
+  request_count: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  estimated_cost_usd?: number;
+}
+
+export interface FeedbackSummary {
+  total: number;
+  positive: number;
+  negative: number;
+  with_comment: number;
+  satisfaction_rate: number | null;
+  recent: Array<{
+    rating: string;
+    comment: string | null;
+    user_email: string | null;
+    created_at: string;
+    message_content: string | null;
+  }>;
+}
+
+export interface EvalScores {
+  relevance: number;
+  groundedness: number;
+  clinical_safety: number;
+  rationale: string;
+  judge_endpoint: string;
+}
+
+export interface GovernanceStatus {
+  current_identity: string | null;
+  sees_unmasked: boolean | null;
+  access_level: string;
+  masked_columns: string[];
+  governed_view: string;
+  unmask_group: string;
+}

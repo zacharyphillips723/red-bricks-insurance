@@ -95,7 +95,20 @@ GENIE_SPACE_ID = _genie if _genie not in _SENTINEL else _auto_detect_genie_space
 
 LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT") or "databricks-llama-4-maverick"
 
+# LLM-as-judge endpoint for the in-app eval quality panel (Haiku: fast, reliable
+# structured scoring). Falls back to the main endpoint if unset.
+JUDGE_ENDPOINT = os.environ.get("JUDGE_ENDPOINT") or "databricks-claude-haiku-4-5"
+
+# MLflow → Unity Catalog OTel trace storage (matches the other Red Bricks apps).
+UC_TRACE_SCHEMA = os.environ.get("UC_TRACE_SCHEMA", "analytics")
+UC_TRACE_TABLE_PREFIX = os.environ.get("UC_TRACE_TABLE_PREFIX", "care_agent")
+MLFLOW_UC_EXPERIMENT = os.environ.get(
+    "MLFLOW_UC_EXPERIMENT", "/Shared/red-bricks-care-agent-traces-uc"
+)
+
 print(f"[env_config] SQL_WAREHOUSE_ID={SQL_WAREHOUSE_ID}")
 print(f"[env_config] UC_CATALOG={UC_CATALOG}")
 print(f"[env_config] GENIE_SPACE_ID={GENIE_SPACE_ID}")
 print(f"[env_config] LLM_ENDPOINT={LLM_ENDPOINT}")
+print(f"[env_config] JUDGE_ENDPOINT={JUDGE_ENDPOINT}")
+print(f"[env_config] MLFLOW_UC_EXPERIMENT={MLFLOW_UC_EXPERIMENT}")

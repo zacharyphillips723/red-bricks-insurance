@@ -30,8 +30,6 @@ variables:
 sync:
   exclude:
     - "**/node_modules/**"
-  include:
-    - "app/frontend/dist/**"
 
 include:
   - resources/*.yml

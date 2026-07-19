@@ -16,8 +16,10 @@ import {
   ChevronDown,
   ChevronRight,
   Search,
+  Database,
+  History,
 } from "lucide-react";
-import { api, type MemberListItem } from "@/lib/api";
+import { api, type MemberListItem, type CarePlanHistoryItem } from "@/lib/api";
 
 interface CarePlanGoal {
   goal: string;
@@ -38,6 +40,8 @@ interface CarePlan {
   summary: string;
   goals: CarePlanGoal[];
   generated_at: string;
+  plan_id?: string;
+  persisted?: boolean;
 }
 
 export function CarePlan() {
@@ -47,6 +51,16 @@ export function CarePlan() {
   const [carePlan, setCarePlan] = useState<CarePlan | null>(null);
   const [loading, setLoading] = useState(false);
   const [expandedGoals, setExpandedGoals] = useState<Set<number>>(new Set());
+  const [history, setHistory] = useState<CarePlanHistoryItem[]>([]);
+
+  const loadHistory = async (memberId: string) => {
+    try {
+      const res = await api.getCarePlanHistory(memberId);
+      setHistory(res.plans || []);
+    } catch {
+      setHistory([]);
+    }
+  };
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
@@ -63,6 +77,7 @@ export function CarePlan() {
     setSearchResults([]);
     setSearchQuery("");
     setCarePlan(null);
+    loadHistory(member.member_id);
   };
 
   const generateCarePlan = async () => {
@@ -73,6 +88,7 @@ export function CarePlan() {
       setCarePlan(result);
       // Expand all goals by default
       setExpandedGoals(new Set(result.goals.map((_: CarePlanGoal, i: number) => i)));
+      loadHistory(selectedMember.member_id);
     } catch (e) {
       console.error("Failed to generate care plan:", e);
     } finally {
@@ -188,6 +204,26 @@ export function CarePlan() {
         </div>
       )}
 
+      {/* Care plan history from governed UC table */}
+      {selectedMember && history.length > 0 && (
+        <div className="bg-white rounded-xl border p-4 mb-6">
+          <h4 className="font-semibold text-gray-700 text-sm flex items-center gap-2 mb-3">
+            <History className="w-4 h-4 text-gray-400" /> Previous Care Plans
+            <span className="text-xs font-normal text-gray-400">· from care_management.care_plans</span>
+          </h4>
+          <div className="divide-y divide-gray-100">
+            {history.map((h) => (
+              <div key={h.plan_id} className="py-2 flex items-center gap-3 text-sm">
+                <span className="text-gray-400 text-xs w-40 shrink-0">{h.generated_at ? new Date(h.generated_at).toLocaleString() : ""}</span>
+                <span className="flex-1 text-gray-600 truncate">{h.summary}</span>
+                <span className="text-xs text-gray-400 shrink-0">{h.goal_count ?? 0} goals</span>
+                <span className="text-xs text-gray-400 shrink-0">{h.generated_by}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Care Plan Display */}
       {carePlan && (
         <div className="space-y-4">
@@ -197,9 +233,16 @@ export function CarePlan() {
             <p className="text-sm text-gray-600 leading-relaxed whitespace-pre-line">
               {carePlan.summary}
             </p>
-            <p className="text-xs text-gray-400 mt-3">
-              Generated {new Date(carePlan.generated_at).toLocaleString()}
-            </p>
+            <div className="flex items-center gap-3 mt-3">
+              <p className="text-xs text-gray-400">
+                Generated {new Date(carePlan.generated_at).toLocaleString()}
+              </p>
+              {carePlan.persisted && (
+                <span className="inline-flex items-center gap-1 text-xs text-green-700 bg-green-50 border border-green-100 px-2 py-0.5 rounded-full">
+                  <Database className="w-3 h-3" /> Saved to Unity Catalog
+                </span>
+              )}
+            </div>
           </div>
 
           {/* Goals */}

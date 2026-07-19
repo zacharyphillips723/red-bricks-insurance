@@ -23,14 +23,26 @@ resources:
             value: ${var.warehouse_id}
           - name: LLM_ENDPOINT
             value: databricks-llama-4-maverick
+          - name: JUDGE_ENDPOINT
+            value: databricks-claude-haiku-4-5
           - name: UC_CATALOG
             value: ${var.catalog}
           - name: UC_SCHEMA
             value: analytics
+          - name: UC_TRACE_SCHEMA
+            value: analytics
+          - name: UC_TRACE_TABLE_PREFIX
+            value: care_agent
+          - name: MLFLOW_UC_EXPERIMENT
+            value: /Shared/red-bricks-care-agent-traces-uc
       resources:
         - name: llm-endpoint
           serving_endpoint:
             name: databricks-llama-4-maverick
+            permission: CAN_QUERY
+        - name: judge-endpoint
+          serving_endpoint:
+            name: databricks-claude-haiku-4-5
             permission: CAN_QUERY
         - name: embedding-endpoint
           serving_endpoint:

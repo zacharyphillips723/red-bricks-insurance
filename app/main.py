@@ -1,5 +1,6 @@
 """Population Health Command Center — FastAPI application entry point."""
 
+import os
 import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -8,21 +9,46 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 # ---------------------------------------------------------------------------
-# MLflow tracing (agent-level spans — writes to Unity Catalog via Zerobus)
+# MLflow tracing → Unity Catalog OTel tables (matches the other Red Bricks apps).
+# The care-intelligence multi-agent supervisor is decorated with @mlflow.trace;
+# linking the experiment to a UC trace location streams spans to
+# analytics.care_agent_otel_* so the in-app Observability page can query them.
 # ---------------------------------------------------------------------------
 try:
     import mlflow
-    mlflow.set_tracking_uri("databricks")
-    mlflow.set_experiment("/Shared/red-bricks-insurance/agent-traces")
+    from backend.env_config import (
+        UC_CATALOG, SQL_WAREHOUSE_ID, UC_TRACE_SCHEMA,
+        UC_TRACE_TABLE_PREFIX, MLFLOW_UC_EXPERIMENT,
+    )
+    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "databricks"))
+    if SQL_WAREHOUSE_ID:
+        os.environ.setdefault("MLFLOW_TRACING_SQL_WAREHOUSE_ID", SQL_WAREHOUSE_ID)
+    try:
+        from mlflow.entities import UnityCatalog
+        _exp = mlflow.set_experiment(
+            MLFLOW_UC_EXPERIMENT,
+            trace_location=UnityCatalog(
+                catalog_name=UC_CATALOG, schema_name=UC_TRACE_SCHEMA,
+                table_prefix=UC_TRACE_TABLE_PREFIX,
+            ),
+        )
+        print(f"[main] MLflow UC traces enabled — {MLFLOW_UC_EXPERIMENT} (ID {_exp.experiment_id})")
+    except Exception as e:
+        print(f"[main] WARNING: UC trace linking failed ({e}) — falling back to workspace experiment")
+        mlflow.set_experiment("/Shared/red-bricks-insurance/agent-traces")
     mlflow.langchain.autolog()
-    print("[main] MLflow tracing enabled (tracking to Databricks workspace)")
 except ImportError:
     print("[main] mlflow not available — tracing disabled")
 except Exception as e:
     print(f"[main] mlflow setup warning: {e}")
+    traceback.print_exc()
+    # Best-effort recovery: keep autologging on even if UC-experiment linking above
+    # failed before reaching autolog() — degrade to default workspace tracing.
     try:
+        import mlflow
         mlflow.set_tracking_uri("databricks")
         mlflow.langchain.autolog()
+        print("[main] MLflow autolog enabled (workspace tracing fallback)")
     except Exception:
         pass
 
