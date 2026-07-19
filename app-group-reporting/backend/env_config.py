@@ -102,6 +102,12 @@ MLFLOW_UC_EXPERIMENT = os.environ.get(
     "MLFLOW_UC_EXPERIMENT", "/Shared/red-bricks-group-agent-traces-uc"
 )
 
+# Vector Search index of synthetic SBC / plan-design documents — the Sales
+# Coach retrieves from this to answer benefit-design questions from documents.
+PLAN_DOCS_VS_INDEX = os.environ.get(
+    "PLAN_DOCS_VS_INDEX", f"{UC_CATALOG}.analytics.plan_document_vs_index"
+)
+
 print(f"[env_config] SQL_WAREHOUSE_ID={SQL_WAREHOUSE_ID}")
 print(f"[env_config] UC_CATALOG={UC_CATALOG}")
 print(f"[env_config] GENIE_SPACE_ID={GENIE_SPACE_ID}")

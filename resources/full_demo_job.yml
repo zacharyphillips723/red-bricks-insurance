@@ -319,6 +319,24 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
 
+        # Step 6d-i-b: Plan-document Vector Search index for the Group Reporting Sales Coach RAG
+        - task_key: setup_plan_docs_vs
+          depends_on:
+            - task_key: gold_analytics_pipeline
+          notebook_task:
+            notebook_path: ../src/notebooks/setup_plan_docs_vs.py
+            base_parameters:
+              catalog: ${var.catalog}
+
+        # Step 6d-i-c: Governed Group Reporting tables (competitive benchmarks + renewal-scenario write-back)
+        - task_key: build_group_reporting_tables
+          depends_on:
+            - task_key: gold_analytics_pipeline
+          notebook_task:
+            notebook_path: ../src/notebooks/build_group_reporting_tables.py
+            base_parameters:
+              catalog: ${var.catalog}
+
         # Step 6d-ii: AI Gateway external model endpoints (runs in parallel, no dependencies)
         - task_key: setup_ai_gateway
           notebook_task:
@@ -438,6 +456,7 @@ resources:
             - task_key: care_management_pipeline
             - task_key: adt_pipeline
             - task_key: setup_uc_governance
+            - task_key: build_group_reporting_tables
           notebook_task:
             notebook_path: ../src/notebooks/bootstrap_workspace.py
             base_parameters:

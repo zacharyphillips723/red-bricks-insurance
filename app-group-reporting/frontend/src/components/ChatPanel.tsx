@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Send, Loader2, Sparkles, Slack, Globe, Database } from "lucide-react";
+import { Send, Loader2, Sparkles, Slack, Globe, Database, FileText } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import { api } from "@/lib/api";
@@ -40,6 +40,7 @@ interface ChatMessage {
   role: "user" | "agent";
   text: string;
   enrichmentSources?: string[];
+  planDocSources?: string[];
 }
 
 const sourceIcons: Record<string, typeof Slack> = {
@@ -75,7 +76,7 @@ export function ChatPanel({ groupId }: ChatPanelProps) {
         } else if (ev.type === "final") {
           setMessages((prev) => [
             ...prev,
-            { role: "agent", text: ev.answer, enrichmentSources: ev.enrichment_sources },
+            { role: "agent", text: ev.answer, enrichmentSources: ev.enrichment_sources, planDocSources: ev.plan_doc_sources },
           ]);
         } else if (ev.type === "error") {
           setMessages((prev) => [...prev, { role: "agent", text: `Error: ${ev.message}` }]);
@@ -156,6 +157,16 @@ export function ChatPanel({ groupId }: ChatPanelProps) {
                       </span>
                     );
                   })}
+                </div>
+              )}
+              {msg.planDocSources && msg.planDocSources.length > 0 && (
+                <div className="flex items-center flex-wrap gap-1.5 mt-1 ml-1">
+                  <span className="text-[10px] text-gray-400">Plan docs:</span>
+                  {msg.planDocSources.map((src) => (
+                    <span key={src} className="inline-flex items-center gap-0.5 text-[10px] text-databricks-red bg-red-50 rounded px-1.5 py-0.5">
+                      <FileText className="w-2.5 h-2.5" /> {src}
+                    </span>
+                  ))}
                 </div>
               )}
             </div>

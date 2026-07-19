@@ -1493,7 +1493,17 @@ else:
                         spark.sql(f"GRANT SELECT, MODIFY ON TABLE {_fq} TO `{_sp_name}`")
                     except Exception as _ge:
                         print(f"    {_sp_name} on {_tbl}: {_ge}")
-            print(f"    SELECT + MODIFY granted to {len(app_sps)} SP(s) on {len(_existing)} table(s)")
+            # The Group Reporting app writes renewal scenarios back to a governed
+            # Delta table — needs MODIFY beyond the schema-level SELECT grant.
+            for _sp in app_sps:
+                try:
+                    spark.sql(
+                        f"GRANT SELECT, MODIFY ON TABLE {catalog_sql}.analytics.group_renewal_scenarios "
+                        f"TO `{_sp['sp_name']}`"
+                    )
+                except Exception as _ge:
+                    print(f"    {_sp['sp_name']} on group_renewal_scenarios: {_ge}")
+            print(f"    SELECT + MODIFY granted to {len(app_sps)} SP(s) on {len(_existing)} table(s) + renewal-scenario write-back")
     except Exception as _te:
         import traceback as _tb
         print(f"  WARNING: Group Reporting UC trace storage provisioning failed: {_te}")

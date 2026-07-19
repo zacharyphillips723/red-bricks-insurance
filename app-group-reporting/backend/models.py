@@ -152,6 +152,7 @@ class AgentChatOut(BaseModel):
     """Response from the sales coach agent."""
     answer: str
     enrichment_sources: list[str] = []
+    plan_doc_sources: list[str] = []
 
 
 # ---------------------------------------------------------------------------

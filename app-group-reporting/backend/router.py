@@ -6,7 +6,7 @@ import json
 import math
 
 from databricks.sdk import WorkspaceClient
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from .genie import ask_genie
@@ -51,6 +51,13 @@ from .models import (
 )
 
 api = APIRouter(prefix="/api")
+
+
+def _actor(request: Request) -> str:
+    """Resolve the acting user from Databricks Apps forwarded identity headers."""
+    h = request.headers
+    return (h.get("X-Forwarded-Email") or h.get("X-Forwarded-Preferred-Username")
+            or h.get("X-Forwarded-User") or "account_executive")
 
 
 # ===================================================================
@@ -467,17 +474,58 @@ def _compute_renewal_scenario(card: dict, rate_change_pct: float) -> dict:
     }
 
 
+def _write_back_renewal_scenario(card: dict, result: dict, actor: str) -> None:
+    """Append a modeled renewal scenario to the governed write-back Delta table.
+
+    Read-only app (no Lakebase) → we write traceability records to a governed UC
+    Delta table via the SQL warehouse. Best-effort: failures don't block the API.
+    """
+    import uuid
+    from .groups import _execute_sql, _CAT
+
+    def _num(v, d=0.0):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return d
+
+    base_prem = _num(result.get("current_pmpm")) / _num(result.get("current_loss_ratio"), 1) if _num(result.get("current_loss_ratio")) else _num(result.get("current_pmpm"))
+    params = [
+        {"name": "sid", "value": uuid.uuid4().hex},
+        {"name": "gid", "value": str(card.get("group_id", ""))},
+        {"name": "gname", "value": str(card.get("group_name", ""))},
+        {"name": "rc", "value": str(result.get("rate_change_pct", 0)), "type": "DOUBLE"},
+        {"name": "plr", "value": str(result.get("projected_loss_ratio", 0)), "type": "DOUBLE"},
+        {"name": "churn", "value": str(round(_num(result.get("churn_probability")) * 100, 2)), "type": "DOUBLE"},
+        {"name": "bp", "value": str(round(base_prem, 2)), "type": "DOUBLE"},
+        {"name": "pp", "value": str(result.get("projected_pmpm", 0)), "type": "DOUBLE"},
+        {"name": "actor", "value": actor},
+    ]
+    _execute_sql(
+        f"""INSERT INTO {_CAT}.analytics.group_renewal_scenarios
+            (scenario_id, group_id, group_name, rate_change_pct, projected_loss_ratio,
+             projected_churn_pct, baseline_premium, projected_premium, narrative, created_by, created_at)
+            VALUES (:sid, :gid, :gname, :rc, :plr, :churn, :bp, :pp,
+                    CONCAT('Renewal scenario at ', :rc, '% rate change'), :actor, current_timestamp())""",
+        params,
+    )
+
+
 @api.post(
     "/groups/{group_id}/renewal-scenario",
     response_model=RenewalScenarioOut,
     operation_id="renewalScenario",
 )
-async def renewal_scenario_endpoint(group_id: str, scenario: RenewalScenarioIn):
-    """Model a renewal rate change scenario."""
+async def renewal_scenario_endpoint(group_id: str, scenario: RenewalScenarioIn, request: Request):
+    """Model a renewal rate change scenario (and log it to the governed write-back table)."""
     card = await asyncio.to_thread(get_report_card, group_id)
     if not card:
         raise HTTPException(status_code=404, detail=f"Group {group_id} not found")
     result = _compute_renewal_scenario(card, scenario.rate_change_pct)
+    try:
+        await asyncio.to_thread(_write_back_renewal_scenario, card, result, _actor(request))
+    except Exception as e:
+        print(f"[renewal-scenario] write-back failed (non-blocking): {e}")
     return RenewalScenarioOut(**result)
 
 
@@ -520,40 +568,69 @@ _NETWORK_SIZES = {
 }
 
 
+def _short_size_tier(size_tier: str) -> str:
+    """Normalize a report-card size tier (e.g. 'Mid-Market (51-250)') to the
+    benchmark table's tier keys (Small / Mid-Market / Large / Jumbo)."""
+    s = (size_tier or "").lower()
+    if "jumbo" in s:
+        return "Jumbo"
+    if "large" in s:
+        return "Large"
+    if "small" in s:
+        return "Small"
+    return "Mid-Market"
+
+
 def _generate_competitive_benchmark(card: dict) -> dict:
-    """Generate deterministic synthetic competitor data for a group."""
+    """Build competitive benchmark from the governed UC benchmark table.
+
+    Reads analytics.gold_competitive_benchmarks (carrier x size-tier reference)
+    and scales each carrier's PMPM by its governed pmpm_index against the group's
+    actual Red Bricks PMPM. Falls back to the legacy synthetic generator if the
+    table is unavailable.
+    """
+    from .groups import _execute_sql, _CAT
+
     group_id = card.get("group_id", "")
     group_name = card.get("group_name", "Unknown")
     rb_pmpm = float(card.get("claims_pmpm") or 500)
     industry = card.get("industry") or "General"
     size_tier = card.get("group_size_tier") or "Mid-Market"
+    tier_key = _short_size_tier(size_tier)
 
     competitors = []
-    for carrier in _COMPETITOR_CARRIERS:
-        # Deterministic seed from group_id + carrier name
-        seed_str = f"{group_id}:{carrier['name']}"
-        h = int(hashlib.sha256(seed_str.encode()).hexdigest(), 16)
-
-        # PMPM varies +/- 5-15% from Red Bricks
-        variation = ((h % 2100) - 1050) / 10000.0  # -0.105 to +0.105
-        competitor_pmpm = round(rb_pmpm * (1 + variation), 2)
-
-        # Network size based on size tier
-        network = _NETWORK_SIZES.get(size_tier, _NETWORK_SIZES["Mid-Market"]).get(
-            carrier["network"], "15,000+"
+    try:
+        rows = _execute_sql(
+            f"""SELECT carrier_name, network_size, wellness_programs,
+                       pmpm_index, member_satisfaction
+                FROM {_CAT}.analytics.gold_competitive_benchmarks
+                WHERE size_tier = :tier ORDER BY carrier_name""",
+            [{"name": "tier", "value": tier_key}],
         )
+        for r in rows:
+            idx = float(r.get("pmpm_index") or 1.0)
+            competitors.append(CompetitorBenchmark(
+                carrier_name=r.get("carrier_name", ""),
+                pmpm=round(rb_pmpm * idx, 2),
+                network_size=r.get("network_size", ""),
+                wellness_programs=(r.get("wellness_programs") or "").split("|"),
+                member_satisfaction=float(r.get("member_satisfaction") or 0),
+            ))
+    except Exception as e:
+        print(f"[benchmark] governed table read failed, using fallback: {e}")
 
-        # Satisfaction: base +/- 0.3 deterministic
-        sat_var = ((h >> 8) % 60 - 30) / 100.0
-        satisfaction = round(max(2.5, min(5.0, carrier["satisfaction_base"] + sat_var)), 1)
-
-        competitors.append(CompetitorBenchmark(
-            carrier_name=carrier["name"],
-            pmpm=competitor_pmpm,
-            network_size=f"{network} providers",
-            wellness_programs=carrier["wellness"],
-            member_satisfaction=satisfaction,
-        ))
+    if not competitors:
+        # Fallback: legacy deterministic synthetic generator.
+        for carrier in _COMPETITOR_CARRIERS:
+            h = int(hashlib.sha256(f"{group_id}:{carrier['name']}".encode()).hexdigest(), 16)
+            competitor_pmpm = round(rb_pmpm * (1 + ((h % 2100) - 1050) / 10000.0), 2)
+            network = _NETWORK_SIZES.get(tier_key, _NETWORK_SIZES["Mid-Market"]).get(carrier["network"], "15,000+")
+            satisfaction = round(max(2.5, min(5.0, carrier["satisfaction_base"] + ((h >> 8) % 60 - 30) / 100.0)), 1)
+            competitors.append(CompetitorBenchmark(
+                carrier_name=carrier["name"], pmpm=competitor_pmpm,
+                network_size=f"{network} providers", wellness_programs=carrier["wellness"],
+                member_satisfaction=satisfaction,
+            ))
 
     return {
         "group_id": group_id,

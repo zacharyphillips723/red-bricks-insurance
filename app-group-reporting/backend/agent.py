@@ -17,7 +17,36 @@ from databricks.sdk import WorkspaceClient
 from .groups import get_report_card, get_experience, get_stop_loss, get_renewal, get_tcoc
 from .enrichment import get_slack_context, get_glean_context, get_salesforce_context
 
-from .env_config import LLM_ENDPOINT
+from .env_config import LLM_ENDPOINT, PLAN_DOCS_VS_INDEX
+
+
+@mlflow.trace(span_type="RETRIEVER", name="search_plan_documents")
+def _search_plan_documents(query: str, top_k: int = 4) -> list[dict]:
+    """Retrieve relevant SBC / plan-design document chunks via Vector Search."""
+    try:
+        w = WorkspaceClient()
+        res = w.api_client.do(
+            "POST",
+            f"/api/2.0/vector-search/indexes/{PLAN_DOCS_VS_INDEX}/query",
+            body={
+                "query_text": query,
+                "columns": ["plan_name", "section", "chunk_text"],
+                "num_results": top_k,
+            },
+        )
+        cols = [c.get("name") for c in res.get("manifest", {}).get("columns", [])]
+        rows = res.get("result", {}).get("data_array", [])
+        docs = [dict(zip(cols, r)) for r in rows]
+        mlflow.get_current_active_span().set_outputs({
+            "result_count": len(docs),
+            "documents": [{"page_content": d.get("chunk_text", ""),
+                           "metadata": {"plan_name": d.get("plan_name", ""), "section": d.get("section", "")}}
+                          for d in docs],
+        })
+        return docs
+    except Exception as e:
+        print(f"[SalesCoach] plan-doc VS search failed: {e}")
+        return []
 
 
 def _content_to_text(content) -> str:
@@ -142,13 +171,15 @@ def _classify_intent(question: str) -> str:
 @mlflow.trace(span_type="AGENT", name="group_sales_coach")
 def query_sales_coach(group_id: str, question: str) -> dict:
     """Blocking sales coach — drains the streaming generator to a final result."""
-    result = {"answer": "No response generated.", "enrichment_sources": []}
+    result = {"answer": "No response generated.", "enrichment_sources": [], "plan_doc_sources": []}
     for event_type, payload in _run_sales_coach(group_id, question):
         if event_type == "final":
-            result = {"answer": payload["answer"], "enrichment_sources": payload.get("enrichment_sources", [])}
+            result = {"answer": payload["answer"],
+                      "enrichment_sources": payload.get("enrichment_sources", []),
+                      "plan_doc_sources": payload.get("plan_doc_sources", [])}
         elif event_type == "error":
             return {"answer": f"I encountered an error processing your request: {payload['message']}",
-                    "enrichment_sources": []}
+                    "enrichment_sources": [], "plan_doc_sources": []}
     return result
 
 
@@ -216,6 +247,22 @@ def _run_sales_coach(group_id: str, question: str):
                 except Exception as e:
                     print(f"[SalesCoach] Enrichment {source_name} error: {e}")
 
+        # Step 2b: Retrieve plan-design / SBC document context via Vector Search
+        # so the coach can answer benefit-design questions from documents.
+        yield ("status", {"stage": "documents", "message": "Searching plan documents (Summary of Benefits)…"})
+        plan_docs = _search_plan_documents(question)
+        plan_doc_sources = sorted({d.get("plan_name", "") for d in plan_docs if d.get("plan_name")})
+        if plan_docs:
+            doc_ctx = "\n".join(
+                f"- [{d.get('plan_name')} · {d.get('section')}] {d.get('chunk_text')}"
+                for d in plan_docs
+            )
+            context_sections.append(
+                "## Plan Document Excerpts (Summary of Benefits & Coverage, via Vector Search)\n"
+                f"{doc_ctx}\n\nCite specific plan names and benefit details from these excerpts "
+                "when recommending plan designs or answering coverage questions."
+            )
+
         # Step 3: Assemble full prompt
         all_context = "\n\n".join(context_sections + enrichment_context)
         augmented_prompt = f"Question: {question}\n\n{all_context}"
@@ -249,8 +296,9 @@ def _run_sales_coach(group_id: str, question: str):
             usage = data.get("usage", {})
             span.set_outputs({"tokens_output": usage.get("completion_tokens", 0), "answer_chars": len(answer)})
 
-        print(f"[SalesCoach] Response: {len(answer)} chars, enrichment: {enrichment_sources}")
-        yield ("final", {"answer": answer, "enrichment_sources": enrichment_sources})
+        print(f"[SalesCoach] Response: {len(answer)} chars, enrichment: {enrichment_sources}, plan_docs: {plan_doc_sources}")
+        yield ("final", {"answer": answer, "enrichment_sources": enrichment_sources,
+                         "plan_doc_sources": plan_doc_sources})
 
     except Exception as e:
         print(f"[SalesCoach] ERROR: {e}")

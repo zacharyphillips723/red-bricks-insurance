@@ -204,7 +204,7 @@ export interface AgentResponse {
 
 export type AgentStreamEvent =
   | { type: "status"; stage: string; message: string }
-  | { type: "final"; answer: string; enrichment_sources: string[] }
+  | { type: "final"; answer: string; enrichment_sources: string[]; plan_doc_sources?: string[] }
   | { type: "error"; message: string };
 
 export interface ObservabilityTrace {
