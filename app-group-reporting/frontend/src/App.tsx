@@ -5,6 +5,8 @@ import { GroupSearch } from "@/pages/GroupSearch";
 import { GroupReportCard } from "@/pages/GroupReportCard";
 import { GroupReports } from "@/pages/GroupReports";
 import { SalesCoach } from "@/pages/SalesCoach";
+import { GenieSearch } from "@/pages/GenieSearch";
+import { Observability } from "@/pages/Observability";
 import { useHashRouter } from "@/lib/useHashRouter";
 
 export default function App() {
@@ -61,6 +63,10 @@ export default function App() {
         ) : (
           <GroupSearch onSelectGroup={handleSelectGroup} />
         );
+      case "genie":
+        return <GenieSearch />;
+      case "observability":
+        return <Observability />;
       default:
         return <GroupSearch onSelectGroup={handleSelectGroup} />;
     }

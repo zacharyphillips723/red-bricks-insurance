@@ -52,6 +52,7 @@ export function ChatPanel({ groupId }: ChatPanelProps) {
   const [question, setQuestion] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
+  const [statusMsg, setStatusMsg] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -65,27 +66,29 @@ export function ChatPanel({ groupId }: ChatPanelProps) {
     setMessages((prev) => [...prev, { role: "user", text }]);
     setQuestion("");
     setLoading(true);
+    setStatusMsg("Preparing your briefing…");
 
     try {
-      const response = await api.chatWithAgent(groupId, text);
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "agent",
-          text: response.answer,
-          enrichmentSources: response.enrichment_sources,
-        },
-      ]);
+      await api.chatWithAgentStream(groupId, text, (ev) => {
+        if (ev.type === "status") {
+          setStatusMsg(ev.message);
+        } else if (ev.type === "final") {
+          setMessages((prev) => [
+            ...prev,
+            { role: "agent", text: ev.answer, enrichmentSources: ev.enrichment_sources },
+          ]);
+        } else if (ev.type === "error") {
+          setMessages((prev) => [...prev, { role: "agent", text: `Error: ${ev.message}` }]);
+        }
+      });
     } catch (err) {
       setMessages((prev) => [
         ...prev,
-        {
-          role: "agent",
-          text: `Error: ${err instanceof Error ? err.message : "Unknown error"}`,
-        },
+        { role: "agent", text: `Error: ${err instanceof Error ? err.message : "Unknown error"}` },
       ]);
     } finally {
       setLoading(false);
+      setStatusMsg("");
       setTimeout(() => {
         containerRef.current?.scrollTo({
           top: containerRef.current.scrollHeight,
@@ -162,7 +165,7 @@ export function ChatPanel({ groupId }: ChatPanelProps) {
         {loading && (
           <div className="flex items-center gap-2 text-xs text-gray-400">
             <Loader2 className="w-4 h-4 animate-spin text-databricks-red" />
-            Coach is preparing your briefing...
+            {statusMsg || "Coach is preparing your briefing..."}
           </div>
         )}
       </div>

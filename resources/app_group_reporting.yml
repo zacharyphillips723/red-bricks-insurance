@@ -21,6 +21,14 @@ resources:
             value: analytics
           - name: GENIE_SPACE_ID
             value: auto
+          - name: MLFLOW_TRACKING_URI
+            value: databricks
+          - name: MLFLOW_UC_EXPERIMENT
+            value: /Shared/red-bricks-group-agent-traces-uc
+          - name: UC_TRACE_SCHEMA
+            value: analytics
+          - name: UC_TRACE_TABLE_PREFIX
+            value: group_agent
           # Optional enrichment — leave empty to disable
           - name: SLACK_BOT_TOKEN
             value: ""

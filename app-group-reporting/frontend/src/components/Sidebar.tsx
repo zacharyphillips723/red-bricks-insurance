@@ -5,6 +5,8 @@ import {
   MessageSquareText,
   Search,
   Briefcase,
+  Sparkles,
+  Activity,
 } from "lucide-react";
 
 const navItems = [
@@ -12,6 +14,8 @@ const navItems = [
   { id: "report-card", label: "Report Card", icon: FileBarChart },
   { id: "reports", label: "Standard Reports", icon: ClipboardList },
   { id: "coach", label: "Sales Coach", icon: MessageSquareText },
+  { id: "genie", label: "Genie Search", icon: Sparkles },
+  { id: "observability", label: "Observability", icon: Activity },
 ];
 
 interface SidebarProps {

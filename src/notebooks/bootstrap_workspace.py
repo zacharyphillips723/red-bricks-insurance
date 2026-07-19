@@ -1444,6 +1444,63 @@ else:
 
 # COMMAND ----------
 
+print("=" * 60)
+print("STEP 3b-4: Provision MLflow UC Trace Storage (Group Reporting Agent)")
+print("=" * 60)
+
+# In sync with app-group-reporting/backend/env_config.py + resources/app_group_reporting.yml.
+GR_TRACE_EXPERIMENT = "/Shared/red-bricks-group-agent-traces-uc"
+GR_TRACE_SCHEMA = "analytics"
+GR_TRACE_TABLE_PREFIX = "group_agent"
+
+if not warehouse_id:
+    print("  Skipped — no warehouse_id available (required to provision UC trace tables).")
+else:
+    try:
+        import os as _os
+        import mlflow
+        from mlflow.entities import UnityCatalog
+
+        mlflow.set_tracking_uri("databricks")
+        _os.environ["MLFLOW_TRACING_SQL_WAREHOUSE_ID"] = warehouse_id
+
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog_sql}.{GR_TRACE_SCHEMA}")
+
+        exp = mlflow.set_experiment(
+            GR_TRACE_EXPERIMENT,
+            trace_location=UnityCatalog(
+                catalog_name=catalog,
+                schema_name=GR_TRACE_SCHEMA,
+                table_prefix=GR_TRACE_TABLE_PREFIX,
+            ),
+        )
+        print(f"  Experiment linked: {GR_TRACE_EXPERIMENT} (ID: {exp.experiment_id})")
+
+        _existing = {
+            r["tableName"]
+            for r in spark.sql(
+                f"SHOW TABLES IN {catalog_sql}.{GR_TRACE_SCHEMA} LIKE '{GR_TRACE_TABLE_PREFIX}_otel_*'"
+            ).collect()
+        }
+        print(f"  OTel tables: {sorted(_existing)}")
+
+        if app_sps:
+            for _sp in app_sps:
+                _sp_name = _sp["sp_name"]
+                for _tbl in sorted(_existing):
+                    _fq = f"{catalog_sql}.{GR_TRACE_SCHEMA}.`{_tbl}`"
+                    try:
+                        spark.sql(f"GRANT SELECT, MODIFY ON TABLE {_fq} TO `{_sp_name}`")
+                    except Exception as _ge:
+                        print(f"    {_sp_name} on {_tbl}: {_ge}")
+            print(f"    SELECT + MODIFY granted to {len(app_sps)} SP(s) on {len(_existing)} table(s)")
+    except Exception as _te:
+        import traceback as _tb
+        print(f"  WARNING: Group Reporting UC trace storage provisioning failed: {_te}")
+        _tb.print_exc()
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Step 4: Create Empty ML Predictions Table
 

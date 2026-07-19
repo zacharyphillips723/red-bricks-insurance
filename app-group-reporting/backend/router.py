@@ -2,13 +2,19 @@
 
 import asyncio
 import hashlib
+import json
 import math
 
+from databricks.sdk import WorkspaceClient
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 
 from .genie import ask_genie
-from .agent import query_sales_coach
+from .agent import query_sales_coach, stream_sales_coach
+from .groups import _execute_sql
+from .env_config import LLM_ENDPOINT, UC_CATALOG, UC_TRACE_SCHEMA, UC_TRACE_TABLE_PREFIX
+
+OBSERVED_MODELS = [LLM_ENDPOINT]
 from .groups import (
     list_groups,
     get_report_card,
@@ -582,6 +588,100 @@ async def chat_with_agent(chat_in: AgentChatIn):
     """Query the Sales Coach agent about a group."""
     result = await asyncio.to_thread(query_sales_coach, chat_in.group_id, chat_in.question)
     return AgentChatOut(**result)
+
+
+@api.post("/agent/chat/stream", operation_id="chatWithAgentStream")
+async def chat_with_agent_stream(chat_in: AgentChatIn):
+    """SSE variant of /agent/chat — streams progress milestones then the briefing."""
+    group_id, question = chat_in.group_id, chat_in.question
+
+    async def event_source():
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+        _SENTINEL = object()
+
+        def _produce():
+            try:
+                for event_type, payload in stream_sales_coach(group_id, question):
+                    loop.call_soon_threadsafe(queue.put_nowait, (event_type, payload))
+            except Exception as e:  # pragma: no cover
+                loop.call_soon_threadsafe(queue.put_nowait, ("error", {"message": str(e)}))
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
+
+        producer = loop.run_in_executor(None, _produce)
+        try:
+            while True:
+                item = await queue.get()
+                if item is _SENTINEL:
+                    break
+                event_type, payload = item
+                yield f"event: {event_type}\ndata: {json.dumps(payload, default=str)}\n\n"
+        finally:
+            await producer
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ===================================================================
+# Observability — traces + model cost/usage
+# ===================================================================
+
+@api.get("/observability/traces", operation_id="getObservabilityTraces")
+async def observability_traces():
+    spans_table = f"`{UC_CATALOG}`.`{UC_TRACE_SCHEMA}`.`{UC_TRACE_TABLE_PREFIX}_otel_spans`"
+    sql = f"""
+        SELECT trace_id, MIN(start_time_unix_nano) AS s, MAX(end_time_unix_nano) AS e,
+               COUNT(*) AS span_count,
+               CASE WHEN SUM(CASE WHEN status.code='STATUS_CODE_ERROR' THEN 1 ELSE 0 END)>0
+                    THEN 'ERROR' ELSE 'OK' END AS trace_status
+        FROM {spans_table} GROUP BY trace_id ORDER BY s DESC LIMIT 25
+    """
+    try:
+        rows = await asyncio.to_thread(_execute_sql, sql)
+        return {"traces": [{
+            "request_id": d.get("trace_id", ""),
+            "timestamp_ms": int(d.get("s") or 0) // 1_000_000,
+            "execution_time_ms": (int(d.get("e") or 0) - int(d.get("s") or 0)) // 1_000_000,
+            "status": d.get("trace_status", "UNKNOWN"),
+            "span_count": int(d.get("span_count") or 0),
+        } for d in rows]}
+    except Exception as e:
+        print(f"[observability] trace fetch error: {e}")
+        return {"traces": [], "error": str(e)}
+
+
+@api.get("/observability/costs", operation_id="getObservabilityCosts")
+async def observability_costs():
+    endpoints = ", ".join(f"'{m}'" for m in OBSERVED_MODELS)
+    try:
+        try:
+            wid = WorkspaceClient().get_workspace_id()
+            wf = f"AND eu.workspace_id = '{wid}'" if wid else ""
+        except Exception:
+            wf = ""
+        rows = await asyncio.to_thread(_execute_sql, f"""
+            SELECT se.endpoint_name AS endpoint, COUNT(*) AS request_count,
+                   COALESCE(SUM(eu.input_token_count),0) AS total_input_tokens,
+                   COALESCE(SUM(eu.output_token_count),0) AS total_output_tokens,
+                   CASE se.endpoint_name
+                     WHEN 'databricks-llama-4-maverick'
+                       THEN ROUND(SUM(eu.input_token_count)*0.40/1000000 + SUM(eu.output_token_count)*1.60/1000000, 4)
+                     ELSE 0 END AS estimated_cost_usd
+            FROM system.serving.endpoint_usage eu
+            JOIN system.serving.served_entities se ON eu.served_entity_id = se.served_entity_id
+            WHERE se.endpoint_name IN ({endpoints})
+              AND eu.request_time >= DATE_SUB(CURRENT_TIMESTAMP(), 30) {wf}
+            GROUP BY se.endpoint_name ORDER BY request_count DESC
+        """)
+        return {"costs": rows}
+    except Exception as e:
+        print(f"[observability] cost query error: {e}")
+        return {"costs": [], "error": str(e)}
 
 
 # ===================================================================

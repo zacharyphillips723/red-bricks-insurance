@@ -11,12 +11,25 @@ import os
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import mlflow
 from databricks.sdk import WorkspaceClient
 
 from .groups import get_report_card, get_experience, get_stop_loss, get_renewal, get_tcoc
 from .enrichment import get_slack_context, get_glean_context, get_salesforce_context
 
 from .env_config import LLM_ENDPOINT
+
+
+def _content_to_text(content) -> str:
+    """Normalize an LLM message `content` (string or typed-block list) to text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            (b.get("text") or b.get("content") or "") if isinstance(b, dict) else str(b)
+            for b in content
+        ).strip()
+    return str(content) if content is not None else ""
 
 SYSTEM_PROMPT = """You are a Sales Strategy Coach for Red Bricks Insurance.
 You help account executives prepare for employer group renewal meetings by
@@ -126,12 +139,40 @@ def _classify_intent(question: str) -> str:
     return "full_briefing"
 
 
+@mlflow.trace(span_type="AGENT", name="group_sales_coach")
 def query_sales_coach(group_id: str, question: str) -> dict:
-    """Sales coach: retrieve group data + enrichment, then generate briefing."""
+    """Blocking sales coach — drains the streaming generator to a final result."""
+    result = {"answer": "No response generated.", "enrichment_sources": []}
+    for event_type, payload in _run_sales_coach(group_id, question):
+        if event_type == "final":
+            result = {"answer": payload["answer"], "enrichment_sources": payload.get("enrichment_sources", [])}
+        elif event_type == "error":
+            return {"answer": f"I encountered an error processing your request: {payload['message']}",
+                    "enrichment_sources": []}
+    return result
+
+
+@mlflow.trace(span_type="AGENT", name="group_sales_coach_stream")
+def stream_sales_coach(group_id: str, question: str):
+    """Streaming sales coach — yields (event_type, payload) milestone tuples."""
+    try:
+        yield from _run_sales_coach(group_id, question)
+    except Exception as e:
+        print(f"[SalesCoach:stream] ERROR: {e}")
+        traceback.print_exc()
+        yield ("error", {"message": str(e)})
+
+
+def _run_sales_coach(group_id: str, question: str):
+    """Shared logic: retrieve group data + enrichment, then generate briefing.
+
+    Yields: status milestones, then a single 'final' (or 'error') event.
+    """
     try:
         print(f"[SalesCoach] Processing query for {group_id}: {question[:80]}...")
 
         intent = _classify_intent(question)
+        yield ("status", {"stage": "retrieving", "message": "Retrieving group report card and financials…"})
 
         # Step 1: Retrieve structured data from gold tables
         report_card = get_report_card(group_id) or {}
@@ -150,6 +191,7 @@ def query_sales_coach(group_id: str, question: str) -> dict:
             context_sections.append(f"## Cost Tier Distribution\n{json.dumps(tcoc, indent=2, default=str)}")
 
         # Step 2: Enrichment layer — call external sources in parallel
+        yield ("status", {"stage": "enriching", "message": "Gathering internal context (Slack, Glean, Salesforce)…"})
         group_name = report_card.get("group_name", "")
         industry = report_card.get("industry", "")
         enrichment_sources = []
@@ -186,25 +228,31 @@ def query_sales_coach(group_id: str, question: str) -> dict:
         ]
 
         # Step 4: Call Foundation Model API
-        w = WorkspaceClient()
-        data = w.api_client.do(
-            "POST",
-            f"/serving-endpoints/{LLM_ENDPOINT}/invocations",
-            body={"messages": messages, "max_tokens": 2500, "temperature": 0.1},
-        )
-        answer = (
-            data.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "No response generated.")
-        )
+        _intent_label = {
+            "full_briefing": "renewal briefing", "renewal_focus": "renewal analysis",
+            "cost_focus": "cost analysis", "peer_comparison": "peer comparison",
+            "quiz": "negotiation roleplay",
+        }.get(intent, "briefing")
+        yield ("status", {"stage": "generating", "message": f"Composing {_intent_label}…"})
+        with mlflow.start_span(name="sales_coach_llm", span_type="LLM") as span:
+            span.set_inputs({"model": LLM_ENDPOINT, "intent": intent,
+                             "enrichment_sources": enrichment_sources})
+            w = WorkspaceClient()
+            data = w.api_client.do(
+                "POST",
+                f"/serving-endpoints/{LLM_ENDPOINT}/invocations",
+                body={"messages": messages, "max_tokens": 2500, "temperature": 0.1},
+            )
+            answer = _content_to_text(
+                data.get("choices", [{}])[0].get("message", {}).get("content", "No response generated.")
+            )
+            usage = data.get("usage", {})
+            span.set_outputs({"tokens_output": usage.get("completion_tokens", 0), "answer_chars": len(answer)})
 
         print(f"[SalesCoach] Response: {len(answer)} chars, enrichment: {enrichment_sources}")
-        return {"answer": answer, "enrichment_sources": enrichment_sources}
+        yield ("final", {"answer": answer, "enrichment_sources": enrichment_sources})
 
     except Exception as e:
         print(f"[SalesCoach] ERROR: {e}")
         traceback.print_exc()
-        return {
-            "answer": f"I encountered an error processing your request: {str(e)}",
-            "enrichment_sources": [],
-        }
+        yield ("error", {"message": str(e)})
