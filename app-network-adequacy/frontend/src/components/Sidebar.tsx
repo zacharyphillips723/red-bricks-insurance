@@ -7,6 +7,8 @@ import {
   Sparkles,
   Network,
   MapPin,
+  Bot,
+  Activity,
 } from "lucide-react";
 
 const navItems = [
@@ -16,7 +18,9 @@ const navItems = [
   { id: "ghost-network", label: "Ghost Network", icon: Ghost },
   { id: "leakage", label: "OON Leakage", icon: ArrowRightLeft },
   { id: "gaps", label: "Gaps & Recruitment", icon: Target },
+  { id: "agent", label: "Network Agent", icon: Bot },
   { id: "genie", label: "Network Analytics", icon: Sparkles },
+  { id: "observability", label: "Observability", icon: Activity },
 ];
 
 interface SidebarProps {

@@ -7,10 +7,16 @@ import asyncio
 import traceback
 from typing import Optional
 
-from databricks.sdk import WorkspaceClient
-from fastapi import APIRouter, HTTPException, Query
+import json
 
-from .env_config import LLM_ENDPOINT, SQL_WAREHOUSE_ID, UC_CATALOG
+from databricks.sdk import WorkspaceClient
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
+
+from .env_config import (
+    LLM_ENDPOINT, NET_AGENT_ENDPOINT, SQL_WAREHOUSE_ID, UC_CATALOG,
+    UC_TRACE_SCHEMA, UC_TRACE_TABLE_PREFIX,
+)
 from .genie import ask_genie
 from .models import (
     ComplianceRow,
@@ -38,18 +44,35 @@ from .models import (
 
 api = APIRouter(prefix="/api")
 
+OBSERVED_MODELS = [NET_AGENT_ENDPOINT, LLM_ENDPOINT]
+
+
+def _actor(request: Request) -> str:
+    """Resolve the acting user from Databricks Apps forwarded identity headers."""
+    h = request.headers
+    return (h.get("X-Forwarded-Email") or h.get("X-Forwarded-Preferred-Username")
+            or h.get("X-Forwarded-User") or "network_ops")
+
 # SQL-safe catalog quoting (handles hyphens)
 _cat = f"`{UC_CATALOG}`" if UC_CATALOG else "`red_bricks_insurance`"
 
 
-def _execute_sql(query: str) -> list[dict]:
-    """Execute a SQL query via Statement Execution API and return rows as dicts."""
+def _execute_sql(query: str, params: list | None = None) -> list[dict]:
+    """Execute a SQL query via Statement Execution API and return rows as dicts.
+
+    `params` is a list of {name, value, type?} dicts bound as named SQL
+    parameters (:name) — use for any user-supplied value to avoid injection.
+    """
+    from databricks.sdk.service.sql import StatementParameterListItem
+
     w = WorkspaceClient()
-    resp = w.statement_execution.execute_statement(
-        warehouse_id=SQL_WAREHOUSE_ID,
-        statement=query,
-        wait_timeout="30s",
-    )
+    kwargs = {"warehouse_id": SQL_WAREHOUSE_ID, "statement": query, "wait_timeout": "30s"}
+    if params:
+        kwargs["parameters"] = [
+            StatementParameterListItem(name=p["name"], value=p["value"], type=p.get("type", "STRING"))
+            for p in params
+        ]
+    resp = w.statement_execution.execute_statement(**kwargs)
     if not resp.result or not resp.result.data_array:
         return []
     col_names = [
@@ -193,10 +216,13 @@ async def get_compliance(
     compliant_only: Optional[bool] = Query(None),
 ):
     filters = []
+    params: list[dict] = []
     if county:
-        filters.append(f"county_name = '{county}'")
+        filters.append("county_name = :county")
+        params.append({"name": "county", "value": county})
     if specialty:
-        filters.append(f"cms_specialty_type = '{specialty}'")
+        filters.append("cms_specialty_type = :specialty")
+        params.append({"name": "specialty", "value": specialty})
     if compliant_only is True:
         filters.append("is_compliant = TRUE")
     elif compliant_only is False:
@@ -207,7 +233,7 @@ async def get_compliance(
         SELECT * FROM {_cat}.network.gold_network_adequacy_compliance
         {where}
         ORDER BY pct_compliant ASC
-    """)
+    """, params)
     return [
         ComplianceRow(
             county_fips=r.get("county_fips") or "",
@@ -259,14 +285,18 @@ async def get_ghost_providers(
     flagged_only: bool = Query(True),
 ):
     filters = []
+    params: list[dict] = []
     if flagged_only:
         filters.append("is_ghost_flagged = TRUE")
     if severity:
-        filters.append(f"ghost_severity = '{severity}'")
+        filters.append("ghost_severity = :severity")
+        params.append({"name": "severity", "value": severity})
     if specialty:
-        filters.append(f"specialty = '{specialty}'")
+        filters.append("specialty = :specialty")
+        params.append({"name": "specialty", "value": specialty})
     if county:
-        filters.append(f"county = '{county}'")
+        filters.append("county = :county")
+        params.append({"name": "county", "value": county})
 
     where = f"WHERE {' AND '.join(filters)}" if filters else ""
     rows = await asyncio.to_thread(_execute_sql, f"""
@@ -276,7 +306,7 @@ async def get_ghost_providers(
             CASE ghost_severity WHEN 'High' THEN 1 WHEN 'Medium' THEN 2 ELSE 3 END,
             impact_members DESC
         LIMIT 200
-    """)
+    """, params)
     return [
         GhostProviderRow(
             npi=r.get("npi") or "",
@@ -704,59 +734,94 @@ async def get_geographic_compliance():
 
 
 # ---------------------------------------------------------------------------
-# Recruitment Workflow
+# Recruitment Workflow — persisted to a governed UC Delta table (read-only app
+# has no Lakebase; recruitment-pipeline state is written back to Unity Catalog
+# for traceability and cross-session/replica durability).
 # ---------------------------------------------------------------------------
 
-# In-memory recruitment status store (in production, this would be Lakebase)
-_recruitment_store: dict[str, RecruitmentRecord] = {}
+_RECRUIT_STATUS_TABLE = f"{_cat}.network.provider_recruitment_status"
+_VALID_STATUSES = {"Identified", "Contacted", "Interested", "Contracted", "Active"}
+
+
+def _recruitment_record_from_row(r: dict) -> "RecruitmentRecord":
+    return RecruitmentRecord(
+        npi=r.get("npi") or "",
+        specialty=r.get("specialty"),
+        county_name=r.get("county_name"),
+        status=r.get("status") or "Identified",
+        potential_savings=_safe_float(r.get("potential_savings")),
+        members_served=_safe_int(r.get("members_served")),
+        priority_score=_safe_float(r.get("priority_score")),
+        notes=r.get("notes"),
+        updated_at=str(r.get("updated_at") or ""),
+    )
 
 
 @api.get("/recruitment/status", response_model=list[RecruitmentRecord])
 async def get_recruitment_statuses():
-    """Return all tracked recruitment records."""
-    return list(_recruitment_store.values())
+    """Return all tracked recruitment records from the governed Delta table."""
+    rows = await asyncio.to_thread(_execute_sql, f"""
+        SELECT npi, specialty, county_name, status, potential_savings,
+               members_served, priority_score, notes, CAST(updated_at AS STRING) AS updated_at
+        FROM {_RECRUIT_STATUS_TABLE}
+        ORDER BY updated_at DESC
+    """)
+    return [_recruitment_record_from_row(r) for r in rows]
 
 
-@api.post("/recruitment/status", response_model=RecruitmentRecord)
-async def update_recruitment_status(update: RecruitmentStatusUpdate):
-    """Update recruitment status for a provider (create if not exists)."""
-    from datetime import datetime
+def _upsert_recruitment_status(update, actor: str) -> "RecruitmentRecord":
+    """Look up provider info + MERGE the recruitment status into the Delta table."""
+    from datetime import datetime, timezone
 
-    valid_statuses = {"Identified", "Contacted", "Interested", "Contracted", "Active"}
-    if update.status not in valid_statuses:
-        raise HTTPException(400, f"Invalid status. Must be one of: {valid_statuses}")
-
-    if update.npi in _recruitment_store:
-        record = _recruitment_store[update.npi]
-        record.status = update.status
-        if update.notes:
-            record.notes = update.notes
-        record.updated_at = datetime.utcnow().isoformat()
-    else:
-        # Look up provider info from recruitment targets
-        rows = await asyncio.to_thread(_execute_sql, f"""
-            SELECT specialty, county_name,
+    info_rows = _execute_sql(
+        f"""SELECT specialty, county_name,
                    ROUND(potential_savings, 0) AS potential_savings,
                    members_served,
                    ROUND(recruitment_priority_score, 0) AS priority_score
             FROM {_cat}.network.gold_provider_recruitment_targets
-            WHERE rendering_provider_npi = '{update.npi}'
-            LIMIT 1
-        """)
-        info = rows[0] if rows else {}
-        record = RecruitmentRecord(
-            npi=update.npi,
-            specialty=info.get("specialty"),
-            county_name=info.get("county_name"),
-            status=update.status,
-            potential_savings=_safe_float(info.get("potential_savings")),
-            members_served=_safe_int(info.get("members_served")),
-            priority_score=_safe_float(info.get("priority_score")),
-            notes=update.notes,
-            updated_at=datetime.utcnow().isoformat(),
-        )
-        _recruitment_store[update.npi] = record
-    return record
+            WHERE rendering_provider_npi = :npi LIMIT 1""",
+        [{"name": "npi", "value": update.npi}],
+    )
+    info = info_rows[0] if info_rows else {}
+    now = datetime.now(timezone.utc).isoformat()
+    params = [
+        {"name": "npi", "value": update.npi},
+        {"name": "specialty", "value": info.get("specialty") or ""},
+        {"name": "county", "value": info.get("county_name") or ""},
+        {"name": "status", "value": update.status},
+        {"name": "ps", "value": str(_safe_float(info.get("potential_savings"))), "type": "DOUBLE"},
+        {"name": "ms", "value": str(_safe_int(info.get("members_served"))), "type": "INT"},
+        {"name": "pri", "value": str(_safe_float(info.get("priority_score"))), "type": "DOUBLE"},
+        {"name": "notes", "value": update.notes or ""},
+        {"name": "actor", "value": actor},
+        {"name": "ts", "value": now, "type": "TIMESTAMP"},
+    ]
+    _execute_sql(
+        f"""MERGE INTO {_RECRUIT_STATUS_TABLE} t
+            USING (SELECT :npi AS npi) s ON t.npi = s.npi
+            WHEN MATCHED THEN UPDATE SET
+                status = :status, notes = :notes, updated_by = :actor, updated_at = :ts
+            WHEN NOT MATCHED THEN INSERT
+                (npi, specialty, county_name, status, potential_savings, members_served,
+                 priority_score, notes, updated_by, updated_at)
+                VALUES (:npi, :specialty, :county, :status, :ps, :ms, :pri, :notes, :actor, :ts)""",
+        params,
+    )
+    return RecruitmentRecord(
+        npi=update.npi, specialty=info.get("specialty"), county_name=info.get("county_name"),
+        status=update.status, potential_savings=_safe_float(info.get("potential_savings")),
+        members_served=_safe_int(info.get("members_served")),
+        priority_score=_safe_float(info.get("priority_score")),
+        notes=update.notes, updated_at=now,
+    )
+
+
+@api.post("/recruitment/status", response_model=RecruitmentRecord)
+async def update_recruitment_status(update: RecruitmentStatusUpdate, request: Request):
+    """Update recruitment status for a provider — persisted to the governed table."""
+    if update.status not in _VALID_STATUSES:
+        raise HTTPException(400, f"Invalid status. Must be one of: {_VALID_STATUSES}")
+    return await asyncio.to_thread(_upsert_recruitment_status, update, _actor(request))
 
 
 @api.post("/recruitment/outreach-letter", response_model=OutreachLetterResponse)
@@ -851,3 +916,115 @@ Red Bricks Insurance"""
 @api.post("/genie/ask", response_model=GenieResponseOut)
 async def genie_ask(question_in: GenieQuestionIn):
     return await asyncio.to_thread(ask_genie, question_in)
+
+
+# ---------------------------------------------------------------------------
+# Network Adequacy Agent + What-If Simulation
+# ---------------------------------------------------------------------------
+
+@api.post("/agent/chat/stream")
+async def agent_chat_stream(payload: dict):
+    """SSE tool-calling network agent — streams tool-progress then the answer."""
+    from .agent import stream_network_agent
+    message = payload.get("message", "")
+    history = payload.get("conversation_history") or None
+
+    async def event_source():
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+        _SENTINEL = object()
+
+        def _produce():
+            try:
+                for et, pl in stream_network_agent(message, history):
+                    loop.call_soon_threadsafe(queue.put_nowait, (et, pl))
+            except Exception as e:  # pragma: no cover
+                loop.call_soon_threadsafe(queue.put_nowait, ("error", {"message": str(e)}))
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
+
+        producer = loop.run_in_executor(None, _produce)
+        try:
+            while True:
+                item = await queue.get()
+                if item is _SENTINEL:
+                    break
+                et, pl = item
+                yield f"event: {et}\ndata: {json.dumps(pl, default=str)}\n\n"
+        finally:
+            await producer
+
+    return StreamingResponse(event_source(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@api.post("/simulate/recruitment")
+async def simulate_recruitment_endpoint(payload: dict):
+    """What-if network simulation: recompute county+specialty compliance if the
+    given OON provider NPIs are recruited in-network (geospatial recompute)."""
+    from .agent import simulate_recruitment
+    county = payload.get("county", "")
+    specialty = payload.get("specialty", "")
+    npis = payload.get("npis") or None
+    if not county or not specialty:
+        raise HTTPException(400, "county and specialty are required")
+    return await asyncio.to_thread(simulate_recruitment, county, specialty, npis)
+
+
+# ---------------------------------------------------------------------------
+# Observability
+# ---------------------------------------------------------------------------
+
+@api.get("/observability/traces")
+async def observability_traces():
+    spans_table = f"`{UC_CATALOG}`.`{UC_TRACE_SCHEMA}`.`{UC_TRACE_TABLE_PREFIX}_otel_spans`"
+    sql = f"""
+        SELECT trace_id, MIN(start_time_unix_nano) AS s, MAX(end_time_unix_nano) AS e,
+               COUNT(*) AS span_count,
+               CASE WHEN SUM(CASE WHEN status.code='STATUS_CODE_ERROR' THEN 1 ELSE 0 END)>0
+                    THEN 'ERROR' ELSE 'OK' END AS trace_status
+        FROM {spans_table} GROUP BY trace_id ORDER BY s DESC LIMIT 25
+    """
+    try:
+        rows = await asyncio.to_thread(_execute_sql, sql)
+        return {"traces": [{
+            "request_id": d.get("trace_id", ""),
+            "timestamp_ms": int(d.get("s") or 0) // 1_000_000,
+            "execution_time_ms": (int(d.get("e") or 0) - int(d.get("s") or 0)) // 1_000_000,
+            "status": d.get("trace_status", "UNKNOWN"),
+            "span_count": int(d.get("span_count") or 0),
+        } for d in rows]}
+    except Exception as e:
+        print(f"[observability] trace fetch error: {e}")
+        return {"traces": [], "error": str(e)}
+
+
+@api.get("/observability/costs")
+async def observability_costs():
+    endpoints = ", ".join(f"'{m}'" for m in OBSERVED_MODELS)
+    try:
+        try:
+            wid = WorkspaceClient().get_workspace_id()
+            wf = f"AND eu.workspace_id = '{wid}'" if wid else ""
+        except Exception:
+            wf = ""
+        rows = await asyncio.to_thread(_execute_sql, f"""
+            SELECT se.endpoint_name AS endpoint, COUNT(*) AS request_count,
+                   COALESCE(SUM(eu.input_token_count),0) AS total_input_tokens,
+                   COALESCE(SUM(eu.output_token_count),0) AS total_output_tokens,
+                   CASE se.endpoint_name
+                     WHEN 'databricks-llama-4-maverick'
+                       THEN ROUND(SUM(eu.input_token_count)*0.40/1000000 + SUM(eu.output_token_count)*1.60/1000000, 4)
+                     WHEN 'databricks-claude-haiku-4-5'
+                       THEN ROUND(SUM(eu.input_token_count)*1.00/1000000 + SUM(eu.output_token_count)*5.00/1000000, 4)
+                     ELSE 0 END AS estimated_cost_usd
+            FROM system.serving.endpoint_usage eu
+            JOIN system.serving.served_entities se ON eu.served_entity_id = se.served_entity_id
+            WHERE se.endpoint_name IN ({endpoints})
+              AND eu.request_time >= DATE_SUB(CURRENT_TIMESTAMP(), 30) {wf}
+            GROUP BY se.endpoint_name ORDER BY request_count DESC
+        """)
+        return {"costs": rows}
+    except Exception as e:
+        print(f"[observability] cost query error: {e}")
+        return {"costs": [], "error": str(e)}

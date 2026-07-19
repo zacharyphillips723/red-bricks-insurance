@@ -19,3 +19,24 @@ resources:
             value: ${var.catalog}
           - name: UC_SCHEMA
             value: network
+          - name: LLM_ENDPOINT
+            value: databricks-llama-4-maverick
+          - name: NET_AGENT_ENDPOINT
+            value: databricks-claude-haiku-4-5
+          - name: MLFLOW_TRACKING_URI
+            value: databricks
+          - name: MLFLOW_UC_EXPERIMENT
+            value: /Shared/red-bricks-network-agent-traces-uc
+          - name: UC_TRACE_SCHEMA
+            value: analytics
+          - name: UC_TRACE_TABLE_PREFIX
+            value: network_agent
+      resources:
+        - name: llm-endpoint
+          serving_endpoint:
+            name: databricks-llama-4-maverick
+            permission: CAN_QUERY
+        - name: net-agent-endpoint
+          serving_endpoint:
+            name: databricks-claude-haiku-4-5
+            permission: CAN_QUERY

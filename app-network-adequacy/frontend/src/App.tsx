@@ -7,6 +7,8 @@ import { LeakagePage } from "@/pages/LeakagePage";
 import { GapsRecruitmentPage } from "@/pages/GapsRecruitmentPage";
 import { GeniePage } from "@/pages/GeniePage";
 import { MapPage } from "@/pages/MapPage";
+import { NetworkAgentPage } from "@/pages/NetworkAgentPage";
+import { ObservabilityPage } from "@/pages/ObservabilityPage";
 import { useHashRouter } from "@/lib/useHashRouter";
 
 export default function App() {
@@ -28,6 +30,10 @@ export default function App() {
         return <GapsRecruitmentPage />;
       case "genie":
         return <GeniePage />;
+      case "agent":
+        return <NetworkAgentPage />;
+      case "observability":
+        return <ObservabilityPage />;
       default:
         return <Dashboard onNavigate={setPage} />;
     }

@@ -1511,6 +1511,73 @@ else:
 
 # COMMAND ----------
 
+print("=" * 60)
+print("STEP 3b-5: Provision MLflow UC Trace Storage + write-back table (Network Adequacy Agent)")
+print("=" * 60)
+
+# In sync with app-network-adequacy/backend/env_config.py + resources/app_network_adequacy.yml.
+NET_TRACE_EXPERIMENT = "/Shared/red-bricks-network-agent-traces-uc"
+NET_TRACE_SCHEMA = "analytics"
+NET_TRACE_TABLE_PREFIX = "network_agent"
+
+if not warehouse_id:
+    print("  Skipped — no warehouse_id available.")
+else:
+    try:
+        import os as _os
+        import mlflow
+        from mlflow.entities import UnityCatalog
+
+        mlflow.set_tracking_uri("databricks")
+        _os.environ["MLFLOW_TRACING_SQL_WAREHOUSE_ID"] = warehouse_id
+
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog_sql}.{NET_TRACE_SCHEMA}")
+
+        # Recruitment-pipeline write-back table (read-only app persists state to UC).
+        spark.sql(f"""
+            CREATE TABLE IF NOT EXISTS {catalog_sql}.network.provider_recruitment_status (
+                npi STRING, specialty STRING, county_name STRING, status STRING,
+                potential_savings DOUBLE, members_served INT, priority_score DOUBLE,
+                notes STRING, updated_by STRING, updated_at TIMESTAMP
+            )
+            COMMENT 'Provider recruitment pipeline status, written back by the Network Adequacy app (read-only app persists workflow state to governed UC).'
+        """)
+
+        exp = mlflow.set_experiment(
+            NET_TRACE_EXPERIMENT,
+            trace_location=UnityCatalog(
+                catalog_name=catalog, schema_name=NET_TRACE_SCHEMA, table_prefix=NET_TRACE_TABLE_PREFIX,
+            ),
+        )
+        print(f"  Experiment linked: {NET_TRACE_EXPERIMENT} (ID: {exp.experiment_id})")
+
+        _existing = {
+            r["tableName"] for r in spark.sql(
+                f"SHOW TABLES IN {catalog_sql}.{NET_TRACE_SCHEMA} LIKE '{NET_TRACE_TABLE_PREFIX}_otel_*'"
+            ).collect()
+        }
+        print(f"  OTel tables: {sorted(_existing)}")
+
+        if app_sps:
+            for _sp in app_sps:
+                _sp_name = _sp["sp_name"]
+                for _tbl in sorted(_existing):
+                    try:
+                        spark.sql(f"GRANT SELECT, MODIFY ON TABLE {catalog_sql}.{NET_TRACE_SCHEMA}.`{_tbl}` TO `{_sp_name}`")
+                    except Exception as _ge:
+                        print(f"    {_sp_name} on {_tbl}: {_ge}")
+                try:
+                    spark.sql(f"GRANT SELECT, MODIFY ON TABLE {catalog_sql}.network.provider_recruitment_status TO `{_sp_name}`")
+                except Exception as _ge:
+                    print(f"    {_sp_name} on provider_recruitment_status: {_ge}")
+            print(f"    Trace + recruitment write-back grants applied to {len(app_sps)} SP(s)")
+    except Exception as _te:
+        import traceback as _tb
+        print(f"  WARNING: Network Adequacy UC provisioning failed: {_te}")
+        _tb.print_exc()
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Step 4: Create Empty ML Predictions Table
 

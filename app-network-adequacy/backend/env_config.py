@@ -90,7 +90,19 @@ GENIE_SPACE_ID = _genie if _genie not in _SENTINEL else _auto_detect_genie_space
 
 LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT") or "databricks-llama-4-maverick"
 
+# Network agent endpoint — Claude Haiku 4.5 for fast tool-calling.
+NET_AGENT_ENDPOINT = os.environ.get("NET_AGENT_ENDPOINT") or "databricks-claude-haiku-4-5"
+
+# MLflow UC trace storage.
+UC_TRACE_SCHEMA = os.environ.get("UC_TRACE_SCHEMA", "analytics")
+UC_TRACE_TABLE_PREFIX = os.environ.get("UC_TRACE_TABLE_PREFIX", "network_agent")
+MLFLOW_UC_EXPERIMENT = os.environ.get(
+    "MLFLOW_UC_EXPERIMENT", "/Shared/red-bricks-network-agent-traces-uc"
+)
+
 print(f"[env_config] SQL_WAREHOUSE_ID={SQL_WAREHOUSE_ID}")
 print(f"[env_config] UC_CATALOG={UC_CATALOG}")
 print(f"[env_config] GENIE_SPACE_ID={GENIE_SPACE_ID}")
 print(f"[env_config] LLM_ENDPOINT={LLM_ENDPOINT}")
+print(f"[env_config] NET_AGENT_ENDPOINT={NET_AGENT_ENDPOINT}")
+print(f"[env_config] MLFLOW_UC_EXPERIMENT={MLFLOW_UC_EXPERIMENT}")
