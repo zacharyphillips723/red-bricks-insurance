@@ -35,6 +35,12 @@ resources:
             value: care_agent
           - name: MLFLOW_UC_EXPERIMENT
             value: /Shared/red-bricks-care-agent-traces-uc
+          # Readmission risk: batch scores read from the gold table; live re-scoring
+          # calls the readmission-scorer endpoint (created + granted by the demo job).
+          - name: READMISSION_ENDPOINT
+            value: readmission-scorer
+          - name: READMISSION_LIVE_SCORING
+            value: "true"
       resources:
         - name: llm-endpoint
           serving_endpoint:

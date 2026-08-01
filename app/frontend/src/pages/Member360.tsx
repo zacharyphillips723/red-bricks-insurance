@@ -22,6 +22,8 @@ import {
   Plus,
   Clock,
   Home,
+  Activity,
+  RefreshCw,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
@@ -32,6 +34,7 @@ import {
   type CaseNote,
   type ConversationListItem,
   type MemberSdoh,
+  type MemberReadmissionRisk,
 } from "@/lib/api";
 
 const mdComponents: Components = {
@@ -56,6 +59,7 @@ const mdComponents: Components = {
 const SUGGESTED_QUESTIONS = [
   "Summarize this member's care history",
   "What are the key risk factors?",
+  "Why is this member at risk for readmission?",
   "Are there any abnormal lab values to be concerned about?",
   "What HEDIS gaps need attention?",
   "Summarize recent claims activity",
@@ -126,6 +130,114 @@ function RafGauge({ score }: { score: number }) {
 }
 
 // ---------------------------------------------------------------------------
+// Readmission risk card — 30-day inpatient readmission probability + drivers
+// ---------------------------------------------------------------------------
+const READMIT_TIER_STYLES: Record<string, { bar: string; text: string; chip: string }> = {
+  "Very High": { bar: "#dc2626", text: "text-red-700", chip: "bg-red-100 text-red-800 border-red-200" },
+  High: { bar: "#ea580c", text: "text-orange-700", chip: "bg-orange-100 text-orange-800 border-orange-200" },
+  Moderate: { bar: "#ca8a04", text: "text-yellow-700", chip: "bg-yellow-100 text-yellow-800 border-yellow-200" },
+  Low: { bar: "#16a34a", text: "text-green-700", chip: "bg-green-100 text-green-800 border-green-200" },
+};
+
+function ReadmissionCard({
+  risk,
+  onRescore,
+  rescoring,
+}: {
+  risk: MemberReadmissionRisk | null;
+  onRescore?: () => void;
+  rescoring?: boolean;
+}) {
+  const styles = READMIT_TIER_STYLES[risk?.readmission_risk_tier ?? ""] || {
+    bar: "#6b7280",
+    text: "text-gray-600",
+    chip: "bg-gray-100 text-gray-600 border-gray-200",
+  };
+  const pct = risk?.readmission_risk_score != null ? Math.round(risk.readmission_risk_score * 100) : null;
+
+  return (
+    <div className="card p-5">
+      <div className="flex items-center justify-between mb-3">
+        <h4 className="text-sm font-semibold text-databricks-dark flex items-center gap-2">
+          <Activity className="w-4 h-4 text-databricks-red" /> 30-Day Readmission Risk
+        </h4>
+        {onRescore && risk?.has_score && (
+          <button
+            onClick={onRescore}
+            disabled={rescoring}
+            className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-databricks-red disabled:opacity-50"
+            title="Re-score live against the model serving endpoint"
+          >
+            <RefreshCw className={`w-3 h-3 ${rescoring ? "animate-spin" : ""}`} />
+            {rescoring ? "Scoring..." : "Re-score"}
+          </button>
+        )}
+      </div>
+
+      {!risk?.has_score ? (
+        <p className="text-sm text-gray-400">
+          No recent inpatient stay — no readmission score available for this member.
+        </p>
+      ) : (
+        <>
+          <div className="flex items-baseline gap-2 mb-2">
+            <span className={`text-3xl font-bold ${styles.text}`}>{pct}%</span>
+            <span
+              className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${styles.chip}`}
+            >
+              {risk.readmission_risk_tier}
+            </span>
+            {risk.scored_live && (
+              <span className="text-[10px] uppercase tracking-wide text-databricks-red font-semibold">Live</span>
+            )}
+          </div>
+          <div className="h-2 bg-gray-200 rounded-full overflow-hidden mb-3">
+            <div
+              className="h-full rounded-full transition-all"
+              style={{ width: `${pct}%`, backgroundColor: styles.bar }}
+            />
+          </div>
+
+          {risk.top_risk_factors.length > 0 && (
+            <div className="mb-3">
+              <span className="text-gray-400 text-xs">Top contributing factors</span>
+              <ul className="mt-1 space-y-1">
+                {risk.top_risk_factors.map((f) => (
+                  <li key={f} className="flex items-center gap-1.5 text-xs text-gray-700">
+                    <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: styles.bar }} />
+                    {f}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-3 text-xs text-gray-500 border-t border-gray-100 pt-2">
+            <div>
+              <span className="block text-gray-400">Index stay</span>
+              <span className="font-medium text-gray-700">
+                {risk.admit_reason || "—"}
+                {risk.length_of_stay_days != null ? ` · ${risk.length_of_stay_days} day LOS` : ""}
+              </span>
+            </div>
+            <div>
+              <span className="block text-gray-400">Prior admits (180d)</span>
+              <span className="font-medium text-gray-700">{risk.prior_admits_180d ?? "—"}</span>
+            </div>
+          </div>
+          {risk.model_version && (
+            <p className="mt-2 text-[10px] text-gray-400">
+              Model v{risk.model_version}
+              {risk.scored_at ? ` · scored ${risk.scored_at.slice(0, 10)}` : ""}
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 export function Member360() {
@@ -139,6 +251,8 @@ export function Member360() {
   const [member, setMember] = useState<Member360Detail | null>(null);
   const [caseNotes, setCaseNotes] = useState<CaseNote[]>([]);
   const [sdoh, setSdoh] = useState<MemberSdoh | null>(null);
+  const [readmission, setReadmission] = useState<MemberReadmissionRisk | null>(null);
+  const [rescoring, setRescoring] = useState(false);
   const [memberLoading, setMemberLoading] = useState(false);
 
   // Agent chat state
@@ -192,21 +306,38 @@ export function Member360() {
     setConversationId(null);
     setFeedbackGiven({});
     setSdoh(null);
+    setReadmission(null);
     try {
-      const [profile, notes, convos, sdohData] = await Promise.all([
+      const [profile, notes, convos, sdohData, readmitData] = await Promise.all([
         api.getMember360(memberId),
         api.getCaseNotes(memberId),
         api.listConversations(memberId).catch(() => []),
         api.getMemberSdoh(memberId).catch(() => null),
+        api.getMemberReadmission(memberId).catch(() => null),
       ]);
       setMember(profile);
       setCaseNotes(notes);
       setConversations(convos);
       setSdoh(sdohData);
+      setReadmission(readmitData);
     } catch (err) {
       console.error("Failed to load member:", err);
     } finally {
       setMemberLoading(false);
+    }
+  };
+
+  // Live re-score against the readmission serving endpoint
+  const handleRescore = async () => {
+    if (!member || rescoring) return;
+    setRescoring(true);
+    try {
+      const fresh = await api.rescoreMemberReadmission(member.member_id);
+      setReadmission(fresh);
+    } catch (err) {
+      console.error("Failed to re-score readmission risk:", err);
+    } finally {
+      setRescoring(false);
     }
   };
 
@@ -499,6 +630,9 @@ export function Member360() {
                   </div>
                 </div>
               </div>
+
+              {/* Readmission Risk */}
+              <ReadmissionCard risk={readmission} onRescore={handleRescore} rescoring={rescoring} />
 
               {/* Claims Summary */}
               <div className="card p-5">

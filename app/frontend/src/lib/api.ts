@@ -240,6 +240,21 @@ export interface MemberSdoh {
   composite_sdoh_risk_score: number | null;
 }
 
+export interface MemberReadmissionRisk {
+  member_id: string;
+  readmission_risk_score: number | null; // 0-1 probability
+  readmission_risk_tier: string | null;  // Low | Moderate | High | Very High
+  top_risk_factors: string[];
+  admit_reason: string | null;
+  length_of_stay_days: number | null;
+  prior_admits_180d: number | null;
+  discharge_timestamp: string | null;
+  model_version: string | null;
+  scored_at: string | null;
+  scored_live: boolean;
+  has_score: boolean;
+}
+
 export interface NextBestAction {
   action: string;
   priority: string;
@@ -457,6 +472,15 @@ export const api = {
   // SDOH
   getMemberSdoh: (memberId: string) =>
     fetchApi<MemberSdoh>(`/members/${memberId}/sdoh`),
+
+  // Readmission Risk
+  getMemberReadmission: (memberId: string) =>
+    fetchApi<MemberReadmissionRisk>(`/members/${memberId}/readmission`),
+
+  rescoreMemberReadmission: (memberId: string) =>
+    fetchApi<MemberReadmissionRisk>(`/members/${memberId}/readmission/rescore`, {
+      method: "POST",
+    }),
 
   // Next Best Actions
   getNextBestActions: (alertId: string) =>

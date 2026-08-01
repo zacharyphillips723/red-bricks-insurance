@@ -13,7 +13,10 @@ import traceback
 
 from .database import db
 from .genie import ask_genie
-from .agent import search_members, get_member_360, get_case_notes, query_member_agent, get_member_sdoh
+from .agent import (
+    search_members, get_member_360, get_case_notes, query_member_agent, get_member_sdoh,
+    get_member_readmission, rescore_member_readmission,
+)
 from .agent_graph import query_supervisor_agent, stream_supervisor_agent
 from .websocket import notifications
 from .identity import UserIdentity, get_current_user
@@ -46,6 +49,7 @@ from .models import (
     GenieResponseOut,
     Member360Out,
     MemberListOut,
+    MemberReadmissionOut,
     MemberSdohOut,
     NextBestActionOut,
     OutreachDraftIn,
@@ -728,6 +732,66 @@ async def get_member_sdoh_endpoint(member_id: str):
     if isinstance(sdoh.get("composite_sdoh_risk_score"), str):
         sdoh["composite_sdoh_risk_score"] = float(sdoh["composite_sdoh_risk_score"])
     return MemberSdohOut(**sdoh)
+
+
+# ===================================================================
+# Readmission Risk (ML model)
+# ===================================================================
+
+def _coerce_readmission(raw: dict) -> MemberReadmissionOut:
+    """Normalize a gold-table readmission row into the API model."""
+    out: dict = {"member_id": raw.get("member_id"), "has_score": True}
+    for num in ("readmission_risk_score", "length_of_stay_days", "prior_admits_180d"):
+        val = raw.get(num)
+        out[num] = float(val) if val not in (None, "") else None
+    out["readmission_risk_tier"] = raw.get("readmission_risk_tier")
+    out["admit_reason"] = raw.get("admit_reason")
+    out["discharge_timestamp"] = raw.get("discharge_timestamp")
+    out["model_version"] = raw.get("model_version")
+    out["scored_at"] = raw.get("scored_at")
+
+    # top_risk_factors comes back as a JSON/array string from the SQL layer.
+    factors = raw.get("top_risk_factors")
+    if isinstance(factors, str):
+        try:
+            factors = json.loads(factors)
+        except (ValueError, TypeError):
+            factors = [f.strip() for f in factors.strip("[]").split(",") if f.strip()]
+    out["top_risk_factors"] = factors or []
+    return MemberReadmissionOut(**out)
+
+
+@api.get("/members/{member_id}/readmission", response_model=MemberReadmissionOut, operation_id="getMemberReadmission")
+async def get_member_readmission_endpoint(member_id: str):
+    """Get the batch-scored 30-day inpatient readmission risk for a member."""
+    risk = await asyncio.to_thread(get_member_readmission, member_id)
+    if not risk:
+        # No index inpatient stay in the observed window — no score to show.
+        return MemberReadmissionOut(member_id=member_id, has_score=False)
+    return _coerce_readmission(risk)
+
+
+@api.post("/members/{member_id}/readmission/rescore", response_model=MemberReadmissionOut, operation_id="rescoreMemberReadmission")
+async def rescore_member_readmission_endpoint(member_id: str):
+    """Live re-score a member against the readmission serving endpoint.
+
+    Falls back to the batch-scored gold value when live scoring is disabled or the
+    endpoint is unavailable, so the UI always gets a usable response.
+    """
+    live = await asyncio.to_thread(rescore_member_readmission, member_id)
+    if live:
+        # Merge live score over the stored context (factors, LOS, etc. stay from gold).
+        stored = await asyncio.to_thread(get_member_readmission, member_id)
+        merged = _coerce_readmission(stored) if stored else MemberReadmissionOut(member_id=member_id, has_score=True)
+        merged.readmission_risk_score = live["readmission_risk_score"]
+        merged.readmission_risk_tier = live["readmission_risk_tier"]
+        merged.scored_live = True
+        return merged
+    # Live scoring off/unavailable — return the current batch score.
+    stored = await asyncio.to_thread(get_member_readmission, member_id)
+    if not stored:
+        return MemberReadmissionOut(member_id=member_id, has_score=False)
+    return _coerce_readmission(stored)
 
 
 # ===================================================================

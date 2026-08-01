@@ -13,6 +13,7 @@ Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB
   - [Metric Views (Governed Semantic Layer)](#metric-views-governed-semantic-layer)
   - [Clinical Pipeline (Synthea → dbignite → SDP)](#clinical-pipeline-synthea--dbignite--sdp)
 - [AI Agents](#ai-agents)
+- [Readmission Risk Model](#readmission-risk-model)
 - [Databricks Apps](#databricks-apps)
   - [Command Center](#command-center-app)
   - [Group Reporting Portal](#group-reporting-portal-app-group-reporting)
@@ -108,7 +109,7 @@ Healthcare insurance company simulation — modular Databricks Asset Bundle (DAB
 
 ## Pipeline DAG
 
-The full demo job (`red_bricks_full_demo`) orchestrates 43 tasks:
+The full demo job (`red_bricks_full_demo`) orchestrates 47 tasks:
 
 ```
 synthea_generation (ROOT — generates FHIR bundles + extracts demographics + assigns MBR IDs)
@@ -116,7 +117,7 @@ synthea_generation (ROOT — generates FHIR bundles + extracts demographics + as
       → [members, providers, claims, enrollment, benefits, underwriting,
          documents, risk_adjustment, fwa, prior_auth, care_management pipelines]
       → network_adequacy_pipeline (depends on data_generation + providers + members + claims)
-      → seed_adt_feed → adt_pipeline (ADT event stream via Autoloader)
+      → seed_adt_feed (also emits one-time readmission episode backfill) → adt_pipeline (ADT event stream via Autoloader)
       → parse_fhir_with_dbignite (reads raw synthea_raw/fhir/, writes crosswalk Delta tables)
           → clinical_pipeline (bronze.sql JOINs crosswalk for MBR IDs + NPIs)
   → build_member_months (depends on members_pipeline)
@@ -125,6 +126,8 @@ synthea_generation (ROOT — generates FHIR bundles + extracts demographics + as
       → create_metric_views (governed semantic layer + FWA risk metrics)
       → build_pricing_factors (governed UC rate-factor table for the underwriting rate build-up)
   → train_fwa_model (depends on fwa_pipeline + gold_analytics — XGBoost fraud scorer)
+  → train_readmission_model (depends on adt_pipeline + gold_analytics — XGBoost 30-day readmission scorer + batch scores gold_member_readmission_risk)
+      → deploy_readmission_endpoint (creates readmission-scorer endpoint, waits until READY, enables inference tables)
   → setup_medical_policy_vs (depends on data_generation + prior_auth_pipeline — medical policy Vector Search index for FWA agent RAG)
   → setup_ai_gateway (ROOT — AI Gateway external model endpoints, runs in parallel with no dependencies)
   → train_pa_model (depends on prior_auth_pipeline — XGBoost 3-tier auto-adjudication model)
@@ -141,7 +144,7 @@ synthea_generation (ROOT — generates FHIR bundles + extracts demographics + as
           → evaluate_fwa_agent (depends on deploy_fwa_agent + setup_ai_gateway — multi-model FWA agent evaluation across AI Gateway endpoints)
               → materialize_traces (writes MLflow traces to Unity Catalog Delta tables for SQL queryability)
   → setup_uc_governance (depends on gold_analytics + members — row filters, column masks on PHI tables)
-  → bootstrap_workspace (depends on gold_analytics + create_metric_views + create_uc_tools + fwa_pipeline + deploy_fwa_agent + network_adequacy_pipeline + prior_auth_pipeline + setup_uc_governance)
+  → bootstrap_workspace (depends on gold_analytics + create_metric_views + create_uc_tools + fwa_pipeline + deploy_fwa_agent + deploy_readmission_endpoint + network_adequacy_pipeline + prior_auth_pipeline + setup_uc_governance)
       — Creates Lakebase instances, applies UC/warehouse grants for app SPs, seeds operational data,
         seeds PA reviewer staff and review queue, creates Genie spaces (including Network Analytics)
       → deploy_app_source (deploys source code + starts compute for all 6 apps)
@@ -227,6 +230,8 @@ Each domain has its own SDP pipeline with bronze → silver → gold tables:
 
 **Member 360:** `gold_member_360` (unified member view joining clinical, claims, enrollment, risk)
 
+**Readmission Risk:** `gold_member_readmission_risk` (per-member 30-day readmission probability, tier, and SHAP top factors — written by the readmission model). Feature source: `adt.gold_readmission_features` (one row per index inpatient stay with the 30-day label). See [Readmission Risk Model](#readmission-risk-model)
+
 **FWA Analytics:** `gold_fwa_network_analysis` (provider referral ring detection), `gold_fwa_member_risk` (member-level fraud indicators: doctor shopping, pharmacy abuse), `gold_fwa_ai_classification` (AI-generated investigation narratives for top signals), `gold_fwa_model_scores` (AutoML model batch scoring of all claims)
 
 **ML Models:**
@@ -234,6 +239,7 @@ Each domain has its own SDP pipeline with bronze → silver → gold tables:
 - **AI Gateway** — External model endpoints provisioned by `setup_ai_gateway.py` for multi-model agent evaluation. Routes to GPT, Claude, and Gemini via Databricks AI Gateway with usage tracking and inference table logging. Used by `evaluate_fwa_agent.py` for cross-model comparison.
 - **MLflow Trace Materialization** — `materialize_traces.py` exports MLflow trace data to Unity Catalog Delta tables (`analytics.materialized_traces`) for SQL-queryable observability, powering the Agent Observability dashboard and FWA app Observability page.
 - **PA Auto-Adjudication** — XGBoost 3-class classifier (`pa_adjudication_model`) for Tier 2 ML-based PA determinations (approve/deny/review). Trained with stratified CV, registered in Unity Catalog. Includes MLflow governance: bias monitoring (disparate impact by LOB, urgency, service type), drift detection (PSI + KS test), and feature importance logging. See `train_pa_model.py` and `pa_model_governance.py`.
+- **Readmission Risk Scorer** — XGBoost 30-day inpatient readmission classifier (`readmission_scorer`), trained on ADT index-stay features joined with member risk (RAF/HCC/SDOH/age). Registered in Unity Catalog (`@champion`), served via the `readmission-scorer` endpoint (created + waited-on by a dedicated job task), batch-scored to `analytics.gold_member_readmission_risk`. SHAP drives both a global summary plot and per-member top-factor explanations shown in the app. See [Readmission Risk Model](#readmission-risk-model).
 
 ### Metric Views (Governed Semantic Layer)
 
@@ -273,6 +279,31 @@ Six agents are deployed and registered in Unity Catalog via MLflow:
 
 All agents are evaluated with `evaluate_agents.py`. The FWA Investigation and PA Review agents use multi-turn tool-calling patterns — the LLM autonomously composes SQL queries against allowed Unity Catalog schemas, retrieves data, and synthesizes findings. The Sales Coach supports intent-based modes: full briefing ("prepare me for..."), renewal focus ("why rate increase"), care management ("what programs can I offer"), and negotiation roleplay ("simulate a renewal negotiation").
 
+## Readmission Risk Model
+
+A 30-day inpatient readmission risk model, surfaced in the Command Center app on the **Member 360** (full card with SHAP-derived contributing factors + live "Re-score" button) and **Alert Detail** (compact risk badge) pages. Full MLOps lifecycle, deployed automatically by the demo job.
+
+**Pipeline (job task order):**
+
+| Step | Task / File | What it does |
+|------|-------------|--------------|
+| 1. Data | `generate_adt_feed.py` (`generate_episodes=true`) | One-time backfill of member-linked ADT episodes (index admit → discharge → optional readmit) with a feature-correlated 30-day label. Flows through the same Autoloader → bronze/silver ADT path as the live feed. |
+| 2. Features | `adt/gold.sql` → `gold_readmission_features` | One row per index inpatient stay: LOS, discharge disposition, prior 180-day admits, and the forward-looking `readmitted_30d` label (fully observed — index discharges are ≥45 days in the past). |
+| 3. Train | `train_readmission_model.py` | XGBoost + MLflow + Feature Store (`readmission_training_features`, PK `index_admit_id`). Joins member RAF/HCC/SDOH/age. Registers `analytics.readmission_scorer@champion`, batch-scores `gold_member_readmission_risk`, logs a SHAP summary plot + per-member top-factor explanations. |
+| 4. Serve | `deploy_readmission_endpoint.py` | Creates the `readmission-scorer` endpoint and **polls until READY** (own task, off the training critical path; honest completion). Enables inference tables via the AI Gateway API after READY. |
+| 5. Grant | `bootstrap_workspace.py` | Grants app service principals `CAN_QUERY` on the ready endpoint. |
+
+**Key design decisions:**
+
+- **No `scale_pos_weight`** (unlike the FWA fraud scorer). The readmission base rate (~20%) is only mildly imbalanced; rebalancing de-calibrates predicted probabilities, and the app's risk tiers (Very High ≥0.40, High ≥0.25, Moderate ≥0.12, else Low) assume calibrated output.
+- **Endpoint is a separate, waited-on task.** Provisioning takes 10-20 min; a fire-and-forget `create()` would report false success while the endpoint is still `PROVISIONING`. The deploy task's completion truthfully means "queryable."
+- **Batch table is the default read path.** The app reads `gold_member_readmission_risk` and works fully (and cheaply) without the endpoint. The live endpoint powers only the optional "Re-score" button, gated by `READMISSION_LIVE_SCORING`. Set `deploy_endpoint="false"` on the deploy task to skip the endpoint entirely.
+- Endpoint created **without** `AutoCaptureConfigInput` (deprecated — blocks the create call); inference tables enabled post-READY via AI Gateway.
+
+**App integration:** `GET /members/{id}/readmission` (batch) and `POST /members/{id}/readmission/rescore` (live) in `app/backend/router.py`; env vars `READMISSION_ENDPOINT` + `READMISSION_LIVE_SCORING` in `resources/app.yml`.
+
+**Deploy note:** because the ADT data generator changed, the first deploy after adding this feature must regenerate ADT data (the Synthea early-exit still saves ~40 min). Re-running `red_bricks_full_demo` handles it end-to-end.
+
 ## Databricks Apps
 
 ### Command Center (`app/`)
@@ -286,7 +317,8 @@ Clinical-focused application for care management teams:
   - **Dashboard** — Real-time KPIs (active alerts, critical count, open cases, avg risk score), alert queue with filters, population health summary cards
   - **Alert Queue** — Filterable/sortable alerts with risk tier, status, assignment tracking
   - **Alert Detail** — Full alert view with care manager assignment, status workflow, clinical context
-  - **Member 360** — Unified member view (demographics, clinical summary, claims, care gaps, risk factors, multi-turn agent chat with streaming responses)
+  - **Member 360** — Unified member view (demographics, clinical summary, claims, care gaps, risk factors, multi-turn agent chat with streaming responses). Includes a **30-Day Readmission Risk** card: probability gauge, tier, SHAP-derived top contributing factors, and a live "Re-score" button that calls the `readmission-scorer` serving endpoint
+  - **Readmission risk** — surfaced on Member 360 (full card) and Alert Detail (compact badge). Batch scores are read from `analytics.gold_member_readmission_risk`; the optional live re-score calls the serving endpoint. See [Readmission Risk Model](#readmission-risk-model)
   - **Care Plan** — AI-generated care plans with goals, interventions, milestones; every plan is written back to a governed UC Delta table (`care_management.care_plans`) for lineage and audit, with per-member history surfaced in-app
   - **Outreach Draft** — AI-generated personalized outreach scripts (phone, SMS, email) based on member profile and preferred communication; SMS channel enforces PHI-free messaging
   - **Cohort Builder** — Population cohort definition with demographic, clinical, and utilization filters; cohort analytics; save/load named cohorts to Lakebase. All filter values bound as SQL parameters (`StatementParameterListItem`) — no string interpolation
@@ -954,6 +986,8 @@ The full demo job uses `train_fwa_model.py` (XGBoost) by default.
 **Note:** Both FWA notebooks cast all feature columns to `float64` before inference (`inference_pd[feature_cols].astype("float64")`). This is required because MLflow's schema enforcement rejects integer columns (e.g., `member_total_claims` as int64) when the model signature specifies double.
 
 **PA Auto-Adjudication Model** — `train_pa_model.py` trains a 3-class XGBoost classifier (approve/deny/review) for Tier 2 ML-based PA determinations. Features include service type, urgency, LOB, clinical indicators, and turnaround metrics. The model is registered in Unity Catalog as `{catalog}.prior_auth.pa_adjudication_model`. SHAP explainability is attempted with fallback to XGBoost native feature importance (XGBoost 2.x compatibility). Followed by `pa_model_governance.py` which runs bias monitoring (disparate impact ratios by LOB, urgency, service type), drift detection (PSI + KS test), and logs all governance checks to MLflow.
+
+**Readmission Risk Model** — `train_readmission_model.py` trains an XGBoost 30-day inpatient readmission classifier from `adt.gold_readmission_features` joined with member RAF/HCC/SDOH/age, registers `{catalog}.analytics.readmission_scorer@champion`, and batch-scores `analytics.gold_member_readmission_risk`. **Unlike the FWA scorer, it does NOT use `scale_pos_weight`** — the readmission base rate (~20%) is only mildly imbalanced, so rebalancing would de-calibrate the predicted probabilities that the app's risk tiers depend on. See the [Readmission Risk Model](#readmission-risk-model) section for the full pipeline.
 
 ### 4. App Environment Variables
 

@@ -145,21 +145,15 @@ resources:
             full_refresh: true
 
         # Step 2h: Seed initial ADT events so Autoloader has data for schema inference
-        - task_key: seed_adt_feed
-          depends_on:
-            - task_key: data_generation
-            - task_key: setup_lakebase
-          notebook_task:
-            notebook_path: ../src/notebooks/generate_adt_feed.py
-            base_parameters:
-              catalog: ${var.catalog}
-              events_per_batch: "50"
-              lakebase_project_id: ${var.lakebase_project_id}
-          environment_key: bootstrap_env
-
+        # NOTE: the former `seed_adt_feed` serverless notebook task was REMOVED.
+        # It intermittently hung at serverless environment attach (exec_ms=0, no logs),
+        # blocking the entire ADT/readmission branch. ADT event generation (live feed +
+        # readmission episode backfill) now happens inside `data_generation` on reliable
+        # default compute; Lakebase alert seeding is owned by bootstrap_workspace. The ADT
+        # pipeline ingests the JSON that data_generation drops into the raw volume.
         - task_key: adt_pipeline
           depends_on:
-            - task_key: seed_adt_feed
+            - task_key: data_generation
           pipeline_task:
             pipeline_id: ${resources.pipelines.adt_pipeline.id}
             full_refresh: true
@@ -293,6 +287,38 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
           environment_key: ml_training_env
+
+        # Step 6c-ii: Train 30-day inpatient readmission risk model with XGBoost.
+        # Reads the ADT gold_readmission_features index-stay table and joins member
+        # risk (RAF/HCC/SDOH); registers @champion, writes gold_member_readmission_risk,
+        # and creates the readmission-scorer serving endpoint (zero-intervention).
+        - task_key: train_readmission_model
+          depends_on:
+            - task_key: adt_pipeline
+            - task_key: gold_analytics_pipeline
+          notebook_task:
+            notebook_path: ../src/notebooks/train_readmission_model.py
+            base_parameters:
+              catalog: ${var.catalog}
+          environment_key: ml_training_env
+
+        # Step 6c-iii: Stand up the readmission-scorer serving endpoint and WAIT until
+        # READY. Endpoint provisioning takes ~10-20 min, so this runs as its own task
+        # (off the training critical path) with an honest readiness poll and a hard
+        # timeout — its success truthfully means the endpoint is queryable. The app's
+        # default read path is the batch-scored gold table, so this is only needed for
+        # the live "re-score now" button; set deploy_endpoint="false" to skip it.
+        - task_key: deploy_readmission_endpoint
+          depends_on:
+            - task_key: train_readmission_model
+          timeout_seconds: 1980  # 33 min — above the 25-min in-notebook poll ceiling
+          notebook_task:
+            notebook_path: ../src/notebooks/deploy_readmission_endpoint.py
+            base_parameters:
+              catalog: ${var.catalog}
+              deploy_endpoint: "true"
+              wait_minutes: "25"
+          environment_key: serving_deploy_env
 
         # Step 6d: Deploy FWA Investigation Agent
         - task_key: deploy_fwa_agent
@@ -449,6 +475,8 @@ resources:
             - task_key: create_uc_tools
             - task_key: fwa_pipeline
             - task_key: train_fwa_model
+            - task_key: train_readmission_model
+            - task_key: deploy_readmission_endpoint
             - task_key: deploy_fwa_agent
             - task_key: setup_vector_search
             - task_key: network_adequacy_pipeline
@@ -520,6 +548,14 @@ resources:
             client: "1"
             dependencies:
               - databricks-sdk>=0.30.0
+        - environment_key: serving_deploy_env
+          spec:
+            client: "1"
+            dependencies:
+              # SDK for serving-endpoint create/update + readiness polling; mlflow to
+              # resolve the @champion alias to a concrete model version.
+              - databricks-sdk>=0.30.0
+              - mlflow==3.8.1
 
       tags:
         project: red-bricks-insurance

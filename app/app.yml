@@ -24,3 +24,7 @@ env:
     value: auto
   - name: UC_SCHEMA
     value: analytics
+  - name: READMISSION_ENDPOINT
+    value: readmission-scorer
+  - name: READMISSION_LIVE_SCORING
+    value: "true"

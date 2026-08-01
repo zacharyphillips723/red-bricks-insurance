@@ -80,6 +80,7 @@ from src.data_generation.domains import medical_policies as dom_medical_policies
 from src.data_generation.domains import prior_auth as dom_prior_auth
 from src.data_generation.domains import network_adequacy as dom_network
 from src.data_generation.domains import care_management as dom_care_mgmt
+from src.data_generation.domains import adt as dom_adt
 
 # COMMAND ----------
 
@@ -696,6 +697,87 @@ if risk_provider_data:
     print("Risk adjustment (member):", df_risk_member.count(), "(provider):", df_risk_provider.count())
 else:
     print("Risk adjustment (member):", df_risk_member.count())
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### ADT Events + Readmission Episode Backfill
+# MAGIC
+# MAGIC Generated HERE on the reliable default-compute data_generation task (not the
+# MAGIC former `seed_adt_feed` serverless notebook, which intermittently hung at
+# MAGIC environment attach). Writes JSON to the raw volume where the ADT pipeline's
+# MAGIC Autoloader ingests it. Produces both:
+# MAGIC   - a live feed batch (dashboard/alert stream), and
+# MAGIC   - a one-time readmission episode backfill (member-linked A01→A03→readmit
+# MAGIC     episodes with a feature-correlated 30-day label = the model training corpus).
+# MAGIC
+# MAGIC Member risk context (RAF / HCC count / age) is taken from the in-memory
+# MAGIC risk_member_data + members_data so the readmission label correlates with the
+# MAGIC same signals the Member 360 shows. Lakebase alert seeding is NOT done here —
+# MAGIC bootstrap_workspace.seed_command_center_alerts() owns that.
+
+# COMMAND ----------
+
+import json as _json
+from datetime import date as _date, datetime as _dt, timedelta as _td
+
+# Build member risk map (raf_score, hcc_count, age) from in-memory generator output.
+_raf_by_member = {}
+for r in risk_member_data:
+    codes = r.get("hcc_codes")
+    _raf_by_member[r["member_id"]] = {
+        "raf_score": float(r["raf_score"]) if r.get("raf_score") is not None else 1.0,
+        "hcc_count": len([c for c in str(codes).split(",") if c.strip()]) if codes else 0,
+    }
+
+def _age_from_dob(dob):
+    try:
+        d = _dt.fromisoformat(str(dob)[:10]).date()
+        return max(0, int((_date.today() - d).days // 365.25))
+    except Exception:
+        return 55
+
+_adt_member_risk = {}
+for m in members_data:
+    base = _raf_by_member.get(m["member_id"], {"raf_score": 1.0, "hcc_count": 0})
+    _adt_member_risk[m["member_id"]] = {
+        "raf_score": base["raf_score"],
+        "hcc_count": base["hcc_count"],
+        "age": _age_from_dob(m.get("date_of_birth")),
+    }
+
+_adt_dir = f"{volume_base}/adt_events"
+dbutils.fs.mkdirs(_adt_dir)
+
+# 1) Live feed batch (recent events for the dashboard/alert stream).
+_live = dom_adt.generate_adt_events(
+    member_ids=member_ids,
+    start_date=_date.today() - _td(hours=3),
+    end_date=_date.today(),
+    events_per_batch=50,
+)
+_batch_id = f"BATCH_{_dt.now().strftime('%Y%m%d_%H%M%S')}"
+for e in _live:
+    e["batch_id"] = _batch_id
+    e["batch_timestamp"] = _dt.now().isoformat()
+_live_path = f"/Volumes/{catalog}/raw/raw_sources/adt_events/adt_{_batch_id}.json"
+with open(_live_path, "w") as f:
+    for e in _live:
+        f.write(_json.dumps(e, default=str) + "\n")
+print(f"ADT live feed: {len(_live)} events -> {_live_path}")
+
+# 2) One-time readmission episode backfill (the training corpus).
+_episodes = dom_adt.generate_readmission_episodes(
+    member_ids=member_ids,
+    member_risk=_adt_member_risk,
+    seed=42,
+)
+_n_readmit = sum(1 for e in _episodes if e.get("is_readmission"))
+_epi_path = f"/Volumes/{catalog}/raw/raw_sources/adt_events/adt_episodes_backfill.json"
+with open(_epi_path, "w") as f:
+    for e in _episodes:
+        f.write(_json.dumps(e, default=str) + "\n")
+print(f"ADT episode backfill: {len(_episodes)} events ({_n_readmit} readmit admits) -> {_epi_path}")
 
 # COMMAND ----------
 

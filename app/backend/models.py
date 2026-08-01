@@ -353,6 +353,22 @@ class MemberSdohOut(BaseModel):
     composite_sdoh_risk_score: Optional[float] = None
 
 
+class MemberReadmissionOut(BaseModel):
+    """30-day inpatient readmission risk for a member."""
+    member_id: str
+    readmission_risk_score: Optional[float] = None  # 0-1 probability
+    readmission_risk_tier: Optional[str] = None      # Low | Moderate | High | Very High
+    top_risk_factors: list[str] = Field(default_factory=list)
+    admit_reason: Optional[str] = None
+    length_of_stay_days: Optional[float] = None
+    prior_admits_180d: Optional[float] = None
+    discharge_timestamp: Optional[str] = None
+    model_version: Optional[str] = None
+    scored_at: Optional[str] = None
+    scored_live: bool = False       # True when returned by a live endpoint re-score
+    has_score: bool = False         # False when the member has no index stay to score
+
+
 class NextBestActionOut(BaseModel):
     """AI-generated next best action recommendation."""
     actions: list[dict] = Field(default_factory=list)

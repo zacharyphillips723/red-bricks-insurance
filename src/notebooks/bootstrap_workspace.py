@@ -530,7 +530,7 @@ def discover_serving_endpoint_service_principals() -> list[dict]:
     own SPs which need the same UC, warehouse, Genie, and Lakebase grants as app SPs.
     """
     # Custom serving endpoints that need grants (exclude FMAPI pay-per-token endpoints)
-    SERVING_ENDPOINT_PATTERNS = ["fwa-supervisor-agent", "fwa-fraud-scorer"]
+    SERVING_ENDPOINT_PATTERNS = ["fwa-supervisor-agent", "fwa-fraud-scorer", "readmission-scorer"]
 
     import requests
     host = spark.conf.get("spark.databricks.workspaceUrl")
@@ -806,7 +806,7 @@ if app_sps:
     # Serving endpoints that app SPs need CAN_QUERY on.
     # Includes the FWA supervisor agent (apps call it via SDK in endpoint mode)
     # and any custom scoring endpoints.
-    CUSTOM_ENDPOINTS = ["fwa-supervisor-agent", "fwa-fraud-scorer"]
+    CUSTOM_ENDPOINTS = ["fwa-supervisor-agent", "fwa-fraud-scorer", "readmission-scorer"]
 
     for ep_name in CUSTOM_ENDPOINTS:
         print(f"\nGranting CAN_QUERY on serving endpoint '{ep_name}'...")

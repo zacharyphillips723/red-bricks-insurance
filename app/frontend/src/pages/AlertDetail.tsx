@@ -4,7 +4,7 @@ import {
   Activity, Pill, Building2, Calendar,
   Sparkles, Loader2,
 } from "lucide-react";
-import { api, type AlertDetail as AlertDetailType, type CareManager, type NextBestAction } from "@/lib/api";
+import { api, type AlertDetail as AlertDetailType, type CareManager, type NextBestAction, type MemberReadmissionRisk } from "@/lib/api";
 import { riskBadgeClass, statusColor, formatDateTime, sourceIcon } from "@/lib/utils";
 
 const STATUS_TRANSITIONS: Record<string, string[]> = {
@@ -18,6 +18,13 @@ const STATUS_TRANSITIONS: Record<string, string[]> = {
   Escalated: ["Intervention Active", "Resolved"],
   Resolved: [],
   "Closed — Unable to Reach": [],
+};
+
+const READMIT_BADGE: Record<string, string> = {
+  "Very High": "bg-red-100 text-red-800 border-red-200",
+  High: "bg-orange-100 text-orange-800 border-orange-200",
+  Moderate: "bg-yellow-100 text-yellow-800 border-yellow-200",
+  Low: "bg-green-100 text-green-800 border-green-200",
 };
 
 interface AlertDetailProps {
@@ -36,6 +43,7 @@ export function AlertDetailPage({ alertId, onBack }: AlertDetailProps) {
   const [nbaActions, setNbaActions] = useState<NextBestAction[]>([]);
   const [nbaLoading, setNbaLoading] = useState(false);
   const [nbaRationale, setNbaRationale] = useState("");
+  const [readmission, setReadmission] = useState<MemberReadmissionRisk | null>(null);
 
   useEffect(() => {
     Promise.all([api.getAlert(alertId), api.listCareManagers()])
@@ -44,6 +52,11 @@ export function AlertDetailPage({ alertId, onBack }: AlertDetailProps) {
         a.active_medications = a.active_medications || [];
         setAlert(a);
         setCareManagers(cms);
+        if (a.member_id) {
+          api.getMemberReadmission(a.member_id)
+            .then(setReadmission)
+            .catch(() => setReadmission(null));
+        }
       })
       .catch((err) => console.error("Failed to load alert:", err))
       .finally(() => setLoading(false));
@@ -264,6 +277,19 @@ export function AlertDetailPage({ alertId, onBack }: AlertDetailProps) {
                 <div className="flex justify-between">
                   <dt className="text-gray-500">Last Encounter</dt>
                   <dd className="font-medium">{formatDateTime(alert.last_encounter_date)}</dd>
+                </div>
+              )}
+              {readmission?.has_score && readmission.readmission_risk_score != null && (
+                <div className="flex justify-between items-center">
+                  <dt className="text-gray-500 flex items-center gap-1">
+                    <Activity className="w-3.5 h-3.5" /> 30-Day Readmit
+                  </dt>
+                  <dd
+                    className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold border ${READMIT_BADGE[readmission.readmission_risk_tier ?? ""] || "bg-gray-100 text-gray-600 border-gray-200"}`}
+                    title={readmission.top_risk_factors.length ? `Drivers: ${readmission.top_risk_factors.join(", ")}` : undefined}
+                  >
+                    {Math.round(readmission.readmission_risk_score * 100)}% · {readmission.readmission_risk_tier}
+                  </dd>
                 </div>
               )}
             </dl>

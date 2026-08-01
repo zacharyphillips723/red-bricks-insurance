@@ -215,6 +215,111 @@ def get_member_sdoh(member_id: str) -> dict | None:
         return None
 
 
+READMISSION_TABLE = f"{_CAT}.analytics.gold_member_readmission_risk"
+READMISSION_ENDPOINT = os.environ.get("READMISSION_ENDPOINT", "readmission-scorer")
+# Live re-scoring via the serving endpoint is opt-in: the batch-scored gold table is
+# the default read path, so the app stays fully functional (and cheap) when the
+# endpoint is not deployed. Set READMISSION_LIVE_SCORING=true to enable the button.
+READMISSION_LIVE_SCORING = os.environ.get("READMISSION_LIVE_SCORING", "false").lower() in ("true", "1", "t")
+
+# Feature order MUST match FEATURE_COLS in train_readmission_model.py.
+READMISSION_FEATURE_COLS = [
+    "length_of_stay_days", "is_inpatient", "discharged_to_post_acute",
+    "discharged_ama", "prior_admits_180d", "raf_score", "hcc_count",
+    "composite_sdoh_risk_score", "age",
+]
+
+
+def _readmission_tier(p: float) -> str:
+    """Map a readmission probability to a tier (matches train_readmission_model.py)."""
+    if p >= 0.40:
+        return "Very High"
+    if p >= 0.25:
+        return "High"
+    if p >= 0.12:
+        return "Moderate"
+    return "Low"
+
+
+def get_member_readmission(member_id: str) -> dict | None:
+    """Fetch the batch-scored 30-day readmission risk for a member (gold table)."""
+    try:
+        sql = f"""
+            SELECT member_id, index_admit_id, admit_timestamp, discharge_timestamp,
+                   admit_reason, length_of_stay_days, prior_admits_180d,
+                   readmission_risk_score, readmission_risk_tier,
+                   top_risk_factors, model_version, scored_at
+            FROM {READMISSION_TABLE}
+            WHERE member_id = :member_id
+            LIMIT 1
+        """
+        rows = _execute_sql(sql, [{"name": "member_id", "value": member_id}])
+        return rows[0] if rows else None
+    except Exception as e:
+        print(f"[Readmission] Error fetching risk for {member_id}: {e}")
+        traceback.print_exc()
+        return None
+
+
+def rescore_member_readmission(member_id: str) -> dict | None:
+    """Live re-score a member against the readmission serving endpoint.
+
+    Rebuilds the member's most-recent index-stay feature vector from the gold
+    tables and sends it to the `readmission-scorer` endpoint. Returns the fresh
+    probability/tier, or None if live scoring is disabled or unavailable.
+    """
+    if not READMISSION_LIVE_SCORING:
+        print("[Readmission] Live scoring disabled (READMISSION_LIVE_SCORING is not set)")
+        return None
+    try:
+        # Pull the feature vector from the already-scored gold row + member 360
+        # (LOS / prior admits come from the gold row; risk context from member 360).
+        feat_sql = f"""
+            SELECT
+              r.length_of_stay_days,
+              CAST(1.0 AS DOUBLE)                                   AS is_inpatient,
+              CAST(0.0 AS DOUBLE)                                   AS discharged_to_post_acute,
+              CAST(0.0 AS DOUBLE)                                   AS discharged_ama,
+              r.prior_admits_180d,
+              CAST(COALESCE(m.raf_score, 1.0) AS DOUBLE)           AS raf_score,
+              CAST(COALESCE(m.hcc_count, 0) AS DOUBLE)             AS hcc_count,
+              CAST(COALESCE(s.composite_sdoh_risk_score, 0.0) AS DOUBLE) AS composite_sdoh_risk_score,
+              CAST(COALESCE(m.age, 55) AS DOUBLE)                  AS age
+            FROM {READMISSION_TABLE} r
+            LEFT JOIN {MEMBER_360_TABLE} m ON r.member_id = m.member_id
+            LEFT JOIN {SDOH_TABLE} s       ON r.member_id = s.member_id
+            WHERE r.member_id = :member_id
+            LIMIT 1
+        """
+        rows = _execute_sql(feat_sql, [{"name": "member_id", "value": member_id}])
+        if not rows:
+            print(f"[Readmission] No feature row to re-score for {member_id}")
+            return None
+        row = rows[0]
+        record = [float(row.get(c) or 0.0) for c in READMISSION_FEATURE_COLS]
+
+        resp = _sdk_request(
+            "POST",
+            f"/serving-endpoints/{READMISSION_ENDPOINT}/invocations",
+            {"dataframe_split": {"columns": READMISSION_FEATURE_COLS, "data": [record]}},
+        )
+        preds = resp.get("predictions") if isinstance(resp, dict) else None
+        if not preds:
+            print(f"[Readmission] Endpoint returned no predictions: {resp}")
+            return None
+        score = float(preds[0])
+        return {
+            "member_id": member_id,
+            "readmission_risk_score": score,
+            "readmission_risk_tier": _readmission_tier(score),
+            "scored_live": True,
+        }
+    except Exception as e:
+        print(f"[Readmission] Live re-score failed for {member_id}: {e}")
+        traceback.print_exc()
+        return None
+
+
 def query_member_agent(member_id: str, question: str) -> dict:
     """RAG agent: retrieve member profile + relevant case notes, then synthesize with LLM."""
     try:
