@@ -813,6 +813,90 @@ CREATE TRIGGER trg_rules_updated_at
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_pa();
 
 -- ===========================================================================
+-- QUALITY ASSURANCE  (RFI: Quality Assurance tab)
+--
+-- QA sampling + weighted scorecards over completed determinations. Supports
+-- random + targeted sampling, weighted questions with critical-error logic,
+-- reviewer quality trending, and IRR (inter-rater reliability) via a nullable
+-- second-reviewer score on the same case.
+-- ===========================================================================
+
+DO $$ BEGIN
+    CREATE TYPE qa_status AS ENUM (
+        'Pending Score',       -- Sampled, awaiting QA reviewer
+        'Scored',              -- Scorecard completed
+        'Acknowledged',        -- Reviewer acknowledged findings
+        'Rebutted'             -- Reviewer disputes findings
+    );
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
+
+-- Scorecard template: weighted questions, some flagged critical (auto-fail).
+CREATE TABLE IF NOT EXISTS pa_qa_questions (
+    question_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    question_text   TEXT NOT NULL,
+    weight          INT NOT NULL DEFAULT 10,
+    is_critical     BOOLEAN NOT NULL DEFAULT FALSE,
+    sort_order      INT NOT NULL DEFAULT 0,
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at      TIMESTAMPTZ DEFAULT now()
+);
+
+-- One QA review per sampled case (a second row w/ different qa_reviewer_id
+-- enables IRR / consensus review of the same auth_request_id).
+CREATE TABLE IF NOT EXISTS pa_qa_reviews (
+    qa_id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    auth_request_id     TEXT NOT NULL REFERENCES pa_review_queue(auth_request_id),
+    case_reviewer_id    UUID REFERENCES pa_reviewers(reviewer_id),   -- reviewer being audited
+    qa_reviewer_id      UUID REFERENCES pa_reviewers(reviewer_id),   -- QA auditor
+    sample_reason       TEXT,                                        -- 'random' | 'targeted'
+    status              qa_status NOT NULL DEFAULT 'Pending Score',
+
+    scores_json         JSONB,                 -- {question_id: points_awarded}
+    total_score         NUMERIC(6,2),          -- weighted points earned
+    max_score           NUMERIC(6,2),          -- weighted points possible
+    score_pct           NUMERIC(5,2),
+    passed              BOOLEAN,
+    critical_error      BOOLEAN DEFAULT FALSE,  -- any critical question failed
+    findings            TEXT,
+    coaching_notes      TEXT,
+    reviewer_rebuttal   TEXT,
+
+    sampled_at          TIMESTAMPTZ DEFAULT now(),
+    scored_at           TIMESTAMPTZ,
+    created_at          TIMESTAMPTZ DEFAULT now(),
+    updated_at          TIMESTAMPTZ DEFAULT now(),
+
+    CONSTRAINT chk_qa_scored_has_date CHECK (status = 'Pending Score' OR scored_at IS NOT NULL)
+);
+
+CREATE INDEX IF NOT EXISTS idx_qa_status   ON pa_qa_reviews(status);
+CREATE INDEX IF NOT EXISTS idx_qa_request  ON pa_qa_reviews(auth_request_id);
+CREATE INDEX IF NOT EXISTS idx_qa_reviewer ON pa_qa_reviews(case_reviewer_id);
+
+DROP TRIGGER IF EXISTS trg_qa_updated_at ON pa_qa_reviews;
+CREATE TRIGGER trg_qa_updated_at
+    BEFORE UPDATE ON pa_qa_reviews
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_pa();
+
+-- Reviewer quality rollup (RFI: track reviewer quality scores over time).
+CREATE OR REPLACE VIEW v_qa_reviewer_scorecard AS
+SELECT
+    r.reviewer_id,
+    r.display_name,
+    r.role::text,
+    COUNT(q.qa_id)                                          AS reviews_scored,
+    ROUND(AVG(q.score_pct) FILTER (WHERE q.status <> 'Pending Score'), 1) AS avg_score_pct,
+    SUM(CASE WHEN q.passed THEN 1 ELSE 0 END)              AS passed,
+    SUM(CASE WHEN q.passed = FALSE THEN 1 ELSE 0 END)      AS failed,
+    SUM(CASE WHEN q.critical_error THEN 1 ELSE 0 END)      AS critical_errors,
+    ROUND(SUM(CASE WHEN q.passed THEN 1 ELSE 0 END) * 100.0
+        / NULLIF(COUNT(q.qa_id) FILTER (WHERE q.status <> 'Pending Score'), 0), 1) AS pass_rate_pct
+FROM pa_reviewers r
+LEFT JOIN pa_qa_reviews q ON r.reviewer_id = q.case_reviewer_id
+GROUP BY r.reviewer_id, r.display_name, r.role;
+
+-- ===========================================================================
 -- LONGITUDINAL CASE TIMELINE  (RFI: one longitudinal record across workflows)
 -- Unions review actions, appeal actions, and correspondence into one stream.
 -- ===========================================================================

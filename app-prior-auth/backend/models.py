@@ -447,3 +447,102 @@ class RuleSimulationOut(BaseModel):
     would_disagree: int = 0
     agreement_rate_pct: Optional[float] = None
     sample_matches: list[str] = []
+
+
+# ---------------------------------------------------------------------------
+# Provider Portal (external self-service)
+# ---------------------------------------------------------------------------
+
+class ProviderOut(BaseModel):
+    requesting_provider_npi: str
+    provider_name: Optional[str] = None
+    open_requests: int = 0
+
+
+class PortalSubmitIn(BaseModel):
+    requesting_provider_npi: str
+    provider_name: Optional[str] = None
+    member_id: str
+    member_name: Optional[str] = None
+    service_type: str
+    procedure_code: str
+    procedure_description: Optional[str] = None
+    diagnosis_codes: Optional[str] = None
+    line_of_business: Optional[str] = None
+    urgency: PAUrgency = PAUrgency.STANDARD
+    estimated_cost: Optional[float] = None
+    clinical_summary: Optional[str] = None
+
+
+class PortalRequestOut(BaseModel):
+    auth_request_id: str
+    member_name: Optional[str] = None
+    service_type: Optional[str] = None
+    procedure_code: Optional[str] = None
+    procedure_description: Optional[str] = None
+    urgency: Optional[str] = None
+    status: Optional[str] = None
+    determination_reason: Optional[str] = None
+    denial_reason_code: Optional[str] = None
+    request_date: Optional[datetime] = None
+    cms_deadline: Optional[datetime] = None
+    needs_response: bool = False   # status == Additional Info Requested
+
+
+class PortalRespondIn(BaseModel):
+    note: str
+
+
+# ---------------------------------------------------------------------------
+# Quality Assurance
+# ---------------------------------------------------------------------------
+
+class QAQuestionOut(BaseModel):
+    question_id: str
+    question_text: str
+    weight: int
+    is_critical: bool
+    sort_order: int
+
+
+class QASampleIn(BaseModel):
+    sample_pct: float = 10.0        # % of determined cases to pull
+    reason: str = "random"
+
+
+class QAScoreIn(BaseModel):
+    qa_reviewer_id: Optional[str] = None
+    awarded: dict[str, float]        # question_id -> points
+    findings: Optional[str] = None
+    coaching_notes: Optional[str] = None
+
+
+class QAReviewOut(BaseModel):
+    qa_id: str
+    auth_request_id: str
+    member_name: Optional[str] = None
+    service_type: Optional[str] = None
+    case_reviewer_name: Optional[str] = None
+    qa_reviewer_name: Optional[str] = None
+    sample_reason: Optional[str] = None
+    status: Optional[str] = None
+    total_score: Optional[float] = None
+    max_score: Optional[float] = None
+    score_pct: Optional[float] = None
+    passed: Optional[bool] = None
+    critical_error: Optional[bool] = None
+    findings: Optional[str] = None
+    sampled_at: Optional[datetime] = None
+    scored_at: Optional[datetime] = None
+
+
+class QAReviewerScorecard(BaseModel):
+    reviewer_id: str
+    display_name: str
+    role: str
+    reviews_scored: int
+    avg_score_pct: Optional[float] = None
+    passed: int
+    failed: int
+    critical_errors: int
+    pass_rate_pct: Optional[float] = None

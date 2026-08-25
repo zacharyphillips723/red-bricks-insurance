@@ -313,6 +313,66 @@ export interface Correspondence {
   released_at: string | null;
 }
 
+export interface PortalProvider {
+  requesting_provider_npi: string;
+  provider_name: string | null;
+  open_requests: number;
+}
+
+export interface PortalRequest {
+  auth_request_id: string;
+  member_name: string | null;
+  service_type: string | null;
+  procedure_code: string | null;
+  procedure_description: string | null;
+  urgency: string | null;
+  status: string | null;
+  determination_reason: string | null;
+  denial_reason_code: string | null;
+  request_date: string | null;
+  cms_deadline: string | null;
+  needs_response: boolean;
+}
+
+export interface QAQuestion {
+  question_id: string;
+  question_text: string;
+  weight: number;
+  is_critical: boolean;
+  sort_order: number;
+}
+
+export interface QAReview {
+  qa_id: string;
+  auth_request_id: string;
+  member_name: string | null;
+  service_type: string | null;
+  case_reviewer_name: string | null;
+  qa_reviewer_name: string | null;
+  sample_reason: string | null;
+  status: string | null;
+  total_score: number | null;
+  max_score: number | null;
+  score_pct: number | null;
+  passed: boolean | null;
+  critical_error: boolean | null;
+  findings: string | null;
+  sampled_at: string | null;
+  scored_at: string | null;
+}
+
+export interface QAReviewerScorecard {
+  reviewer_id: string;
+  display_name: string;
+  role: string;
+  reviews_scored: number;
+  avg_score_pct: number | null;
+  passed: number;
+  failed: number;
+  critical_errors: number;
+  pass_rate_pct: number | null;
+}
+
 // --- API Functions ---
 
 export const api = {
@@ -453,6 +513,35 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  // --- Provider Portal ---
+  listPortalProviders: () => fetchApi<PortalProvider[]>("/portal/providers"),
+  listPortalRequests: (npi: string) =>
+    fetchApi<PortalRequest[]>(`/portal/requests?provider_npi=${encodeURIComponent(npi)}`),
+  submitPortalRequest: (body: Record<string, unknown>) =>
+    fetchApi<PortalRequest>("/portal/requests", { method: "POST", body: JSON.stringify(body) }),
+  respondPortalRFI: (reqId: string, note: string) =>
+    fetchApi<PortalRequest>(`/portal/requests/${reqId}/respond`, {
+      method: "POST", body: JSON.stringify({ note }),
+    }),
+  getPortalLetters: (reqId: string) =>
+    fetchApi<Correspondence[]>(`/portal/requests/${reqId}/letters`),
+
+  // --- Quality Assurance ---
+  listQAQuestions: () => fetchApi<QAQuestion[]>("/qa/questions"),
+  listQAReviews: (status?: string) => {
+    const qs = status ? `?status=${encodeURIComponent(status)}` : "";
+    return fetchApi<QAReview[]>(`/qa/reviews${qs}`);
+  },
+  generateQASample: (sample_pct: number, reason = "random") =>
+    fetchApi<{ sampled: number; sample_pct: number }>("/qa/sample", {
+      method: "POST", body: JSON.stringify({ sample_pct, reason }),
+    }),
+  scoreQAReview: (
+    qaId: string,
+    body: { awarded: Record<string, number>; qa_reviewer_id?: string; findings?: string; coaching_notes?: string },
+  ) => fetchApi<QAReview>(`/qa/reviews/${qaId}/score`, { method: "POST", body: JSON.stringify(body) }),
+  getQAReviewerScorecard: () => fetchApi<QAReviewerScorecard[]>("/qa/scorecard"),
 
   // --- Business Rules Engine ---
   listRules: (status?: string) => {

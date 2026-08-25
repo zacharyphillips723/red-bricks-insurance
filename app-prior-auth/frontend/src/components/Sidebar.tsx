@@ -9,6 +9,8 @@ import {
   Activity,
   Scale,
   Workflow,
+  Building2,
+  ClipboardCheck,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -25,6 +27,8 @@ const NAV_ITEMS = [
   { id: "agent", label: "PA Review Agent", icon: Bot },
   { id: "appeals", label: "Appeals", icon: Scale },
   { id: "rules", label: "Rules Studio", icon: Workflow },
+  { id: "qa", label: "Quality Assurance", icon: ClipboardCheck },
+  { id: "portal", label: "Provider Portal", icon: Building2 },
   { id: "caseload", label: "Caseload", icon: Users },
   { id: "compliance", label: "CMS Compliance", icon: ShieldCheck },
   { id: "observability", label: "Observability", icon: Activity },

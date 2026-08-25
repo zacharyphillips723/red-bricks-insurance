@@ -12,6 +12,8 @@ import { DocumentIntake } from "@/pages/DocumentIntake";
 import { Observability } from "@/pages/Observability";
 import { Appeals } from "@/pages/Appeals";
 import { RulesStudio } from "@/pages/RulesStudio";
+import { ProviderPortal } from "@/pages/ProviderPortal";
+import { QualityAssurance } from "@/pages/QualityAssurance";
 import { useHashRouter } from "@/lib/useHashRouter";
 import { api } from "@/lib/api";
 
@@ -61,6 +63,10 @@ export default function App() {
         return <Appeals />;
       case "rules":
         return <RulesStudio />;
+      case "portal":
+        return <ProviderPortal />;
+      case "qa":
+        return <QualityAssurance />;
       case "compliance":
         return <Compliance onSelectRequest={handleSelectRequest} />;
       case "observability":

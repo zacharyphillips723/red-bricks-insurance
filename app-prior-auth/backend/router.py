@@ -16,6 +16,7 @@ from .agent import _execute_sql
 from . import documents as docs
 from . import correspondence as corr
 from . import rules_engine as rules
+from . import qa_scoring
 from .sample_records import generate_sample_pdf, list_scenarios
 from .env_config import (
     PA_AGENT_ENDPOINT, LLM_ENDPOINT, UC_CATALOG,
@@ -46,6 +47,15 @@ from .models import (
     PARequestListOut,
     PeerReviewDeterminationIn,
     PeerReviewOut,
+    PortalRequestOut,
+    PortalRespondIn,
+    PortalSubmitIn,
+    ProviderOut,
+    QAQuestionOut,
+    QAReviewOut,
+    QAReviewerScorecard,
+    QASampleIn,
+    QAScoreIn,
     RequestPeerReviewIn,
     ReviewerCaseload,
     ReviewerOut,
@@ -1235,6 +1245,296 @@ async def release_notice(notice_id: str):
         )
         await session.commit()
         return CorrespondenceOut(**dict(result.mappings().one()))
+
+
+# ===================================================================
+# Provider Portal (external self-service — submit / status / RFI / letters)
+# ===================================================================
+
+@api.get("/portal/providers", response_model=list[ProviderOut], operation_id="listPortalProviders")
+async def list_portal_providers():
+    """Providers with PA activity — powers the demo 'sign in as provider' selector."""
+    async with db.session() as session:
+        result = await session.execute(text("""
+            SELECT requesting_provider_npi,
+                   MAX(provider_name) AS provider_name,
+                   COUNT(*) FILTER (WHERE status IN
+                       ('Pending Review','In Review','Additional Info Requested','Peer Review Requested')
+                   ) AS open_requests
+            FROM pa_review_queue
+            WHERE requesting_provider_npi IS NOT NULL
+            GROUP BY requesting_provider_npi
+            ORDER BY open_requests DESC, provider_name
+            LIMIT 50
+        """))
+        return [ProviderOut(**dict(r)) for r in result.mappings().all()]
+
+
+@api.get("/portal/requests", response_model=list[PortalRequestOut], operation_id="listPortalRequests")
+async def list_portal_requests(provider_npi: str):
+    """A provider's own PA requests (status tracking)."""
+    async with db.session() as session:
+        result = await session.execute(
+            text("""
+                SELECT auth_request_id, member_name, service_type, procedure_code,
+                       procedure_description, urgency::text, status::text,
+                       determination_reason, denial_reason_code,
+                       request_date, cms_deadline,
+                       (status = 'Additional Info Requested') AS needs_response
+                FROM pa_review_queue
+                WHERE requesting_provider_npi = :npi
+                ORDER BY request_date DESC NULLS LAST
+                LIMIT 200
+            """),
+            {"npi": provider_npi},
+        )
+        return [PortalRequestOut(**_coerce_row(r)) for r in result.mappings().all()]
+
+
+@api.post("/portal/requests", response_model=PortalRequestOut, operation_id="submitPortalRequest")
+async def submit_portal_request(sub: PortalSubmitIn):
+    """Provider self-service PA submission — creates a queue row + tracking number.
+
+    The CMS deadline is computed by the set_cms_deadline trigger on insert.
+    """
+    auth_request_id = f"POR-{uuid.uuid4().hex[:10].upper()}"
+    async with db.session() as session:
+        await session.execute(
+            text("""
+                INSERT INTO pa_review_queue (
+                    auth_request_id, member_id, member_name,
+                    requesting_provider_npi, provider_name,
+                    service_type, procedure_code, procedure_description,
+                    diagnosis_codes, line_of_business, clinical_summary,
+                    urgency, estimated_cost, status, determination_tier
+                ) VALUES (
+                    :aid, :member_id, :member_name, :npi, :provider_name,
+                    :service_type, :proc, :proc_desc, :dx, :lob, :clinical,
+                    CAST(:urgency AS pa_urgency), :cost,
+                    'Pending Review'::pa_review_status, 'manual'::pa_determination_tier
+                )
+            """),
+            {
+                "aid": auth_request_id, "member_id": sub.member_id, "member_name": sub.member_name,
+                "npi": sub.requesting_provider_npi, "provider_name": sub.provider_name,
+                "service_type": sub.service_type, "proc": sub.procedure_code,
+                "proc_desc": sub.procedure_description, "dx": sub.diagnosis_codes,
+                "lob": sub.line_of_business, "clinical": sub.clinical_summary,
+                "urgency": sub.urgency.value, "cost": sub.estimated_cost,
+            },
+        )
+        await session.execute(
+            text("""
+                INSERT INTO pa_review_actions (auth_request_id, action_type, new_status, note)
+                VALUES (:aid, 'auto_generated', 'Pending Review'::pa_review_status,
+                        'Submitted via provider portal.')
+            """),
+            {"aid": auth_request_id},
+        )
+        await session.commit()
+        result = await session.execute(
+            text("""
+                SELECT auth_request_id, member_name, service_type, procedure_code,
+                       procedure_description, urgency::text, status::text,
+                       determination_reason, denial_reason_code, request_date, cms_deadline,
+                       (status = 'Additional Info Requested') AS needs_response
+                FROM pa_review_queue WHERE auth_request_id = :aid
+            """),
+            {"aid": auth_request_id},
+        )
+        return PortalRequestOut(**_coerce_row(result.mappings().one()))
+
+
+@api.post("/portal/requests/{req_id}/respond", response_model=PortalRequestOut, operation_id="respondPortalRFI")
+async def respond_portal_rfi(req_id: str, body: PortalRespondIn):
+    """Provider responds to an 'Additional Info Requested' case → moves it back to In Review."""
+    async with db.session() as session:
+        check = await session.execute(
+            text("SELECT status::text FROM pa_review_queue WHERE auth_request_id = :aid"),
+            {"aid": req_id},
+        )
+        row = check.mappings().one_or_none()
+        if not row:
+            raise HTTPException(status_code=404, detail="Request not found")
+        if row["status"] != "Additional Info Requested":
+            raise HTTPException(status_code=400, detail="This request is not awaiting additional information")
+
+        await session.execute(
+            text("""
+                UPDATE pa_review_queue SET status = 'In Review'::pa_review_status
+                WHERE auth_request_id = :aid
+            """),
+            {"aid": req_id},
+        )
+        await session.execute(
+            text("""
+                INSERT INTO pa_review_actions
+                    (auth_request_id, action_type, previous_status, new_status, note)
+                VALUES (:aid, 'info_requested',
+                        'Additional Info Requested'::pa_review_status, 'In Review'::pa_review_status,
+                        :note)
+            """),
+            {"aid": req_id, "note": f"Provider response: {body.note}"},
+        )
+        await session.commit()
+        result = await session.execute(
+            text("""
+                SELECT auth_request_id, member_name, service_type, procedure_code,
+                       procedure_description, urgency::text, status::text,
+                       determination_reason, denial_reason_code, request_date, cms_deadline,
+                       (status = 'Additional Info Requested') AS needs_response
+                FROM pa_review_queue WHERE auth_request_id = :aid
+            """),
+            {"aid": req_id},
+        )
+        return PortalRequestOut(**_coerce_row(result.mappings().one()))
+
+
+@api.get("/portal/requests/{req_id}/letters", response_model=list[CorrespondenceOut], operation_id="getPortalLetters")
+async def get_portal_letters(req_id: str):
+    """Released decision letters a provider can retrieve for their case."""
+    async with db.session() as session:
+        result = await session.execute(
+            text(f"""
+                SELECT {_CORR_COLS} FROM pa_correspondence
+                WHERE auth_request_id = :aid AND delivery_status IN ('released','delivered')
+                ORDER BY generated_at DESC
+            """),
+            {"aid": req_id},
+        )
+        return [CorrespondenceOut(**dict(r)) for r in result.mappings().all()]
+
+
+# ===================================================================
+# Quality Assurance (sampling + weighted scorecards)
+# ===================================================================
+
+@api.get("/qa/questions", response_model=list[QAQuestionOut], operation_id="listQAQuestions")
+async def list_qa_questions():
+    async with db.session() as session:
+        result = await session.execute(text("""
+            SELECT question_id::text, question_text, weight, is_critical, sort_order
+            FROM pa_qa_questions WHERE is_active = TRUE ORDER BY sort_order
+        """))
+        return [QAQuestionOut(**dict(r)) for r in result.mappings().all()]
+
+
+_QA_REVIEW_COLS = """
+    q.qa_id::text, q.auth_request_id, rq.member_name, rq.service_type,
+    cr.display_name AS case_reviewer_name, qr.display_name AS qa_reviewer_name,
+    q.sample_reason, q.status::text, q.total_score, q.max_score, q.score_pct,
+    q.passed, q.critical_error, q.findings, q.sampled_at, q.scored_at
+"""
+
+
+@api.get("/qa/reviews", response_model=list[QAReviewOut], operation_id="listQAReviews")
+async def list_qa_reviews(status: Optional[str] = None):
+    query = f"""
+        SELECT {_QA_REVIEW_COLS}
+        FROM pa_qa_reviews q
+        JOIN pa_review_queue rq ON q.auth_request_id = rq.auth_request_id
+        LEFT JOIN pa_reviewers cr ON q.case_reviewer_id = cr.reviewer_id
+        LEFT JOIN pa_reviewers qr ON q.qa_reviewer_id = qr.reviewer_id
+        WHERE 1=1
+    """
+    params: dict = {}
+    if status:
+        query += " AND q.status = CAST(:status AS qa_status)"
+        params["status"] = status
+    query += " ORDER BY q.sampled_at DESC LIMIT 200"
+    async with db.session() as session:
+        result = await session.execute(text(query), params)
+        return [QAReviewOut(**_coerce_row(r)) for r in result.mappings().all()]
+
+
+@api.post("/qa/sample", operation_id="generateQASample")
+async def generate_qa_sample(body: QASampleIn):
+    """Randomly sample a % of determined cases into the QA queue (not already sampled)."""
+    pct = max(0.1, min(body.sample_pct, 100.0)) / 100.0
+    async with db.session() as session:
+        result = await session.execute(
+            text("""
+                INSERT INTO pa_qa_reviews (auth_request_id, case_reviewer_id, sample_reason, status)
+                SELECT q.auth_request_id, q.assigned_reviewer_id, :reason, 'Pending Score'::qa_status
+                FROM pa_review_queue q
+                WHERE q.status IN ('Approved','Denied','Partially Approved')
+                  AND q.auth_request_id NOT IN (SELECT auth_request_id FROM pa_qa_reviews)
+                  AND random() < :pct
+                RETURNING qa_id
+            """),
+            {"reason": body.reason, "pct": pct},
+        )
+        n = len(result.fetchall())
+        await session.commit()
+    return {"sampled": n, "sample_pct": body.sample_pct}
+
+
+@api.post("/qa/reviews/{qa_id}/score", response_model=QAReviewOut, operation_id="scoreQAReview")
+async def score_qa_review(qa_id: str, body: QAScoreIn):
+    """Submit a weighted scorecard; compute total/pass/critical-error server-side."""
+    async with db.session() as session:
+        # Load the active scorecard template for weights + critical flags.
+        q_rows = await session.execute(text("""
+            SELECT question_id::text AS question_id, weight, is_critical
+            FROM pa_qa_questions WHERE is_active = TRUE
+        """))
+        questions = [dict(r) for r in q_rows.mappings().all()]
+        if not questions:
+            raise HTTPException(status_code=400, detail="No active QA scorecard questions")
+
+        result = qa_scoring.compute_qa_score(questions, body.awarded)
+
+        upd = await session.execute(
+            text(f"""
+                UPDATE pa_qa_reviews
+                SET status = 'Scored'::qa_status,
+                    qa_reviewer_id = COALESCE(CAST(:qa_rev AS uuid), qa_reviewer_id),
+                    scores_json = CAST(:scores AS jsonb),
+                    total_score = :total, max_score = :maxs, score_pct = :pct,
+                    passed = :passed, critical_error = :crit,
+                    findings = :findings, coaching_notes = :coaching,
+                    scored_at = now()
+                WHERE qa_id = CAST(:qid AS uuid)
+                RETURNING qa_id
+            """),
+            {
+                "qid": qa_id, "qa_rev": body.qa_reviewer_id,
+                "scores": json.dumps(body.awarded),
+                "total": result["total_score"], "maxs": result["max_score"],
+                "pct": result["score_pct"], "passed": result["passed"],
+                "crit": result["critical_error"],
+                "findings": body.findings, "coaching": body.coaching_notes,
+            },
+        )
+        if not upd.first():
+            raise HTTPException(status_code=404, detail="QA review not found")
+        await session.commit()
+
+        detail = await session.execute(
+            text(f"""
+                SELECT {_QA_REVIEW_COLS}
+                FROM pa_qa_reviews q
+                JOIN pa_review_queue rq ON q.auth_request_id = rq.auth_request_id
+                LEFT JOIN pa_reviewers cr ON q.case_reviewer_id = cr.reviewer_id
+                LEFT JOIN pa_reviewers qr ON q.qa_reviewer_id = qr.reviewer_id
+                WHERE q.qa_id = CAST(:qid AS uuid)
+            """),
+            {"qid": qa_id},
+        )
+        return QAReviewOut(**_coerce_row(detail.mappings().one()))
+
+
+@api.get("/qa/scorecard", response_model=list[QAReviewerScorecard], operation_id="getQAReviewerScorecard")
+async def get_qa_reviewer_scorecard():
+    async with db.session() as session:
+        result = await session.execute(text("""
+            SELECT reviewer_id::text, display_name, role,
+                   reviews_scored, avg_score_pct, passed, failed, critical_errors, pass_rate_pct
+            FROM v_qa_reviewer_scorecard
+            WHERE reviews_scored > 0
+            ORDER BY pass_rate_pct ASC NULLS LAST
+        """))
+        return [QAReviewerScorecard(**_coerce_row(r)) for r in result.mappings().all()]
 
 
 # ===================================================================

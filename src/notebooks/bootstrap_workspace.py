@@ -2678,6 +2678,78 @@ def seed_business_rules() -> int:
     print(f"  {count} business rules seeded (active).")
     return count
 
+
+def seed_qa() -> tuple[int, int]:
+    """Seed the QA scorecard template + sample/score a slice of determined cases
+    (RFI: Quality Assurance — sampling, weighted scorecards, reviewer trending)."""
+    questions = [
+        ("Clinical criteria correctly identified and applied", 25, True, 1),
+        ("Determination reason / denial code is correct", 20, True, 2),
+        ("Clinical documentation reviewed and sufficient", 15, False, 3),
+        ("Regulatory timeliness (CMS deadline) met", 15, False, 4),
+        ("Member/provider notice is accurate and complete", 15, False, 5),
+        ("Review notes are clear and support the decision", 10, False, 6),
+    ]
+    sampled = scored = 0
+    with get_pg_connection(LAKEBASE_PROJECT_ID, "pa_reviews") as conn:
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE pa_qa_reviews, pa_qa_questions CASCADE")
+            for text_, weight, crit, order in questions:
+                cur.execute(
+                    """INSERT INTO pa_qa_questions (question_text, weight, is_critical, sort_order)
+                       VALUES (%s, %s, %s, %s)""",
+                    (text_, weight, crit, order),
+                )
+            # Sample ~15% of determined cases into the QA queue.
+            cur.execute("""
+                INSERT INTO pa_qa_reviews (auth_request_id, case_reviewer_id, sample_reason, status)
+                SELECT auth_request_id, assigned_reviewer_id, 'random', 'Pending Score'::qa_status
+                FROM pa_review_queue
+                WHERE status IN ('Approved','Denied','Partially Approved')
+                  AND assigned_reviewer_id IS NOT NULL
+                  AND random() < 0.15
+                RETURNING qa_id
+            """)
+            sampled = len(cur.fetchall())
+
+            # Pick a QA auditor (a Medical Director) and score ~70% of the sample.
+            cur.execute("""
+                SELECT reviewer_id FROM pa_reviewers
+                WHERE is_active = TRUE AND role = 'Medical Director' LIMIT 1
+            """)
+            row = cur.fetchone()
+            qa_auditor = row[0] if row else None
+
+            cur.execute("""
+                WITH to_score AS (
+                    SELECT qa_id FROM pa_qa_reviews WHERE status = 'Pending Score' AND random() < 0.7
+                )
+                UPDATE pa_qa_reviews q
+                SET status = 'Scored'::qa_status,
+                    qa_reviewer_id = %s,
+                    max_score = 100,
+                    critical_error = (random() < 0.08),
+                    total_score = ROUND((78 + random() * 22)::numeric, 2),
+                    scored_at = q.sampled_at + (random() * INTERVAL '5 days') + INTERVAL '1 day'
+                FROM to_score s
+                WHERE q.qa_id = s.qa_id
+            """, (qa_auditor,))
+            # Derive score_pct + passed from the seeded numbers (critical fails auto-fail).
+            cur.execute("""
+                UPDATE pa_qa_reviews
+                SET score_pct = total_score,
+                    passed = (total_score >= 90 AND NOT critical_error),
+                    findings = CASE WHEN critical_error THEN 'Critical error identified — criteria misapplied.'
+                                    WHEN total_score < 90 THEN 'Minor deficiencies noted; coaching recommended.'
+                                    ELSE 'Review met quality standards.' END
+                WHERE status = 'Scored'
+            """)
+            cur.execute("SELECT count(*) FROM pa_qa_reviews WHERE status = 'Scored'")
+            scored = cur.fetchone()[0]
+            conn.commit()
+    print(f"  QA: {len(questions)} questions, {sampled} sampled, {scored} scored.")
+    return sampled, scored
+
 # COMMAND ----------
 
 print("=" * 60)
@@ -2701,6 +2773,9 @@ criteria_count, peer_review_count = seed_pa_clinical_extras()
 
 print("\n--- PA Business Rules ---")
 rules_count = seed_business_rules()
+
+print("\n--- PA Quality Assurance ---")
+qa_sampled, qa_scored = seed_qa()
 
 # COMMAND ----------
 
