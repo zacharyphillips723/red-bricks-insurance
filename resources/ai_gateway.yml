@@ -7,3 +7,40 @@
 # resources today (no external_model block in serving_endpoint resource).
 # The notebook creates them; this file only wires permissions for the FWA app.
 # Once DAB adds external_model support, migrate creation here.
+
+# ---------------------------------------------------------------------------
+# AI Gateway guardrails for the PA workflow (RFI: AI Security & Data Protection)
+# ---------------------------------------------------------------------------
+# Declarative spec of the Mosaic AI Gateway guardrails + governance controls
+# applied to the PA agent / LLM endpoints by setup_ai_gateway.py. Kept here so
+# the RFI response and reviewers have a single source of truth for what is
+# enforced. (AI Gateway config is applied via the endpoint's ai_gateway block;
+# these values are read by the setup notebook.)
+variables:
+  pa_ai_gateway_guardrails:
+    description: Guardrails + governance controls enforced on PA AI endpoints.
+    default:
+      # Block PII/PHI leakage in prompts and responses (SSN, MRN, etc.).
+      guardrails:
+        input:
+          pii:
+            behavior: BLOCK          # reject prompts containing detected PII
+          invalid_keywords: []
+        output:
+          pii:
+            behavior: MASK           # mask any PII the model emits
+          safety: true               # enable safety filter on responses
+      # Usage tracking + rate limiting for cost governance and abuse protection.
+      usage_tracking:
+        enabled: true
+      rate_limits:
+        - calls: 200
+          renewal_period: minute
+          key: endpoint
+      # Inference tables: log every prompt/response for audit + evaluation.
+      inference_table:
+        enabled: true
+      # Governance posture (documented for the RFI, enforced by platform config):
+      #  - Customer data is NOT used to train foundation models.
+      #  - All PA agent traces stream to Unity Catalog OTel tables (auditable).
+      #  - Per-customer data isolation via Unity Catalog + workspace bindings.

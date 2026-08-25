@@ -14,6 +14,8 @@ from .database import db
 from .agent import query_pa_agent, stream_pa_agent, get_pa_analytics, get_policy_rules, get_ml_prediction
 from .agent import _execute_sql
 from . import documents as docs
+from . import correspondence as corr
+from . import rules_engine as rules
 from .sample_records import generate_sample_pdf, list_scenarios
 from .env_config import (
     PA_AGENT_ENDPOINT, LLM_ENDPOINT, UC_CATALOG,
@@ -27,12 +29,24 @@ from .models import (
     AddNoteIn,
     AgentQueryIn,
     AgentQueryOut,
+    AppealDeterminationIn,
+    AppealListOut,
+    AssignAppealIn,
     AssignReviewerIn,
+    BusinessRuleIn,
+    BusinessRuleOut,
     ComplianceMetricsOut,
+    CorrespondenceOut,
     DashboardStats,
+    FileAppealIn,
+    GenerateNoticeIn,
     OverdueRequestOut,
+    RuleSimulationOut,
     PARequestDetailOut,
     PARequestListOut,
+    PeerReviewDeterminationIn,
+    PeerReviewOut,
+    RequestPeerReviewIn,
     ReviewerCaseload,
     ReviewerOut,
     TurnaroundBucket,
@@ -226,6 +240,8 @@ async def get_request(req_id: str):
                     q.ai_recommendation, q.ai_confidence,
                     q.tier1_auto_eligible, q.clinical_extraction,
                     q.determination_reason, q.denial_reason_code, q.reviewer_notes,
+                    q.criteria_source, q.criteria_version,
+                    q.criteria_effective_date::text AS criteria_effective_date,
                     q.request_date, q.determination_date, q.turnaround_hours,
                     q.cms_compliant, q.cms_deadline,
                     q.appeal_filed, q.appeal_date, q.appeal_outcome,
@@ -508,6 +524,720 @@ async def get_overdue_requests():
 
 
 # ===================================================================
+# Appeals & Reconsiderations
+# ===================================================================
+
+@api.get("/appeals", response_model=list[AppealListOut], operation_id="listAppeals")
+async def list_appeals(status: Optional[str] = None, urgency: Optional[str] = None):
+    query = "SELECT * FROM v_appeal_queue WHERE 1=1"
+    params: dict = {}
+    if status:
+        query += " AND status = :status"
+        params["status"] = status
+    if urgency:
+        query += " AND urgency = :urgency"
+        params["urgency"] = urgency
+    async with db.session() as session:
+        result = await session.execute(text(query), params)
+        return [AppealListOut(**_coerce_row(r)) for r in result.mappings().all()]
+
+
+@api.get("/appeals/{appeal_id}", response_model=AppealListOut, operation_id="getAppeal")
+async def get_appeal(appeal_id: str):
+    async with db.session() as session:
+        result = await session.execute(
+            text("SELECT * FROM v_appeal_queue WHERE appeal_id = CAST(:aid AS uuid)"),
+            {"aid": appeal_id},
+        )
+        row = result.mappings().one_or_none()
+        if not row:
+            raise HTTPException(status_code=404, detail="Appeal not found")
+        return AppealListOut(**_coerce_row(row))
+
+
+@api.post("/appeals", response_model=AppealListOut, operation_id="fileAppeal")
+async def file_appeal(appeal_in: FileAppealIn):
+    """File an appeal against an existing determination.
+
+    Captures the original determiner so routing can enforce a different
+    appeals reviewer, and flips the source request into an 'Appealed' state.
+    """
+    async with db.session() as session:
+        src = await session.execute(
+            text("""
+                SELECT status::text, assigned_reviewer_id::text
+                FROM pa_review_queue WHERE auth_request_id = :req_id
+            """),
+            {"req_id": appeal_in.auth_request_id},
+        )
+        src_row = src.mappings().one_or_none()
+        if not src_row:
+            raise HTTPException(status_code=404, detail="Source PA request not found")
+        if src_row["status"] not in ("Denied", "Partially Approved"):
+            raise HTTPException(
+                status_code=400,
+                detail="Only denied or partially-approved determinations can be appealed",
+            )
+
+        result = await session.execute(
+            text("""
+                INSERT INTO pa_appeals
+                    (auth_request_id, appeal_type, urgency, filed_by, filed_role,
+                     filing_reason, original_reviewer_id, status)
+                VALUES (:req_id, CAST(:atype AS appeal_type), CAST(:urg AS pa_urgency),
+                        :filed_by, :filed_role, :reason,
+                        CAST(:orig AS uuid), 'Received'::appeal_status)
+                RETURNING appeal_id::text
+            """),
+            {
+                "req_id": appeal_in.auth_request_id,
+                "atype": appeal_in.appeal_type.value,
+                "urg": appeal_in.urgency.value,
+                "filed_by": appeal_in.filed_by,
+                "filed_role": appeal_in.filed_role,
+                "reason": appeal_in.filing_reason,
+                "orig": src_row["assigned_reviewer_id"],
+            },
+        )
+        appeal_id = result.mappings().one()["appeal_id"]
+
+        await session.execute(
+            text("""
+                INSERT INTO pa_appeal_actions (appeal_id, action_type, new_status, note)
+                VALUES (CAST(:aid AS uuid), 'filed', 'Received'::appeal_status, :note)
+            """),
+            {"aid": appeal_id, "note": appeal_in.filing_reason},
+        )
+
+        # Mark the originating request as appealed + record on its own audit log.
+        await session.execute(
+            text("""
+                UPDATE pa_review_queue
+                SET appeal_filed = TRUE, appeal_date = now(),
+                    status = 'Appealed'::pa_review_status
+                WHERE auth_request_id = :req_id
+            """),
+            {"req_id": appeal_in.auth_request_id},
+        )
+        await session.execute(
+            text("""
+                INSERT INTO pa_review_actions
+                    (auth_request_id, action_type, note)
+                VALUES (:req_id, 'appeal_filed', :note)
+            """),
+            {"req_id": appeal_in.auth_request_id, "note": "Appeal filed"},
+        )
+        await session.commit()
+
+    return await get_appeal(appeal_id)
+
+
+@api.post("/appeals/{appeal_id}/assign", response_model=AppealListOut, operation_id="assignAppeal")
+async def assign_appeal(appeal_id: str, assign_in: AssignAppealIn):
+    """Assign an appeals reviewer — rejects the original determiner (conflict of interest)."""
+    async with db.session() as session:
+        check = await session.execute(
+            text("""
+                SELECT status::text, original_reviewer_id::text
+                FROM pa_appeals WHERE appeal_id = CAST(:aid AS uuid)
+            """),
+            {"aid": appeal_id},
+        )
+        row = check.mappings().one_or_none()
+        if not row:
+            raise HTTPException(status_code=404, detail="Appeal not found")
+        if row["original_reviewer_id"] and row["original_reviewer_id"] == assign_in.reviewer_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Appeals cannot be assigned to the original determining reviewer",
+            )
+
+        old_status = row["status"]
+        await session.execute(
+            text("""
+                UPDATE pa_appeals
+                SET assigned_reviewer_id = CAST(:rev AS uuid),
+                    status = 'In Review'::appeal_status
+                WHERE appeal_id = CAST(:aid AS uuid)
+            """),
+            {"aid": appeal_id, "rev": assign_in.reviewer_id},
+        )
+        await session.execute(
+            text("""
+                INSERT INTO pa_appeal_actions
+                    (appeal_id, reviewer_id, action_type, previous_status, new_status)
+                VALUES (CAST(:aid AS uuid), CAST(:rev AS uuid), 'assignment',
+                        CAST(:old AS appeal_status), 'In Review'::appeal_status)
+            """),
+            {"aid": appeal_id, "rev": assign_in.reviewer_id, "old": old_status},
+        )
+        await session.commit()
+
+    return await get_appeal(appeal_id)
+
+
+@api.post("/appeals/{appeal_id}/determination", response_model=AppealListOut, operation_id="decideAppeal")
+async def decide_appeal(appeal_id: str, det_in: AppealDeterminationIn):
+    """Record an appeal determination (Overturned / Partially Overturned / Upheld).
+
+    Propagates the outcome back to the originating request so overturn metrics
+    and the longitudinal case record stay consistent.
+    """
+    if det_in.status.value not in ("Overturned", "Partially Overturned", "Upheld"):
+        raise HTTPException(
+            status_code=400,
+            detail="Appeal determination must be Overturned, Partially Overturned, or Upheld",
+        )
+
+    async with db.session() as session:
+        check = await session.execute(
+            text("""
+                SELECT status::text, assigned_reviewer_id::text, auth_request_id
+                FROM pa_appeals WHERE appeal_id = CAST(:aid AS uuid)
+            """),
+            {"aid": appeal_id},
+        )
+        row = check.mappings().one_or_none()
+        if not row:
+            raise HTTPException(status_code=404, detail="Appeal not found")
+
+        await session.execute(
+            text("""
+                UPDATE pa_appeals
+                SET status = CAST(:new AS appeal_status),
+                    determination = :det,
+                    determination_reason = :reason,
+                    determination_reason_external = :reason_ext,
+                    reviewer_notes_internal = :notes
+                WHERE appeal_id = CAST(:aid AS uuid)
+            """),
+            {
+                "aid": appeal_id,
+                "new": det_in.status.value,
+                "det": det_in.status.value,
+                "reason": det_in.determination_reason,
+                "reason_ext": det_in.determination_reason_external,
+                "notes": det_in.reviewer_notes_internal,
+            },
+        )
+        await session.execute(
+            text("""
+                INSERT INTO pa_appeal_actions
+                    (appeal_id, reviewer_id, action_type, previous_status, new_status, note)
+                VALUES (CAST(:aid AS uuid), CAST(:rev AS uuid), 'determination',
+                        CAST(:old AS appeal_status), CAST(:new AS appeal_status), :note)
+            """),
+            {
+                "aid": appeal_id, "rev": row["assigned_reviewer_id"],
+                "old": row["status"], "new": det_in.status.value,
+                "note": det_in.determination_reason,
+            },
+        )
+
+        # Propagate outcome to the source determination.
+        src_status = "Appeal Overturned" if det_in.status.value in (
+            "Overturned", "Partially Overturned"
+        ) else "Appeal Upheld"
+        await session.execute(
+            text("""
+                UPDATE pa_review_queue
+                SET status = CAST(:s AS pa_review_status),
+                    appeal_outcome = :outcome
+                WHERE auth_request_id = :req_id
+            """),
+            {"s": src_status, "outcome": det_in.status.value, "req_id": row["auth_request_id"]},
+        )
+        await session.commit()
+
+    return await get_appeal(appeal_id)
+
+
+# ===================================================================
+# Peer / Physician Review (Clinical Reviews — escalation + P2P)
+# ===================================================================
+
+_PEER_COLS = """
+    p.peer_review_id::text, p.auth_request_id,
+    rb.display_name AS requested_by_name,
+    pr.display_name AS peer_reviewer_name, pr.role::text AS peer_reviewer_role,
+    p.requested_specialty, p.reason, p.status::text,
+    p.p2p_requested, p.p2p_scheduled_at, p.p2p_completed_at, p.p2p_summary,
+    p.determination, p.determination_notes, p.notified_at, p.created_at
+"""
+
+
+@api.get("/requests/{req_id}/peer-reviews", response_model=list[PeerReviewOut], operation_id="listPeerReviews")
+async def list_peer_reviews(req_id: str):
+    async with db.session() as session:
+        result = await session.execute(
+            text(f"""
+                SELECT {_PEER_COLS}
+                FROM pa_peer_reviews p
+                LEFT JOIN pa_reviewers rb ON p.requested_by_id = rb.reviewer_id
+                LEFT JOIN pa_reviewers pr ON p.peer_reviewer_id = pr.reviewer_id
+                WHERE p.auth_request_id = :req_id
+                ORDER BY p.created_at DESC
+            """),
+            {"req_id": req_id},
+        )
+        return [PeerReviewOut(**dict(r)) for r in result.mappings().all()]
+
+
+@api.post("/requests/{req_id}/peer-reviews", response_model=PeerReviewOut, operation_id="requestPeerReview")
+async def request_peer_review(req_id: str, pr_in: RequestPeerReviewIn):
+    """Escalate a case to physician/peer review. If no reviewer is named, match by
+    specialty against active Medical Directors / Peer Reviewers.
+    """
+    async with db.session() as session:
+        check = await session.execute(
+            text("SELECT assigned_reviewer_id::text FROM pa_review_queue WHERE auth_request_id = :req_id"),
+            {"req_id": req_id},
+        )
+        row = check.mappings().one_or_none()
+        if not row:
+            raise HTTPException(status_code=404, detail="PA request not found")
+
+        peer_id = pr_in.peer_reviewer_id
+        # Specialty match when no reviewer explicitly chosen.
+        if not peer_id:
+            match = await session.execute(
+                text("""
+                    SELECT reviewer_id::text FROM pa_reviewers
+                    WHERE is_active = TRUE
+                      AND role IN ('Medical Director', 'Peer Reviewer')
+                      AND (:spec IS NULL OR specialty ILIKE :spec_like)
+                    ORDER BY (specialty ILIKE :spec_like) DESC, max_caseload DESC
+                    LIMIT 1
+                """),
+                {"spec": pr_in.requested_specialty,
+                 "spec_like": f"%{pr_in.requested_specialty}%" if pr_in.requested_specialty else "%"},
+            )
+            m = match.mappings().one_or_none()
+            peer_id = m["reviewer_id"] if m else None
+
+        result = await session.execute(
+            text(f"""
+                INSERT INTO pa_peer_reviews
+                    (auth_request_id, requested_by_id, peer_reviewer_id,
+                     requested_specialty, reason, status, p2p_requested,
+                     p2p_scheduled_at)
+                VALUES (:req_id, CAST(:rb AS uuid), CAST(:peer AS uuid),
+                        :spec, :reason,
+                        CASE WHEN :peer IS NULL THEN 'Requested' ELSE 'Scheduled' END::peer_review_status,
+                        :p2p, CASE WHEN :p2p THEN now() + INTERVAL '1 day' ELSE NULL END)
+                RETURNING peer_review_id::text
+            """),
+            {
+                "req_id": req_id, "rb": row["assigned_reviewer_id"],
+                "peer": peer_id, "spec": pr_in.requested_specialty,
+                "reason": pr_in.reason, "p2p": pr_in.p2p_requested,
+            },
+        )
+        peer_review_id = result.mappings().one()["peer_review_id"]
+
+        # Flip the case into peer review + audit.
+        await session.execute(
+            text("""
+                UPDATE pa_review_queue
+                SET status = 'Peer Review Requested'::pa_review_status
+                WHERE auth_request_id = :req_id
+                  AND status IN ('Pending Review', 'In Review', 'Additional Info Requested')
+            """),
+            {"req_id": req_id},
+        )
+        await session.execute(
+            text("""
+                INSERT INTO pa_review_actions
+                    (auth_request_id, reviewer_id, action_type, note)
+                VALUES (:req_id, CAST(:rb AS uuid), 'peer_review_requested', :note)
+            """),
+            {"req_id": req_id, "rb": row["assigned_reviewer_id"],
+             "note": pr_in.reason or "Escalated to physician/peer review."},
+        )
+        await session.commit()
+
+    prs = await list_peer_reviews(req_id)
+    return next((p for p in prs if p.peer_review_id == peer_review_id), prs[0])
+
+
+@api.post("/peer-reviews/{peer_review_id}/determination", response_model=PeerReviewOut, operation_id="decidePeerReview")
+async def decide_peer_review(peer_review_id: str, det_in: PeerReviewDeterminationIn):
+    """Record the peer reviewer's recommendation + P2P outcome, and notify."""
+    async with db.session() as session:
+        check = await session.execute(
+            text("SELECT auth_request_id FROM pa_peer_reviews WHERE peer_review_id = CAST(:pid AS uuid)"),
+            {"pid": peer_review_id},
+        )
+        row = check.mappings().one_or_none()
+        if not row:
+            raise HTTPException(status_code=404, detail="Peer review not found")
+        req_id = row["auth_request_id"]
+
+        await session.execute(
+            text("""
+                UPDATE pa_peer_reviews
+                SET status = 'Determination Made'::peer_review_status,
+                    determination = :det,
+                    determination_notes = :notes,
+                    p2p_summary = COALESCE(:p2p_summary, p2p_summary),
+                    p2p_completed_at = CASE WHEN p2p_requested THEN now() ELSE p2p_completed_at END,
+                    notified_at = now()
+                WHERE peer_review_id = CAST(:pid AS uuid)
+            """),
+            {"pid": peer_review_id, "det": det_in.determination,
+             "notes": det_in.determination_notes, "p2p_summary": det_in.p2p_summary},
+        )
+        await session.execute(
+            text("""
+                INSERT INTO pa_review_actions
+                    (auth_request_id, action_type, note)
+                VALUES (:req_id, 'note_added', :note)
+            """),
+            {"req_id": req_id,
+             "note": f"Peer review determination: {det_in.determination}. {det_in.determination_notes or ''}"},
+        )
+        await session.commit()
+
+    prs = await list_peer_reviews(req_id)
+    return next((p for p in prs if p.peer_review_id == peer_review_id), prs[0])
+
+
+# ===================================================================
+# Business Rules Engine (no-code adjudication/routing rules)
+# ===================================================================
+
+_RULE_COLS = """
+    rule_id::text, name, description, category, line_of_business, service_type,
+    conditions_json, action::text, action_detail, priority,
+    effective_start_date::text, effective_end_date::text,
+    version, status::text, created_by, approved_by, approved_at,
+    created_at, updated_at
+"""
+
+
+async def _snapshot_rule(session, rule_id: str, change_type: str, changed_by: str | None,
+                         change_reason: str | None) -> None:
+    """Write an immutable version snapshot of a rule's current state."""
+    await session.execute(
+        text("""
+            INSERT INTO pa_rule_versions
+                (rule_id, version, change_type, snapshot_json, changed_by, change_reason)
+            SELECT rule_id, version, :ctype, to_jsonb(r), :by, :reason
+            FROM pa_business_rules r
+            WHERE rule_id = CAST(:rid AS uuid)
+        """),
+        {"rid": rule_id, "ctype": change_type, "by": changed_by, "reason": change_reason},
+    )
+
+
+@api.get("/rules", response_model=list[BusinessRuleOut], operation_id="listRules")
+async def list_rules(status: Optional[str] = None):
+    query = f"SELECT {_RULE_COLS} FROM pa_business_rules"
+    params: dict = {}
+    if status:
+        query += " WHERE status = CAST(:status AS rule_status)"
+        params["status"] = status
+    query += " ORDER BY priority ASC, name ASC"
+    async with db.session() as session:
+        result = await session.execute(text(query), params)
+        return [BusinessRuleOut(**_coerce_row(r)) for r in result.mappings().all()]
+
+
+@api.post("/rules", response_model=BusinessRuleOut, operation_id="createRule")
+async def create_rule(rule_in: BusinessRuleIn):
+    async with db.session() as session:
+        result = await session.execute(
+            text(f"""
+                INSERT INTO pa_business_rules
+                    (name, description, category, line_of_business, service_type,
+                     conditions_json, action, action_detail, priority, status, created_by)
+                VALUES (:name, :desc, :category, :lob, :svc,
+                        CAST(:conditions AS jsonb), CAST(:action AS rule_action),
+                        :action_detail, :priority, 'draft'::rule_status, 'business_admin')
+                RETURNING {_RULE_COLS}
+            """),
+            {
+                "name": rule_in.name, "desc": rule_in.description, "category": rule_in.category,
+                "lob": rule_in.line_of_business, "svc": rule_in.service_type,
+                "conditions": json.dumps(rule_in.conditions_json), "action": rule_in.action.value,
+                "action_detail": rule_in.action_detail, "priority": rule_in.priority,
+            },
+        )
+        created = result.mappings().one()
+        await _snapshot_rule(session, created["rule_id"], "created", "business_admin", rule_in.change_reason)
+        await session.commit()
+        return BusinessRuleOut(**_coerce_row(created))
+
+
+@api.put("/rules/{rule_id}", response_model=BusinessRuleOut, operation_id="updateRule")
+async def update_rule(rule_id: str, rule_in: BusinessRuleIn):
+    async with db.session() as session:
+        exists = await session.execute(
+            text("SELECT 1 FROM pa_business_rules WHERE rule_id = CAST(:rid AS uuid)"),
+            {"rid": rule_id},
+        )
+        if not exists.first():
+            raise HTTPException(status_code=404, detail="Rule not found")
+        result = await session.execute(
+            text(f"""
+                UPDATE pa_business_rules
+                SET name = :name, description = :desc, category = :category,
+                    line_of_business = :lob, service_type = :svc,
+                    conditions_json = CAST(:conditions AS jsonb),
+                    action = CAST(:action AS rule_action), action_detail = :action_detail,
+                    priority = :priority, version = version + 1
+                WHERE rule_id = CAST(:rid AS uuid)
+                RETURNING {_RULE_COLS}
+            """),
+            {
+                "rid": rule_id, "name": rule_in.name, "desc": rule_in.description,
+                "category": rule_in.category, "lob": rule_in.line_of_business,
+                "svc": rule_in.service_type, "conditions": json.dumps(rule_in.conditions_json),
+                "action": rule_in.action.value, "action_detail": rule_in.action_detail,
+                "priority": rule_in.priority,
+            },
+        )
+        updated = result.mappings().one()
+        await _snapshot_rule(session, rule_id, "updated", "business_admin", rule_in.change_reason)
+        await session.commit()
+        return BusinessRuleOut(**_coerce_row(updated))
+
+
+@api.post("/rules/{rule_id}/activate", response_model=BusinessRuleOut, operation_id="activateRule")
+async def activate_rule(rule_id: str):
+    """Approve + activate a rule for production (RFI: signoff workflow for deployment)."""
+    async with db.session() as session:
+        result = await session.execute(
+            text(f"""
+                UPDATE pa_business_rules
+                SET status = 'active'::rule_status, approved_by = 'medical_director', approved_at = now()
+                WHERE rule_id = CAST(:rid AS uuid)
+                RETURNING {_RULE_COLS}
+            """),
+            {"rid": rule_id},
+        )
+        row = result.mappings().one_or_none()
+        if not row:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        await _snapshot_rule(session, rule_id, "activated", "medical_director", "Approved for production")
+        await session.commit()
+        return BusinessRuleOut(**_coerce_row(row))
+
+
+@api.post("/rules/{rule_id}/retire", response_model=BusinessRuleOut, operation_id="retireRule")
+async def retire_rule(rule_id: str):
+    async with db.session() as session:
+        result = await session.execute(
+            text(f"""
+                UPDATE pa_business_rules
+                SET status = 'retired'::rule_status, effective_end_date = CURRENT_DATE
+                WHERE rule_id = CAST(:rid AS uuid)
+                RETURNING {_RULE_COLS}
+            """),
+            {"rid": rule_id},
+        )
+        row = result.mappings().one_or_none()
+        if not row:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        await _snapshot_rule(session, rule_id, "retired", "business_admin", "Retired")
+        await session.commit()
+        return BusinessRuleOut(**_coerce_row(row))
+
+
+@api.get("/rules/conflicts", operation_id="getRuleConflicts")
+async def get_rule_conflicts():
+    """Detect active rules with overlapping scope but conflicting actions."""
+    async with db.session() as session:
+        result = await session.execute(
+            text(f"SELECT {_RULE_COLS} FROM pa_business_rules WHERE status = 'active'")
+        )
+        rule_rows = [_coerce_row(r) for r in result.mappings().all()]
+    return {"conflicts": rules.detect_conflicts(rule_rows)}
+
+
+@api.post("/rules/{rule_id}/simulate", response_model=RuleSimulationOut, operation_id="simulateRule")
+async def simulate_rule(rule_id: str):
+    """Simulate a rule against historical gold_pa_requests (impact analysis)."""
+    async with db.session() as session:
+        result = await session.execute(
+            text(f"SELECT {_RULE_COLS} FROM pa_business_rules WHERE rule_id = CAST(:rid AS uuid)"),
+            {"rid": rule_id},
+        )
+        row = result.mappings().one_or_none()
+        if not row:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        rule = _coerce_row(row)
+
+    # Historical requests from the UC gold table (via Statement Execution).
+    historical = await asyncio.to_thread(
+        _execute_sql_safe,
+        "SELECT auth_request_id, line_of_business, service_type, procedure_code, "
+        "diagnosis_codes, urgency, estimated_cost, determination "
+        "FROM gold_pa_requests LIMIT 3000",
+    )
+    return RuleSimulationOut(**rules.simulate(rule, historical))
+
+
+@api.get("/requests/{req_id}/rule-evaluation", operation_id="evaluateRequestRules")
+async def evaluate_request_rules(req_id: str):
+    """Evaluate the active no-code rules against a live request (parallel to Tier-1 SQL)."""
+    async with db.session() as session:
+        req = await session.execute(
+            text("""
+                SELECT auth_request_id, line_of_business, service_type, procedure_code,
+                       diagnosis_codes, urgency, estimated_cost, tier1_auto_eligible
+                FROM pa_review_queue WHERE auth_request_id = :req_id
+            """),
+            {"req_id": req_id},
+        )
+        req_row = req.mappings().one_or_none()
+        if not req_row:
+            raise HTTPException(status_code=404, detail="PA request not found")
+
+        rule_result = await session.execute(
+            text(f"SELECT {_RULE_COLS} FROM pa_business_rules WHERE status = 'active'")
+        )
+        rule_rows = [_coerce_row(r) for r in rule_result.mappings().all()]
+
+    return rules.evaluate(rule_rows, _coerce_row(req_row))
+
+
+# ===================================================================
+# Correspondence — determination notices (Decision Processing)
+# ===================================================================
+
+_CORR_COLS = """
+    notice_id::text, auth_request_id, notice_type::text, recipient, recipient_role,
+    subject, body_markdown, body_redacted, redaction_notes, includes_appeal_rights,
+    criteria_citation, template_version, pdf_path,
+    delivery_channel::text, delivery_status::text,
+    generated_by, generated_at, released_at
+"""
+
+
+@api.get("/requests/{req_id}/notices", response_model=list[CorrespondenceOut], operation_id="listNotices")
+async def list_notices(req_id: str):
+    async with db.session() as session:
+        result = await session.execute(
+            text(f"""
+                SELECT {_CORR_COLS} FROM pa_correspondence
+                WHERE auth_request_id = :req_id
+                ORDER BY generated_at DESC
+            """),
+            {"req_id": req_id},
+        )
+        return [CorrespondenceOut(**dict(r)) for r in result.mappings().all()]
+
+
+@api.post("/requests/{req_id}/notices", response_model=CorrespondenceOut, operation_id="generateNotice")
+async def generate_notice(req_id: str, notice_in: GenerateNoticeIn):
+    """Generate a determination notice: AI-draft rationale + regulatory scaffold,
+    PHI-redaction gate, PDF render to the UC Volume, and a tracked correspondence row.
+    """
+    # 1. Gather case facts from the operational queue.
+    async with db.session() as session:
+        result = await session.execute(
+            text("""
+                SELECT auth_request_id, member_id, member_name,
+                       requesting_provider_npi, provider_name,
+                       procedure_code, procedure_description, line_of_business,
+                       policy_id, policy_name, clinical_summary,
+                       determination_reason, denial_reason_code
+                FROM pa_review_queue WHERE auth_request_id = :req_id
+            """),
+            {"req_id": req_id},
+        )
+        row = result.mappings().one_or_none()
+        if not row:
+            raise HTTPException(status_code=404, detail="PA request not found")
+        facts = dict(row)
+
+    # 2. Build the notice (AI rationale + scaffold + redaction) and render a PDF.
+    notice = await asyncio.to_thread(corr.build_notice, notice_in.notice_type.value, facts)
+    try:
+        pdf_path = await asyncio.to_thread(corr.render_notice_pdf, notice, facts)
+    except Exception as e:
+        print(f"[correspondence] PDF render failed: {e}")
+        pdf_path = None
+
+    # 3. Persist the correspondence row (draft state) + an audit action.
+    async with db.session() as session:
+        ins = await session.execute(
+            text(f"""
+                INSERT INTO pa_correspondence (
+                    auth_request_id, notice_type, recipient, recipient_role,
+                    subject, body_markdown, body_redacted, redaction_notes,
+                    includes_appeal_rights, criteria_citation, template_version,
+                    pdf_path, delivery_channel, delivery_status, generated_by
+                ) VALUES (
+                    :aid, CAST(:ntype AS notice_type), :recipient, :recipient_role,
+                    :subject, :body, :redacted, :redaction_notes,
+                    :appeal_rights, :citation, :tpl_version,
+                    :pdf_path, CAST(:channel AS delivery_channel),
+                    'draft'::delivery_status, 'ai_query'
+                )
+                RETURNING {_CORR_COLS}
+            """),
+            {
+                "aid": req_id,
+                "ntype": notice["notice_type"],
+                "recipient": notice_in.recipient,
+                "recipient_role": notice_in.recipient_role,
+                "subject": notice["subject"],
+                "body": notice["body_markdown"],
+                "redacted": notice["body_redacted"],
+                "redaction_notes": notice["redaction_notes"],
+                "appeal_rights": notice["includes_appeal_rights"],
+                "citation": notice["criteria_citation"],
+                "tpl_version": notice["template_version"],
+                "pdf_path": pdf_path,
+                "channel": notice_in.delivery_channel,
+            },
+        )
+        created = ins.mappings().one()
+        await session.execute(
+            text("""
+                INSERT INTO pa_review_actions (auth_request_id, action_type, note, metadata_json)
+                VALUES (:aid, 'auto_generated', :note, CAST(:meta AS jsonb))
+            """),
+            {
+                "aid": req_id,
+                "note": f"Generated {notice['notice_type']} notice ({notice['redaction_notes']}).",
+                "meta": json.dumps({"notice_id": created["notice_id"], "pdf_path": pdf_path}),
+            },
+        )
+        await session.commit()
+        return CorrespondenceOut(**dict(created))
+
+
+@api.post("/notices/{notice_id}/release", response_model=CorrespondenceOut, operation_id="releaseNotice")
+async def release_notice(notice_id: str):
+    """Release a drafted notice for delivery — only after the PHI gate has run."""
+    async with db.session() as session:
+        check = await session.execute(
+            text("SELECT body_redacted FROM pa_correspondence WHERE notice_id = CAST(:nid AS uuid)"),
+            {"nid": notice_id},
+        )
+        row = check.mappings().one_or_none()
+        if not row:
+            raise HTTPException(status_code=404, detail="Notice not found")
+        if not row["body_redacted"]:
+            raise HTTPException(status_code=400, detail="Notice has not passed the PHI-redaction gate")
+
+        result = await session.execute(
+            text(f"""
+                UPDATE pa_correspondence
+                SET delivery_status = 'released'::delivery_status, released_at = now()
+                WHERE notice_id = CAST(:nid AS uuid)
+                RETURNING {_CORR_COLS}
+            """),
+            {"nid": notice_id},
+        )
+        await session.commit()
+        return CorrespondenceOut(**dict(result.mappings().one()))
+
+
+# ===================================================================
 # Policy Library (from UC via Statement Execution)
 # ===================================================================
 
@@ -534,6 +1264,55 @@ async def get_ml_prediction_endpoint(req_id: str):
     if not prediction:
         return {"message": "No ML prediction available"}
     return prediction
+
+
+@api.post("/requests/{req_id}/ai-decision", response_model=PARequestDetailOut, operation_id="recordAIDecision")
+async def record_ai_decision(req_id: str, payload: dict):
+    """Record a reviewer's acceptance or override of the AI recommendation.
+
+    Governance requirement (RFI: AI & Advanced Intelligence — human oversight and
+    override): every AI-assisted recommendation that a human accepts or overrides
+    is logged to the immutable action trail with the reviewer's rationale.
+    """
+    action = (payload.get("action") or "").lower()  # 'accept' | 'override'
+    if action not in ("accept", "override"):
+        raise HTTPException(status_code=400, detail="action must be 'accept' or 'override'")
+    reason = payload.get("reason") or ""
+
+    async with db.session() as session:
+        check = await session.execute(
+            text("""SELECT assigned_reviewer_id::text, ai_recommendation, ai_confidence
+                    FROM pa_review_queue WHERE auth_request_id = :req_id"""),
+            {"req_id": req_id},
+        )
+        row = check.mappings().one_or_none()
+        if not row:
+            raise HTTPException(status_code=404, detail="PA request not found")
+
+        verb = "accepted" if action == "accept" else "overrode"
+        note = (
+            f"Reviewer {verb} the AI recommendation "
+            f"(confidence {row['ai_confidence']}). {reason}".strip()
+        )
+        await session.execute(
+            text("""
+                INSERT INTO pa_review_actions
+                    (auth_request_id, reviewer_id, action_type, note, metadata_json)
+                VALUES (:req_id, CAST(:rev AS uuid), 'ai_recommendation', :note, CAST(:meta AS jsonb))
+            """),
+            {
+                "req_id": req_id, "rev": row["assigned_reviewer_id"], "note": note,
+                "meta": json.dumps({
+                    "human_action": action,
+                    "ai_recommendation": row["ai_recommendation"],
+                    "ai_confidence": float(row["ai_confidence"]) if row["ai_confidence"] is not None else None,
+                    "reason": reason,
+                }, default=str),
+            },
+        )
+        await session.commit()
+
+    return await get_request(req_id)
 
 
 # ===================================================================

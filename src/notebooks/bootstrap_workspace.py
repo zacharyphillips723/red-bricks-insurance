@@ -141,8 +141,10 @@ except Exception as e:
         "red-bricks-command-center-app",
         "red-bricks-fwa-portal-app",
         "red-bricks-pa-portal-app",
+        "red-bricks-denial-scrub-app",
         "rb-network-adequacy-app",
-        "rb-uw-sim",
+        "rb-uw-sim-dev",
+        "rb-grp-rpt-dev",
     ]
 
 # All UC schemas that apps may need to read
@@ -530,7 +532,7 @@ def discover_serving_endpoint_service_principals() -> list[dict]:
     own SPs which need the same UC, warehouse, Genie, and Lakebase grants as app SPs.
     """
     # Custom serving endpoints that need grants (exclude FMAPI pay-per-token endpoints)
-    SERVING_ENDPOINT_PATTERNS = ["fwa-supervisor-agent", "fwa-fraud-scorer", "readmission-scorer"]
+    SERVING_ENDPOINT_PATTERNS = ["fwa-supervisor-agent", "fwa-fraud-scorer", "readmission-scorer", "denial-risk-scorer"]
 
     import requests
     host = spark.conf.get("spark.databricks.workspaceUrl")
@@ -806,7 +808,7 @@ if app_sps:
     # Serving endpoints that app SPs need CAN_QUERY on.
     # Includes the FWA supervisor agent (apps call it via SDK in endpoint mode)
     # and any custom scoring endpoints.
-    CUSTOM_ENDPOINTS = ["fwa-supervisor-agent", "fwa-fraud-scorer", "readmission-scorer"]
+    CUSTOM_ENDPOINTS = ["fwa-supervisor-agent", "fwa-fraud-scorer", "readmission-scorer", "denial-risk-scorer"]
 
     for ep_name in CUSTOM_ENDPOINTS:
         print(f"\nGranting CAN_QUERY on serving endpoint '{ep_name}'...")
@@ -1370,6 +1372,91 @@ else:
     except Exception as _te:
         import traceback as _tb
         print(f"  WARNING: PA UC trace storage provisioning failed: {_te}")
+        _tb.print_exc()
+
+# COMMAND ----------
+
+print("=" * 60)
+print("STEP 3b-2b: Provision MLflow UC Trace Storage (Denial Scrubber Agent)")
+print("=" * 60)
+
+# These MUST stay in sync with app-provider-scrub/backend/env_config.py defaults
+# and the MLFLOW_UC_EXPERIMENT / UC_TRACE_* env vars in resources/app_denial_scrub.yml.
+DENIAL_TRACE_EXPERIMENT = "/Shared/red-bricks-denial-agent-traces-uc"
+DENIAL_TRACE_SCHEMA = "analytics"
+DENIAL_TRACE_TABLE_PREFIX = "denial_agent"
+
+if not warehouse_id:
+    print("  Skipped — no warehouse_id available (required to provision UC trace tables).")
+else:
+    try:
+        import os as _os
+        import mlflow
+        from mlflow.entities import UnityCatalog
+
+        mlflow.set_tracking_uri("databricks")
+        _os.environ["MLFLOW_TRACING_SQL_WAREHOUSE_ID"] = warehouse_id
+
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog_sql}.{DENIAL_TRACE_SCHEMA}")
+
+        exp = mlflow.set_experiment(
+            DENIAL_TRACE_EXPERIMENT,
+            trace_location=UnityCatalog(
+                catalog_name=catalog,
+                schema_name=DENIAL_TRACE_SCHEMA,
+                table_prefix=DENIAL_TRACE_TABLE_PREFIX,
+            ),
+        )
+        print(f"  Experiment linked: {DENIAL_TRACE_EXPERIMENT} (ID: {exp.experiment_id})")
+
+        # Tag the experiment with the monitoring SQL warehouse so the MLflow UI can
+        # query the UC trace tables — required for the Traces list + the span
+        # Assessments/feedback panel to render (and for scheduled monitoring jobs).
+        try:
+            from mlflow.tracing import set_databricks_monitoring_sql_warehouse_id
+            set_databricks_monitoring_sql_warehouse_id(warehouse_id)
+            print(f"  Set mlflow.monitoring.sqlWarehouseId = {warehouse_id}")
+        except Exception as _we:
+            try:
+                mlflow.MlflowClient().set_experiment_tag(
+                    exp.experiment_id, "mlflow.monitoring.sqlWarehouseId", warehouse_id
+                )
+                print(f"  Set monitoring warehouse tag via client = {warehouse_id}")
+            except Exception as _we2:
+                print(f"  WARNING: could not set monitoring warehouse tag: {_we2}")
+
+        _otel_tables = [
+            f"{DENIAL_TRACE_TABLE_PREFIX}_otel_spans",
+            f"{DENIAL_TRACE_TABLE_PREFIX}_otel_logs",
+            f"{DENIAL_TRACE_TABLE_PREFIX}_otel_annotations",
+        ]
+        _existing = {
+            r["tableName"]
+            for r in spark.sql(
+                f"SHOW TABLES IN {catalog_sql}.{DENIAL_TRACE_SCHEMA} LIKE '{DENIAL_TRACE_TABLE_PREFIX}_otel_*'"
+            ).collect()
+        }
+        _missing = [t for t in _otel_tables if t not in _existing]
+        if _missing:
+            print(f"  WARNING: expected OTel tables missing: {_missing}. "
+                  "Choose a fresh DENIAL_TRACE_EXPERIMENT name and re-run.")
+        else:
+            print(f"  Verified OTel tables exist: {sorted(_existing)}")
+
+        if app_sps:
+            print("\n  Granting app SPs access to denial trace tables...")
+            for _sp in app_sps:
+                _sp_name = _sp["sp_name"]
+                for _tbl in sorted(_existing):
+                    _fq = f"{catalog_sql}.{DENIAL_TRACE_SCHEMA}.`{_tbl}`"
+                    try:
+                        spark.sql(f"GRANT SELECT, MODIFY ON TABLE {_fq} TO `{_sp_name}`")
+                    except Exception as _ge:
+                        print(f"    {_sp_name} on {_tbl}: {_ge}")
+            print(f"    SELECT + MODIFY granted to {len(app_sps)} SP(s) on {len(_existing)} table(s)")
+    except Exception as _te:
+        import traceback as _tb
+        print(f"  WARNING: Denial UC trace storage provisioning failed: {_te}")
         _tb.print_exc()
 
 # COMMAND ----------
@@ -2263,6 +2350,334 @@ def seed_pa_review_queue() -> int:
     print(f"  {count} PA review requests seeded with realistic dates.")
     return count
 
+
+def seed_pa_appeals() -> int:
+    """File appeals against a subset of denied / partially-approved determinations.
+
+    Each appeal is routed to a reviewer OTHER than the original determiner (the
+    conflict-of-interest rule the app enforces), and a mix of outcomes
+    (Overturned / Partially Overturned / Upheld / still In Review) is seeded so
+    the Appeals queue and overturn-rate metrics look realistic.
+    """
+    count = 0
+    with get_pg_connection(LAKEBASE_PROJECT_ID, "pa_reviews") as conn:
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE pa_appeal_actions, pa_appeals CASCADE")
+
+            # Active reviewer pool for routing appeals
+            cur.execute("SELECT reviewer_id FROM pa_reviewers WHERE is_active = TRUE")
+            reviewer_ids = [r[0] for r in cur.fetchall()]
+            if not reviewer_ids:
+                print("  No reviewers available — skipping appeals seed.")
+                return 0
+
+            # Appeal ~35% of denied/partial determinations
+            cur.execute("""
+                SELECT auth_request_id, assigned_reviewer_id, urgency::text, status::text
+                FROM pa_review_queue
+                WHERE status IN ('Denied', 'Partially Approved')
+                ORDER BY random()
+            """)
+            candidates = cur.fetchall()
+            target = max(1, int(len(candidates) * 0.35)) if candidates else 0
+
+            import random as _rnd
+            _rnd.seed(42)
+            for auth_id, orig_reviewer, urgency, _src_status in candidates[:target]:
+                # Pick an appeals reviewer that is NOT the original determiner
+                pool = [rid for rid in reviewer_ids if rid != orig_reviewer] or reviewer_ids
+                appeal_reviewer = _rnd.choice(pool)
+                appeal_type = _rnd.choice(
+                    ["standard", "standard", "clinical", "provider", "member", "expedited"]
+                )
+                # Outcome mix: 30% overturned, 15% partial, 35% upheld, 20% still open
+                outcome = _rnd.choices(
+                    ["Overturned", "Partially Overturned", "Upheld", "In Review"],
+                    weights=[30, 15, 35, 20], k=1,
+                )[0]
+
+                is_terminal = outcome != "In Review"
+                # A terminal status requires determination_date at insert time
+                # (chk_appeal_determination_date); the later date-shift pass
+                # re-derives it from filed_date. Non-terminal stays NULL.
+                cur.execute(
+                    """INSERT INTO pa_appeals (
+                        auth_request_id, appeal_type, urgency, filed_by, filed_role,
+                        filing_reason, original_reviewer_id, assigned_reviewer_id, status,
+                        determination_date
+                    ) VALUES (%s, %s::appeal_type, %s::pa_urgency, %s, %s, %s, %s, %s,
+                        %s::appeal_status,
+                        CASE WHEN %s THEN now() ELSE NULL END)
+                    RETURNING appeal_id""",
+                    (
+                        auth_id, appeal_type, urgency,
+                        _rnd.choice(["Provider", "Member"]),
+                        "Requesting party",
+                        "Determination disputed — additional clinical documentation submitted.",
+                        orig_reviewer, appeal_reviewer,
+                        "In Review" if not is_terminal else outcome,
+                        is_terminal,
+                    ),
+                )
+                appeal_id = cur.fetchone()[0]
+
+                cur.execute(
+                    """INSERT INTO pa_appeal_actions (appeal_id, reviewer_id, action_type, new_status, note)
+                       VALUES (%s, %s, 'filed', 'Received'::appeal_status, %s)""",
+                    (appeal_id, None, "Appeal intake logged."),
+                )
+                cur.execute(
+                    """INSERT INTO pa_appeal_actions (appeal_id, reviewer_id, action_type,
+                        previous_status, new_status, note)
+                       VALUES (%s, %s, 'assignment', 'Received'::appeal_status,
+                        'In Review'::appeal_status, %s)""",
+                    (appeal_id, appeal_reviewer, "Routed to independent appeals reviewer."),
+                )
+
+                if outcome != "In Review":
+                    cur.execute(
+                        """INSERT INTO pa_appeal_actions (appeal_id, reviewer_id, action_type,
+                            previous_status, new_status, note)
+                           VALUES (%s, %s, 'determination', 'In Review'::appeal_status,
+                            %s::appeal_status, %s)""",
+                        (appeal_id, appeal_reviewer, outcome, f"Appeal {outcome.lower()}."),
+                    )
+                    # Reflect the outcome on the source determination
+                    src_status = "Appeal Overturned" if outcome in (
+                        "Overturned", "Partially Overturned"
+                    ) else "Appeal Upheld"
+                    cur.execute(
+                        """UPDATE pa_review_queue
+                           SET status = %s::pa_review_status, appeal_outcome = %s
+                           WHERE auth_request_id = %s""",
+                        (src_status, outcome, auth_id),
+                    )
+                count += 1
+            conn.commit()
+
+        # Spread filed_date over the last 0-45 days and recompute deadlines/turnaround
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE pa_appeals
+                SET filed_date = now() - (random() * INTERVAL '45 days'),
+                    cms_deadline = NULL
+            """)
+            cur.execute("""
+                UPDATE pa_appeals
+                SET cms_deadline = filed_date + CASE
+                        WHEN urgency = 'expedited' THEN INTERVAL '72 hours'
+                        WHEN urgency = 'standard'  THEN INTERVAL '30 days'
+                        ELSE INTERVAL '60 days'
+                    END
+            """)
+            cur.execute("""
+                UPDATE pa_appeals
+                SET determination_date = filed_date + (random() * INTERVAL '20 days') + INTERVAL '1 day'
+                WHERE status IN ('Overturned', 'Partially Overturned', 'Upheld')
+            """)
+            cur.execute("""
+                UPDATE pa_appeals
+                SET turnaround_hours = EXTRACT(EPOCH FROM (determination_date - filed_date)) / 3600.0,
+                    cms_compliant = determination_date <= cms_deadline
+                WHERE determination_date IS NOT NULL
+            """)
+            conn.commit()
+    print(f"  {count} PA appeals seeded with realistic dates.")
+    return count
+
+
+def seed_pa_clinical_extras() -> tuple[int, int]:
+    """Seed criteria versions, stamp point-in-time criteria on review-queue rows,
+    and create peer/physician reviews for a subset of clinically complex cases.
+
+    Supports the RFI 'Prior Auth & Clinical Reviews' requirements: criteria
+    version control + effective dating, and physician/peer-review management with
+    specialty matching.
+    """
+    import random as _rnd
+    from datetime import datetime, timedelta
+    _rnd.seed(7)
+
+    criteria_rows = [
+        ("InterQual", "Imaging — Advanced", "2026.1", "imaging", "70553|74177|72148"),
+        ("InterQual", "Musculoskeletal — Surgical", "2026.1", "surgery", "27447|27130|29881|22633"),
+        ("MCG", "Behavioral Health — Inpatient", "27th Ed.", "behavioral_health", None),
+        ("MCG", "Specialty Pharmacy", "27th Ed.", "pharmacy", "J0897|J3490"),
+        ("NCD", "DME — Respiratory", "CMS NCD 240.4", "dme", "E0601|E0470"),
+        ("LCD", "Cardiology — Diagnostic", "L34567", "cardiology", None),
+    ]
+
+    criteria_count = 0
+    peer_count = 0
+    with get_pg_connection(LAKEBASE_PROJECT_ID, "pa_reviews") as conn:
+        with conn.cursor() as cur:
+            for src, cset, ver, svc, procs in criteria_rows:
+                cur.execute(
+                    """INSERT INTO medical_criteria_versions
+                        (criteria_source, criteria_set, version_label, service_type,
+                         procedure_codes, effective_start_date, is_active)
+                       VALUES (%s, %s, %s, %s, %s, CURRENT_DATE - INTERVAL '120 days', TRUE)
+                       ON CONFLICT (criteria_source, criteria_set, version_label) DO NOTHING""",
+                    (src, cset, ver, svc, procs),
+                )
+                criteria_count += 1
+
+            # Stamp a plausible criteria citation on each queue row by service type.
+            cur.execute("""
+                UPDATE pa_review_queue q
+                SET criteria_source = c.criteria_source,
+                    criteria_version = c.criteria_source || ' ' || c.version_label,
+                    criteria_effective_date = c.effective_start_date
+                FROM medical_criteria_versions c
+                WHERE c.service_type = q.service_type
+            """)
+            # Fallback for any unmatched service types.
+            cur.execute("""
+                UPDATE pa_review_queue
+                SET criteria_source = 'InterQual',
+                    criteria_version = 'InterQual 2026.1',
+                    criteria_effective_date = CURRENT_DATE - INTERVAL '120 days'
+                WHERE criteria_source IS NULL
+            """)
+            conn.commit()
+
+        # Peer reviews: escalate a sample of open/denied cases to physicians.
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT reviewer_id, specialty FROM pa_reviewers
+                WHERE is_active = TRUE AND role IN ('Medical Director', 'Peer Reviewer')
+            """)
+            physicians = cur.fetchall()
+            cur.execute("""
+                SELECT reviewer_id FROM pa_reviewers
+                WHERE is_active = TRUE AND role = 'UM Nurse' LIMIT 1
+            """)
+            nurse_row = cur.fetchone()
+            um_nurse = nurse_row[0] if nurse_row else None
+
+            if physicians:
+                cur.execute("""
+                    SELECT auth_request_id, service_type FROM pa_review_queue
+                    WHERE status IN ('Peer Review Requested', 'Denied', 'In Review')
+                    ORDER BY random() LIMIT 12
+                """)
+                for auth_id, _svc in cur.fetchall():
+                    phys_id, phys_spec = _rnd.choice(physicians)
+                    p2p = _rnd.random() < 0.5
+                    decided = _rnd.random() < 0.6
+                    cur.execute(
+                        """INSERT INTO pa_peer_reviews
+                            (auth_request_id, requested_by_id, peer_reviewer_id,
+                             requested_specialty, reason, status, p2p_requested,
+                             p2p_scheduled_at, p2p_completed_at, p2p_summary,
+                             determination, determination_notes, notified_at)
+                           VALUES (%s, %s, %s, %s, %s, %s::peer_review_status, %s,
+                             %s, %s, %s, %s, %s, %s)""",
+                        (
+                            auth_id, um_nurse, phys_id, phys_spec,
+                            "Case exceeds nurse review authority; specialty determination required.",
+                            "Determination Made" if decided else ("Scheduled" if p2p else "Requested"),
+                            p2p,
+                            (datetime.now() - timedelta(days=1)) if p2p else None,
+                            (datetime.now()) if (p2p and decided) else None,
+                            "Peer-to-peer discussion held with requesting provider." if (p2p and decided) else None,
+                            _rnd.choice(["Uphold denial", "Overturn — approve", "Overturn — partial approval"]) if decided else None,
+                            "Reviewed against applicable clinical criteria." if decided else None,
+                            (datetime.now()) if decided else None,
+                        ),
+                    )
+                    peer_count += 1
+            conn.commit()
+    print(f"  {criteria_count} criteria versions seeded; {peer_count} peer reviews created.")
+    return criteria_count, peer_count
+
+
+def seed_business_rules() -> int:
+    """Seed a starter set of ACTIVE no-code business rules (RFI: Business Rules
+    Engine). Runs in parallel with the Tier-1 SQL; authored/extended in the app's
+    Rules Studio. One pair deliberately overlaps to demonstrate conflict detection.
+    """
+    import json as _json
+    rules = [
+        {
+            "name": "Auto-approve routine advanced imaging",
+            "description": "Auto-approve standard-urgency advanced imaging under $1,500.",
+            "category": "auto-adjudication", "lob": None, "svc": "imaging",
+            "conditions": {"all": [
+                {"field": "urgency", "op": "eq", "value": "standard"},
+                {"field": "estimated_cost", "op": "lte", "value": 1500},
+            ]},
+            "action": "auto_approve", "action_detail": None, "priority": 20,
+        },
+        {
+            "name": "Auto-deny non-covered cosmetic procedures",
+            "description": "Auto-deny procedures on the non-covered cosmetic code list.",
+            "category": "auto-adjudication", "lob": None, "svc": None,
+            "conditions": {"any": [
+                {"field": "procedure_code", "op": "in", "value": ["15780", "15788", "15792"]},
+            ]},
+            "action": "auto_deny", "action_detail": "CO-167 non-covered", "priority": 10,
+        },
+        {
+            "name": "Pend high-cost inpatient surgical",
+            "description": "Route high-dollar inpatient surgery to manual clinical review.",
+            "category": "auto-adjudication", "lob": None, "svc": "surgery",
+            "conditions": {"all": [
+                {"field": "estimated_cost", "op": "gt", "value": 25000},
+            ]},
+            "action": "pend", "action_detail": None, "priority": 30,
+        },
+        {
+            "name": "Route expedited behavioral health to peer review",
+            "description": "Expedited behavioral-health requests go straight to a peer reviewer.",
+            "category": "routing", "lob": None, "svc": "behavioral_health",
+            "conditions": {"all": [
+                {"field": "urgency", "op": "eq", "value": "expedited"},
+            ]},
+            "action": "route", "action_detail": "Peer Reviewer — Behavioral Health", "priority": 40,
+        },
+        # Deliberately overlaps rule #1's scope (imaging) with a different action,
+        # so /rules/conflicts surfaces a real example for the demo.
+        {
+            "name": "Pend Medicare Advantage imaging for audit",
+            "description": "MA imaging requests are pended for compliance sampling.",
+            "category": "auto-adjudication", "lob": "Medicare Advantage", "svc": "imaging",
+            "conditions": {"all": [
+                {"field": "line_of_business", "op": "eq", "value": "Medicare Advantage"},
+            ]},
+            "action": "pend", "action_detail": "Compliance audit sample", "priority": 50,
+        },
+    ]
+
+    count = 0
+    with get_pg_connection(LAKEBASE_PROJECT_ID, "pa_reviews") as conn:
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE pa_rule_versions, pa_business_rules CASCADE")
+            for r in rules:
+                cur.execute(
+                    """INSERT INTO pa_business_rules
+                        (name, description, category, line_of_business, service_type,
+                         conditions_json, action, action_detail, priority, status,
+                         created_by, approved_by, approved_at)
+                       VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::rule_action, %s, %s,
+                         'active'::rule_status, 'business_admin', 'medical_director', now())
+                       RETURNING rule_id, version""",
+                    (r["name"], r["description"], r["category"], r["lob"], r["svc"],
+                     _json.dumps(r["conditions"]), r["action"], r["action_detail"], r["priority"]),
+                )
+                rule_id, version = cur.fetchone()
+                cur.execute(
+                    """INSERT INTO pa_rule_versions
+                        (rule_id, version, change_type, snapshot_json, changed_by, change_reason)
+                       SELECT rule_id, version, 'created', to_jsonb(t), 'business_admin', 'Seeded'
+                       FROM pa_business_rules t WHERE rule_id = %s""",
+                    (rule_id,),
+                )
+                count += 1
+            conn.commit()
+    print(f"  {count} business rules seeded (active).")
+    return count
+
 # COMMAND ----------
 
 print("=" * 60)
@@ -2277,6 +2692,15 @@ inv_count = seed_fwa_investigations()
 
 print("\n--- PA Review Queue ---")
 pa_count = seed_pa_review_queue()
+
+print("\n--- PA Appeals ---")
+appeal_count = seed_pa_appeals()
+
+print("\n--- PA Criteria Versions & Peer Reviews ---")
+criteria_count, peer_review_count = seed_pa_clinical_extras()
+
+print("\n--- PA Business Rules ---")
+rules_count = seed_business_rules()
 
 # COMMAND ----------
 

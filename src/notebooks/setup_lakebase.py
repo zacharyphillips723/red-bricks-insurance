@@ -71,6 +71,10 @@ LAKEBASE_DATABASES = [
         "database_name": "pa_reviews",
         "schema_file": "src/pa_reviews_lakebase_schema.sql",
     },
+    {
+        "database_name": "denial_scrub",
+        "schema_file": "src/denial_scrub_lakebase_schema.sql",
+    },
 ]
 
 # COMMAND ----------

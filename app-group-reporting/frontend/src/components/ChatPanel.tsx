@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { Send, Loader2, Sparkles, Slack, Globe, Database, FileText } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { api } from "@/lib/api";
 
 const mdComponents: Components = {
@@ -18,8 +19,19 @@ const mdComponents: Components = {
   ul: ({ children }) => <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>,
   li: ({ children }) => <li className="leading-relaxed">{children}</li>,
   strong: ({ children }) => <strong className="font-semibold text-gray-900">{children}</strong>,
+  em: ({ children }) => <em className="italic">{children}</em>,
   code: ({ children }) => (
     <code className="bg-gray-100 text-databricks-red px-1 py-0.5 rounded text-xs font-mono">{children}</code>
+  ),
+  table: ({ children }) => (
+    <table className="w-full text-xs my-2 border-collapse">{children}</table>
+  ),
+  th: ({ children }) => (
+    <th className="px-2 py-1.5 text-left font-medium text-gray-600 border-b border-gray-300">{children}</th>
+  ),
+  td: ({ children }) => <td className="px-2 py-1.5 text-gray-700 border-b border-gray-100">{children}</td>,
+  blockquote: ({ children }) => (
+    <blockquote className="border-l-2 border-databricks-red/40 pl-3 my-2 text-gray-600 italic">{children}</blockquote>
   ),
 };
 
@@ -140,7 +152,7 @@ export function ChatPanel({ groupId }: ChatPanelProps) {
                 </div>
               ) : (
                 <div className="rounded-2xl rounded-tl-sm px-3 py-2 text-sm bg-gray-100 text-gray-800">
-                  <ReactMarkdown components={mdComponents}>{msg.text}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{msg.text}</ReactMarkdown>
                 </div>
               )}
               {msg.enrichmentSources && msg.enrichmentSources.length > 0 && (

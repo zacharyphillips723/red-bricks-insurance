@@ -123,10 +123,14 @@ POS_CODES = {
 # CO=Contractual, PR=Patient Responsibility, PI=Payer Initiated, OA=Other
 DENIAL_CODES = [
     "CO-4",     # Procedure code inconsistent with modifier
+    "CO-11",    # Diagnosis inconsistent with the procedure
     "CO-16",    # Claim lacks information needed for adjudication
     "CO-29",    # Time limit for filing expired
     "CO-50",    # Non-covered / not medically necessary
+    "CO-55",    # Procedure/treatment deemed experimental/investigational
+    "CO-96",    # Non-covered charge(s)
     "CO-97",    # Benefit for this service in another claim
+    "CO-151",   # Info submitted does not support this many/frequency of services
     "PI-204",   # Service not covered under patient's plan
     "PR-1",     # Deductible amount
     "PR-2",     # Coinsurance amount

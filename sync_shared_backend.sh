@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SHARED="$SCRIPT_DIR/lib/shared_backend"
 
 # Apps that use Lakebase (have database.py)
-DB_APPS=("app" "app-fwa" "app-underwriting-sim" "app-prior-auth")
+DB_APPS=("app" "app-fwa" "app-underwriting-sim" "app-prior-auth" "app-provider-scrub")
 
 echo "Syncing shared backend modules..."
 

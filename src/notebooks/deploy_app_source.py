@@ -31,6 +31,7 @@ APP_SOURCE_MAP = {
     "red-bricks-command-center-app": "app",
     "red-bricks-fwa-portal-app": "app-fwa",
     "red-bricks-pa-portal-app": "app-prior-auth",
+    "red-bricks-denial-scrub-app": "app-provider-scrub",
     "rb-network-adequacy-app": "app-network-adequacy",
 }
 

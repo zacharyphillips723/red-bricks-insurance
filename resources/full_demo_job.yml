@@ -190,6 +190,7 @@ resources:
           depends_on:
             - task_key: gold_analytics_pipeline
             - task_key: build_member_months
+            - task_key: build_denial_prevention_metrics
           notebook_task:
             notebook_path: ../src/notebooks/create_metric_views.py
             base_parameters:
@@ -319,6 +320,85 @@ resources:
               deploy_endpoint: "true"
               wait_minutes: "25"
           environment_key: serving_deploy_env
+
+        # Step 6c-iv: Seed the CARC reference + provider remediation playbook
+        # (static reference tables in the claims schema — read by the Claim Scrubber
+        # app and joined by the denial-reason classifier for its labels).
+        - task_key: build_denial_reference
+          depends_on:
+            - task_key: claims_pipeline
+          notebook_task:
+            notebook_path: ../src/notebooks/build_denial_reference.py
+            base_parameters:
+              catalog: ${var.catalog}
+
+        # Step 6c-v: Train the denial-risk (binary) + denial-reason (multiclass)
+        # models on historical claims and register the denial_scorer pyfunc wrapper.
+        # Depends on build_denial_reference for the reason-category labels.
+        - task_key: train_denial_model
+          depends_on:
+            - task_key: claims_pipeline
+            - task_key: benefits_pipeline
+            - task_key: prior_auth_pipeline
+            - task_key: build_denial_reference
+          notebook_task:
+            notebook_path: ../src/notebooks/train_denial_model.py
+            base_parameters:
+              catalog: ${var.catalog}
+          environment_key: ml_training_env
+
+        # Step 6c-vi: Stand up the denial-risk-scorer serving endpoint and WAIT until
+        # READY (mirrors deploy_readmission_endpoint — provisioning takes ~10-20 min).
+        - task_key: deploy_denial_endpoint
+          depends_on:
+            - task_key: train_denial_model
+          timeout_seconds: 1980  # 33 min — above the in-notebook poll ceiling
+          notebook_task:
+            notebook_path: ../src/notebooks/deploy_denial_endpoint.py
+            base_parameters:
+              catalog: ${var.catalog}
+          environment_key: serving_deploy_env
+
+        # Step 6c-vii: Monthly denial forecast (ai_forecast → Prophet fallback)
+        - task_key: build_denial_forecast
+          depends_on:
+            - task_key: claims_pipeline
+          notebook_task:
+            notebook_path: ../src/notebooks/build_denial_forecast.py
+            base_parameters:
+              catalog: ${var.catalog}
+
+        # Step 6c-viii: Denial-prevention metric source table (feeds mv_denial_prevention)
+        - task_key: build_denial_prevention_metrics
+          depends_on:
+            - task_key: claims_pipeline
+            - task_key: train_denial_model
+          notebook_task:
+            notebook_path: ../src/notebooks/build_denial_prevention_metrics.py
+            base_parameters:
+              catalog: ${var.catalog}
+
+        # Step 6c-ix: Denial-model governance/drift audit + Lakehouse Monitor
+        - task_key: denial_model_governance
+          depends_on:
+            - task_key: train_denial_model
+            - task_key: deploy_denial_endpoint
+          notebook_task:
+            notebook_path: ../src/notebooks/denial_model_governance.py
+            base_parameters:
+              catalog: ${var.catalog}
+          environment_key: ml_training_env
+
+        # Step 6c-x: Champion/challenger experiment + gated promotion
+        - task_key: experiment_denial_model
+          depends_on:
+            - task_key: train_denial_model
+            - task_key: deploy_denial_endpoint
+          notebook_task:
+            notebook_path: ../src/notebooks/experiment_denial_model.py
+            base_parameters:
+              catalog: ${var.catalog}
+          environment_key: ml_training_env
 
         # Step 6d: Deploy FWA Investigation Agent
         - task_key: deploy_fwa_agent
@@ -477,6 +557,9 @@ resources:
             - task_key: train_fwa_model
             - task_key: train_readmission_model
             - task_key: deploy_readmission_endpoint
+            - task_key: build_denial_reference
+            - task_key: train_denial_model
+            - task_key: deploy_denial_endpoint
             - task_key: deploy_fwa_agent
             - task_key: setup_vector_search
             - task_key: network_adequacy_pipeline

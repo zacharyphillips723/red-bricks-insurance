@@ -79,6 +79,9 @@ export interface PARequestDetail extends PARequestListItem {
   determination_reason: string | null;
   denial_reason_code: string | null;
   reviewer_notes: string | null;
+  criteria_source?: string | null;
+  criteria_version?: string | null;
+  criteria_effective_date?: string | null;
   determination_date: string | null;
   turnaround_hours: number | null;
   appeal_filed: boolean | null;
@@ -195,6 +198,121 @@ export interface OverdueRequest {
   request_date: string | null;
 }
 
+export interface Appeal {
+  appeal_id: string;
+  auth_request_id: string;
+  member_name: string | null;
+  service_type: string | null;
+  procedure_code: string | null;
+  procedure_description: string | null;
+  line_of_business: string | null;
+  original_denial_reason_code: string | null;
+  original_determination_reason: string | null;
+  original_status: string | null;
+  appeal_type: string | null;
+  urgency: string | null;
+  filed_by: string | null;
+  filed_date: string | null;
+  status: string | null;
+  determination: string | null;
+  original_reviewer_name: string | null;
+  appeal_reviewer_name: string | null;
+  appeal_reviewer_role: string | null;
+  assigned_at: string | null;
+  cms_deadline: string | null;
+  cms_compliant: boolean | null;
+  determination_date: string | null;
+  turnaround_hours: number | null;
+  hours_until_deadline: number | null;
+}
+
+export interface BusinessRule {
+  rule_id: string;
+  name: string;
+  description: string | null;
+  category: string | null;
+  line_of_business: string | null;
+  service_type: string | null;
+  conditions_json: Record<string, unknown>;
+  action: string;
+  action_detail: string | null;
+  priority: number;
+  effective_start_date: string | null;
+  effective_end_date: string | null;
+  version: number;
+  status: string;
+  created_by: string | null;
+  approved_by: string | null;
+  approved_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface RuleSimulation {
+  total_evaluated: number;
+  matched: number;
+  match_rate_pct: number;
+  action: string | null;
+  would_agree: number;
+  would_disagree: number;
+  agreement_rate_pct: number | null;
+  sample_matches: string[];
+}
+
+export interface RuleConflict {
+  rule_a: { rule_id: string; name: string; action: string; priority: number };
+  rule_b: { rule_id: string; name: string; action: string; priority: number };
+  winner_rule_id: string;
+}
+
+export interface RuleEvaluation {
+  decision: string | null;
+  action: string | null;
+  action_detail?: string | null;
+  fired_rule: { rule_id: string; name: string } | null;
+  matched_rules: { rule_id: string; name: string; action: string; priority: number }[];
+}
+
+export interface PeerReview {
+  peer_review_id: string;
+  auth_request_id: string;
+  requested_by_name: string | null;
+  peer_reviewer_name: string | null;
+  peer_reviewer_role: string | null;
+  requested_specialty: string | null;
+  reason: string | null;
+  status: string | null;
+  p2p_requested: boolean | null;
+  p2p_scheduled_at: string | null;
+  p2p_completed_at: string | null;
+  p2p_summary: string | null;
+  determination: string | null;
+  determination_notes: string | null;
+  notified_at: string | null;
+  created_at: string | null;
+}
+
+export interface Correspondence {
+  notice_id: string;
+  auth_request_id: string | null;
+  notice_type: string;
+  recipient: string | null;
+  recipient_role: string | null;
+  subject: string | null;
+  body_markdown: string | null;
+  body_redacted: boolean | null;
+  redaction_notes: string | null;
+  includes_appeal_rights: boolean | null;
+  criteria_citation: string | null;
+  template_version: string | null;
+  pdf_path: string | null;
+  delivery_channel: string | null;
+  delivery_status: string | null;
+  generated_by: string | null;
+  generated_at: string | null;
+  released_at: string | null;
+}
+
 // --- API Functions ---
 
 export const api = {
@@ -239,6 +357,12 @@ export const api = {
 
   getMLPrediction: (reqId: string) =>
     fetchApi<Record<string, unknown>>(`/requests/${reqId}/ml-prediction`),
+
+  recordAIDecision: (reqId: string, action: "accept" | "override", reason?: string) =>
+    fetchApi<PARequestDetail>(`/requests/${reqId}/ai-decision`, {
+      method: "POST",
+      body: JSON.stringify({ action, reason }),
+    }),
 
   queryAgent: (question: string, authRequestId?: string) =>
     fetchApi<AgentResponse>("/agent/query", {
@@ -296,6 +420,93 @@ export const api = {
 
   getComplianceMetrics: () => fetchApi<ComplianceMetrics>("/compliance/metrics"),
   getOverdueRequests: () => fetchApi<OverdueRequest[]>("/compliance/overdue"),
+
+  // --- Appeals & Reconsiderations ---
+  listAppeals: (params?: Record<string, string>) => {
+    const qs = params ? "?" + new URLSearchParams(params).toString() : "";
+    return fetchApi<Appeal[]>(`/appeals${qs}`);
+  },
+  getAppeal: (id: string) => fetchApi<Appeal>(`/appeals/${id}`),
+  fileAppeal: (body: {
+    auth_request_id: string;
+    appeal_type?: string;
+    urgency?: string;
+    filed_by?: string;
+    filing_reason?: string;
+  }) =>
+    fetchApi<Appeal>("/appeals", { method: "POST", body: JSON.stringify(body) }),
+  assignAppeal: (id: string, reviewerId: string) =>
+    fetchApi<Appeal>(`/appeals/${id}/assign`, {
+      method: "POST",
+      body: JSON.stringify({ reviewer_id: reviewerId }),
+    }),
+  decideAppeal: (
+    id: string,
+    body: {
+      status: string;
+      determination_reason?: string;
+      determination_reason_external?: string;
+      reviewer_notes_internal?: string;
+    },
+  ) =>
+    fetchApi<Appeal>(`/appeals/${id}/determination`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  // --- Business Rules Engine ---
+  listRules: (status?: string) => {
+    const qs = status ? `?status=${encodeURIComponent(status)}` : "";
+    return fetchApi<BusinessRule[]>(`/rules${qs}`);
+  },
+  createRule: (body: Partial<BusinessRule> & { name: string; action: string }) =>
+    fetchApi<BusinessRule>("/rules", { method: "POST", body: JSON.stringify(body) }),
+  updateRule: (id: string, body: Partial<BusinessRule> & { name: string; action: string }) =>
+    fetchApi<BusinessRule>(`/rules/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  activateRule: (id: string) =>
+    fetchApi<BusinessRule>(`/rules/${id}/activate`, { method: "POST" }),
+  retireRule: (id: string) =>
+    fetchApi<BusinessRule>(`/rules/${id}/retire`, { method: "POST" }),
+  simulateRule: (id: string) =>
+    fetchApi<RuleSimulation>(`/rules/${id}/simulate`, { method: "POST" }),
+  getRuleConflicts: () =>
+    fetchApi<{ conflicts: RuleConflict[] }>("/rules/conflicts"),
+  evaluateRequestRules: (reqId: string) =>
+    fetchApi<RuleEvaluation>(`/requests/${reqId}/rule-evaluation`),
+
+  // --- Peer / Physician Review ---
+  listPeerReviews: (reqId: string) =>
+    fetchApi<PeerReview[]>(`/requests/${reqId}/peer-reviews`),
+  requestPeerReview: (
+    reqId: string,
+    body: { peer_reviewer_id?: string; requested_specialty?: string; reason?: string; p2p_requested?: boolean },
+  ) =>
+    fetchApi<PeerReview>(`/requests/${reqId}/peer-reviews`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  decidePeerReview: (
+    peerReviewId: string,
+    body: { determination: string; determination_notes?: string; p2p_summary?: string },
+  ) =>
+    fetchApi<PeerReview>(`/peer-reviews/${peerReviewId}/determination`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  // --- Correspondence / Determination Notices ---
+  listNotices: (reqId: string) =>
+    fetchApi<Correspondence[]>(`/requests/${reqId}/notices`),
+  generateNotice: (
+    reqId: string,
+    body: { notice_type: string; recipient?: string; delivery_channel?: string },
+  ) =>
+    fetchApi<Correspondence>(`/requests/${reqId}/notices`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  releaseNotice: (noticeId: string) =>
+    fetchApi<Correspondence>(`/notices/${noticeId}/release`, { method: "POST" }),
 
   // --- Observability ---
   getTraces: () => fetchApi<{ traces: ObservabilityTrace[] }>("/observability/traces"),

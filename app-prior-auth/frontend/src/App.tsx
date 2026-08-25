@@ -10,6 +10,8 @@ import { CaseloadView } from "@/pages/CaseloadView";
 import { Compliance } from "@/pages/Compliance";
 import { DocumentIntake } from "@/pages/DocumentIntake";
 import { Observability } from "@/pages/Observability";
+import { Appeals } from "@/pages/Appeals";
+import { RulesStudio } from "@/pages/RulesStudio";
 import { useHashRouter } from "@/lib/useHashRouter";
 import { api } from "@/lib/api";
 
@@ -55,6 +57,10 @@ export default function App() {
         return <AgentChat />;
       case "caseload":
         return <CaseloadView />;
+      case "appeals":
+        return <Appeals />;
+      case "rules":
+        return <RulesStudio />;
       case "compliance":
         return <Compliance onSelectRequest={handleSelectRequest} />;
       case "observability":

@@ -1,0 +1,26 @@
+resources:
+  jobs:
+    denial_mlops_governance:
+      name: "[${bundle.target}] Red Bricks — Denial Model MLOps (weekly)"
+      schedule:
+        quartz_cron_expression: "0 0 6 ? * MON"
+        timezone_id: America/New_York
+        pause_status: UNPAUSED
+      tasks:
+        - task_key: denial_governance
+          notebook_task:
+            notebook_path: ../src/notebooks/denial_model_governance.py
+            base_parameters:
+              catalog: ${var.catalog}
+
+        - task_key: denial_experiment
+          depends_on:
+            - task_key: denial_governance
+          notebook_task:
+            notebook_path: ../src/notebooks/experiment_denial_model.py
+            base_parameters:
+              catalog: ${var.catalog}
+
+      tags:
+        project: red-bricks-insurance
+        domain: denial_mlops

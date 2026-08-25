@@ -63,35 +63,36 @@ def _content_to_text(content) -> str:
 SYSTEM_PROMPT = """You are a Sales Strategy Coach for Red Bricks Insurance.
 You help account executives prepare for employer group renewal meetings by
 synthesizing financial data, utilization metrics, stop-loss exposure, and
-cost-of-care analytics into actionable briefings.
+cost-of-care analytics into actionable insight.
 
 You may also receive context from internal systems (Slack discussions, knowledge
 base documents, CRM data). When available, weave this context into your
 recommendations naturally.
 
-Your response MUST include the following sections:
+## How to respond
+Answer the specific question the AE actually asked, and shape your response to
+fit it. Do NOT force every answer into the same template. Read the request and
+respond accordingly:
+- A narrow question (e.g. "what's driving this group's loss ratio?", "how do we
+  compare to peers on ER visits?") deserves a focused, direct answer — a short
+  paragraph or a few bullets. Don't pad it with unrequested sections.
+- A broad "prepare me for the renewal meeting" request deserves a fuller
+  briefing. When a comprehensive briefing genuinely fits, a useful structure is:
+  Group Snapshot, Talking Points, Risk Areas, Competitive Position, Objection
+  Handling, and Care Management & Plan Recommendations — but treat these as a
+  menu, not a mandate. Include only the sections that serve the question.
+- If the AE asks you to take on a persona or scenario (e.g. "act as the benefits
+  director", "explain this like I'm the CFO"), adopt that framing and answer in
+  it rather than reverting to a standard briefing.
 
-## Group Snapshot
-Brief overview: group name, size, industry, funding type, health score, and
-key financial metrics.
+Match the length, format, and tone to what was asked. Use headers and bullets
+when they aid clarity; use plain prose when that reads better. Be conversational
+and relaxed — you're a coach talking things through, not filling out a form.
 
-## Talking Points
-3-5 data-backed talking points the AE should lead with. Include specific numbers
-and peer comparisons.
-
-## Risk Areas
-Top 2-3 risk areas with specific numbers.
-
-## Competitive Position
-Position the group relative to peers based on percentile ranks.
-
-## Objection Handling
-Anticipate 2-3 likely objections with data-backed responses.
-
-## Care Management & Plan Recommendations
-Based on the group's risk profile, utilization patterns, and cost drivers,
-recommend specific Red Bricks programs and plan design options the AE can
-offer during the renewal conversation. Draw from these available programs:
+## Red Bricks programs you can recommend when relevant
+When care-management or plan-design recommendations are appropriate to the
+question, draw from these programs and match them to the group's specific cost
+drivers (don't list them all reflexively):
 - **Complex Case Management**: Nurse-led coordination for members with 2+
   chronic conditions or annual claims >$50K. Typical savings: 15-25%.
 - **Centers of Excellence (COE)**: Steerage to high-quality, lower-cost
@@ -112,9 +113,8 @@ offer during the renewal conversation. Draw from these available programs:
 - **Plan Design Levers**: HDHP with HSA seeding, narrow/tiered networks,
   reference-based pricing, spousal surcharges, tobacco cessation incentives.
 
-Match recommendations to the group's specific cost drivers.
-
-Always cite specific data points. Never fabricate numbers."""
+Always cite specific data points from the context. Never fabricate numbers — if
+the data isn't in the context, say so plainly."""
 
 QUIZ_SYSTEM_PROMPT = """You are a Sales Strategy Coach for Red Bricks Insurance.
 The account executive wants to practice for their renewal meeting. You will be
@@ -148,24 +148,34 @@ they can handle tough conversations with real data."""
 
 
 def _classify_intent(question: str) -> str:
-    """Simple keyword-based intent classification."""
+    """Simple keyword-based intent classification.
+
+    Roleplay/persona detection runs FIRST: a request like "play the role of a
+    benefits director as I prep for a renewal meeting" should trigger roleplay,
+    not get swallowed by the "renewal meeting" full-briefing keyword.
+    """
     q = question.lower()
+    if any(kw in q for kw in ["quiz", "practice", "test me", "challenge",
+                               "roleplay", "role play", "simulate", "negotiate",
+                               "negotiation", "play the role", "act as", "pretend",
+                               "pretend to be", "you are the", "be the",
+                               "as the benefits director", "as a cfo", "as the cfo",
+                               "as an hr", "as the hr"]):
+        return "quiz"
     if any(kw in q for kw in ["prepare me", "briefing", "renewal meeting", "get me ready"]):
         return "full_briefing"
-    if any(kw in q for kw in ["rate increase", "why", "pricing", "renewal"]):
+    if any(kw in q for kw in ["rate increase", "pricing", "renewal"]):
         return "renewal_focus"
     if any(kw in q for kw in ["cost", "tcoc", "high cost", "expensive"]):
         return "cost_focus"
     if any(kw in q for kw in ["peer", "benchmark", "compare", "percentile"]):
         return "peer_comparison"
-    if any(kw in q for kw in ["quiz", "practice", "test me", "challenge",
-                               "roleplay", "role play", "simulate", "negotiate",
-                               "negotiation", "play the role", "pretend"]):
-        return "quiz"
     if any(kw in q for kw in ["care management", "programs", "what can we offer",
                                "value-add", "value add", "benefits", "plan design"]):
         return "full_briefing"
-    return "full_briefing"
+    # Default: a focused general answer (the adaptive prompt shapes it to the
+    # question) rather than always forcing a full six-section briefing.
+    return "general"
 
 
 @mlflow.trace(span_type="AGENT", name="group_sales_coach")
@@ -209,7 +219,9 @@ def _run_sales_coach(group_id: str, question: str):
         report_card = get_report_card(group_id) or {}
         context_sections = [f"## Group Report Card\n{json.dumps(report_card, indent=2, default=str)}"]
 
-        if intent in ("full_briefing", "renewal_focus"):
+        # "general" and "quiz" get the full context too, since the AE could ask
+        # about anything — better to have the data available than to under-serve.
+        if intent in ("full_briefing", "renewal_focus", "peer_comparison", "quiz", "general"):
             experience = get_experience(group_id) or {}
             context_sections.append(f"## Claims Experience\n{json.dumps(experience, indent=2, default=str)}")
             stop_loss = get_stop_loss(group_id) or {}
@@ -217,7 +229,7 @@ def _run_sales_coach(group_id: str, question: str):
             renewal = get_renewal(group_id) or {}
             context_sections.append(f"## Renewal\n{json.dumps(renewal, indent=2, default=str)}")
 
-        if intent in ("full_briefing", "cost_focus"):
+        if intent in ("full_briefing", "cost_focus", "quiz", "general"):
             tcoc = get_tcoc(group_id)
             context_sections.append(f"## Cost Tier Distribution\n{json.dumps(tcoc, indent=2, default=str)}")
 
@@ -278,8 +290,8 @@ def _run_sales_coach(group_id: str, question: str):
         _intent_label = {
             "full_briefing": "renewal briefing", "renewal_focus": "renewal analysis",
             "cost_focus": "cost analysis", "peer_comparison": "peer comparison",
-            "quiz": "negotiation roleplay",
-        }.get(intent, "briefing")
+            "quiz": "negotiation roleplay", "general": "response",
+        }.get(intent, "response")
         yield ("status", {"stage": "generating", "message": f"Composing {_intent_label}…"})
         with mlflow.start_span(name="sales_coach_llm", span_type="LLM") as span:
             span.set_inputs({"model": LLM_ENDPOINT, "intent": intent,
@@ -288,7 +300,7 @@ def _run_sales_coach(group_id: str, question: str):
             data = w.api_client.do(
                 "POST",
                 f"/serving-endpoints/{LLM_ENDPOINT}/invocations",
-                body={"messages": messages, "max_tokens": 2500, "temperature": 0.1},
+                body={"messages": messages, "max_tokens": 2500, "temperature": 0.4},
             )
             answer = _content_to_text(
                 data.get("choices", [{}])[0].get("message", {}).get("content", "No response generated.")

@@ -1,0 +1,54 @@
+resources:
+  apps:
+    red_bricks_denial_scrub:
+      name: "red-bricks-denial-scrub-app"
+      description: "Red Bricks Insurance — Provider Claim Scrubber / Denial Risk Predictor"
+      source_code_path: ../app-provider-scrub
+      config:
+        command:
+          - uvicorn
+          - main:app
+          - --host=0.0.0.0
+          - --port=8000
+        env:
+          - name: LAKEBASE_PROJECT_ID
+            value: ${var.lakebase_project_id}
+          - name: LAKEBASE_DATABASE_NAME
+            value: denial_scrub
+          - name: LAKEBASE_BRANCH
+            value: production
+          - name: SQL_WAREHOUSE_ID
+            value: ${var.warehouse_id}
+          - name: LLM_ENDPOINT
+            value: databricks-llama-4-maverick
+          - name: SCRUB_AGENT_ENDPOINT
+            value: databricks-claude-haiku-4-5
+          - name: DENIAL_ENDPOINT
+            value: denial-risk-scorer
+          - name: VS_ENDPOINT
+            value: red-bricks-vs-endpoint
+          - name: UC_CATALOG
+            value: ${var.catalog}
+          - name: UC_SCHEMA
+            value: claims
+          - name: MLFLOW_TRACKING_URI
+            value: databricks
+          - name: MLFLOW_UC_EXPERIMENT
+            value: /Shared/red-bricks-denial-agent-traces-uc
+          - name: UC_TRACE_SCHEMA
+            value: analytics
+          - name: UC_TRACE_TABLE_PREFIX
+            value: denial_agent
+      resources:
+        - name: llm-endpoint
+          serving_endpoint:
+            name: databricks-llama-4-maverick
+            permission: CAN_QUERY
+        - name: scrub-agent-endpoint
+          serving_endpoint:
+            name: databricks-claude-haiku-4-5
+            permission: CAN_QUERY
+        # denial-risk-scorer is created at runtime by the train/deploy tasks, so it
+        # cannot be granted here (it doesn't exist at bundle-deploy time). The app SP
+        # is granted CAN_QUERY on it by bootstrap_workspace.py — same pattern as the
+        # readmission-scorer / fwa-fraud-scorer endpoints.

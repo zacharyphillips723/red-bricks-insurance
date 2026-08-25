@@ -13,6 +13,9 @@ import {
   FileText,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { NoticesCard } from "@/components/NoticesCard";
+import { PeerReviewCard } from "@/components/PeerReviewCard";
+import { ExplainabilityPanel } from "@/components/ExplainabilityPanel";
 
 interface RequestDetailProps {
   requestId: string;
@@ -107,12 +110,23 @@ export function RequestDetail({ requestId, onBack }: RequestDetailProps) {
   };
 
   const handleFileAppeal = async () => {
+    if (!detail) return;
     setAppealFiling(true);
     try {
-      const updated = await api.addNote(requestId, "Appeal filed by reviewer. Initiating appeal review process per CMS-0057-F guidelines.");
+      // Create a real appeal record; expedited PAs open an expedited appeal.
+      await api.fileAppeal({
+        auth_request_id: requestId,
+        appeal_type: detail.urgency === "expedited" ? "expedited" : "standard",
+        urgency: detail.urgency === "expedited" ? "expedited" : "standard",
+        filed_by: "Provider",
+        filing_reason:
+          "Appeal filed for reconsideration per CMS-0057-F. Additional clinical documentation to follow.",
+      });
+      // Reload — the source case now reflects the 'Appealed' status.
+      const updated = await api.getRequest(requestId);
       setDetail(updated);
     } catch (e) {
-      console.error("Failed to file appeal:", e);
+      alert(`Failed to file appeal: ${(e as Error).message}`);
     } finally {
       setAppealFiling(false);
     }
@@ -223,6 +237,16 @@ export function RequestDetail({ requestId, onBack }: RequestDetailProps) {
               <div><span className="text-gray-500">LOB:</span> {detail.line_of_business || "N/A"}</div>
               <div><span className="text-gray-500">Tier:</span> {detail.determination_tier || "N/A"}</div>
               <div><span className="text-gray-500">Requested:</span> {formatDate(detail.request_date)}</div>
+              {(detail.criteria_source || detail.criteria_version) && (
+                <div className="col-span-2">
+                  <span className="text-gray-500">Criteria:</span>{" "}
+                  <span className="font-medium">{detail.criteria_source}</span>
+                  {detail.criteria_version && <span className="text-gray-600"> {detail.criteria_version}</span>}
+                  {detail.criteria_effective_date && (
+                    <span className="text-xs text-gray-400"> (eff. {detail.criteria_effective_date})</span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
@@ -250,6 +274,12 @@ export function RequestDetail({ requestId, onBack }: RequestDetailProps) {
               )}
             </div>
           )}
+
+          {/* AI Decision Support & Explainability (governance: sources, override, on/off) */}
+          <ExplainabilityPanel
+            detail={detail}
+            onChanged={() => api.getRequest(requestId).then(setDetail).catch(console.error)}
+          />
 
           {/* Clinical Criteria Review */}
           {detail.policy_id && (
@@ -332,7 +362,7 @@ export function RequestDetail({ requestId, onBack }: RequestDetailProps) {
           )}
 
           {/* Appeal Status */}
-          {(detail.appeal_filed || detail.status === "Denied") && (
+          {(detail.appeal_filed || detail.status === "Denied" || detail.status === "Partially Approved") && (
             <div className="card border-l-4 border-l-amber-400">
               <h3 className="font-semibold text-databricks-dark mb-3 flex items-center gap-2">
                 <AlertTriangle size={16} className="text-amber-500" /> Appeal Status
@@ -379,6 +409,16 @@ export function RequestDetail({ requestId, onBack }: RequestDetailProps) {
               )}
             </div>
           )}
+
+          {/* Physician / Peer Review (Clinical Reviews escalation) */}
+          <PeerReviewCard
+            requestId={requestId}
+            reviewers={reviewers}
+            onChanged={() => api.getRequest(requestId).then(setDetail).catch(console.error)}
+          />
+
+          {/* Determination Notices (Decision Processing + Correspondence) */}
+          <NoticesCard requestId={requestId} status={detail.status} />
 
           {/* PA Review Agent */}
           <div className="card" ref={agentRef}>

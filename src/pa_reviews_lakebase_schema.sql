@@ -385,3 +385,472 @@ SELECT
              AND cms_deadline < now() THEN 1 ELSE 0 END) AS overdue_count
 FROM pa_review_queue
 GROUP BY urgency;
+
+-- ===========================================================================
+-- CLINICAL CRITERIA VERSIONING  (RFI: PA & Clinical Reviews — criteria version
+-- control + effective dating; internal vs external rationale)
+-- Idempotent column additions so both fresh and existing pa_review_queue tables
+-- carry the point-in-time criteria citation and the split internal/external
+-- rationale that determination notices and appeals reference.
+-- ===========================================================================
+
+ALTER TABLE pa_review_queue ADD COLUMN IF NOT EXISTS criteria_source TEXT;              -- InterQual / MCG / NCD / LCD / custom
+ALTER TABLE pa_review_queue ADD COLUMN IF NOT EXISTS criteria_version TEXT;             -- e.g. 'InterQual 2026.1'
+ALTER TABLE pa_review_queue ADD COLUMN IF NOT EXISTS criteria_effective_date DATE;      -- point-in-time criteria applied
+ALTER TABLE pa_review_queue ADD COLUMN IF NOT EXISTS determination_reason_external TEXT; -- member/provider-facing rationale
+ALTER TABLE pa_review_queue ADD COLUMN IF NOT EXISTS reviewer_notes_internal TEXT;       -- internal-only notes
+
+-- Effective-dated criteria catalog (InterQual / MCG / NCD / LCD placeholders).
+-- In production these version rows are synced from the criteria vendor API; here
+-- they demonstrate version control + effective dating of review guidelines.
+CREATE TABLE IF NOT EXISTS medical_criteria_versions (
+    criteria_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    criteria_source      TEXT NOT NULL,          -- InterQual / MCG / NCD / LCD / custom
+    criteria_set         TEXT NOT NULL,          -- e.g. 'Imaging — Advanced'
+    version_label        TEXT NOT NULL,          -- e.g. '2026.1'
+    service_type         TEXT,
+    procedure_codes      TEXT,                    -- pipe-delimited applicability
+    effective_start_date DATE NOT NULL,
+    effective_end_date   DATE,                    -- NULL = currently active
+    is_active            BOOLEAN DEFAULT TRUE,
+    created_at           TIMESTAMPTZ DEFAULT now(),
+    UNIQUE (criteria_source, criteria_set, version_label)
+);
+
+CREATE INDEX IF NOT EXISTS idx_criteria_active ON medical_criteria_versions(is_active)
+    WHERE is_active = TRUE;
+
+-- ===========================================================================
+-- APPEALS & RECONSIDERATIONS  (RFI: Appeals & Reconsiderations tab)
+--
+-- A denied/partially-approved determination can be appealed. Appeals are a
+-- distinct operational record linked back to the originating auth_request_id,
+-- must be routed to a reviewer OTHER than the original determiner, and carry
+-- their own CMS timeliness clock (expedited 72h / standard 30 calendar days
+-- for pre-service Part C appeals; retrospective 60 days).
+-- ===========================================================================
+
+DO $$ BEGIN
+    CREATE TYPE appeal_type AS ENUM (
+        'standard',            -- Standard pre/post-service appeal
+        'expedited',           -- Expedited (urgent) appeal — 72h
+        'provider',            -- Provider-filed
+        'member',              -- Member/beneficiary-filed
+        'administrative',      -- Administrative (non-clinical) reconsideration
+        'clinical'             -- Clinical reconsideration
+    );
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE appeal_status AS ENUM (
+        'Received',                    -- Appeal intake logged
+        'In Review',                   -- Appeals reviewer evaluating
+        'Additional Info Requested',   -- Awaiting records
+        'Peer Review Requested',       -- Escalated to physician/peer
+        'Hearing Scheduled',           -- State fair hearing / formal hearing
+        'IRO Referred',                -- External independent review org
+        'Overturned',                  -- Original denial reversed (fully favorable)
+        'Partially Overturned',        -- Partially favorable
+        'Upheld'                       -- Original denial upheld
+    );
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
+
+CREATE TABLE IF NOT EXISTS pa_appeals (
+    appeal_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    auth_request_id      TEXT NOT NULL REFERENCES pa_review_queue(auth_request_id),
+
+    -- Intake
+    appeal_type          appeal_type NOT NULL DEFAULT 'standard',
+    urgency              pa_urgency NOT NULL DEFAULT 'standard',
+    filed_by             TEXT,                       -- 'provider' | 'member' | name
+    filed_role           TEXT,                       -- requesting party descriptor
+    filing_reason        TEXT,                       -- why the determination is disputed
+    supporting_docs      TEXT,                        -- references to attached records
+
+    -- Routing (must differ from the original determiner)
+    original_reviewer_id UUID REFERENCES pa_reviewers(reviewer_id),
+    assigned_reviewer_id UUID REFERENCES pa_reviewers(reviewer_id),
+    assigned_at          TIMESTAMPTZ,
+
+    -- Workflow
+    status               appeal_status NOT NULL DEFAULT 'Received',
+    status_changed_at    TIMESTAMPTZ DEFAULT now(),
+
+    -- Determination
+    determination        TEXT,                        -- Overturned / Partially Overturned / Upheld
+    determination_reason TEXT,
+    determination_reason_external TEXT,               -- member/provider-facing rationale
+    reviewer_notes_internal TEXT,
+
+    -- Hearing / IRO
+    hearing_date         TIMESTAMPTZ,
+    hearing_outcome      TEXT,
+    iro_referred         BOOLEAN DEFAULT FALSE,
+    iro_referral_date    TIMESTAMPTZ,
+    iro_outcome          TEXT,
+
+    -- CMS timeliness
+    filed_date           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    determination_date   TIMESTAMPTZ,
+    turnaround_hours     NUMERIC(8,1),
+    cms_deadline         TIMESTAMPTZ,
+    cms_compliant        BOOLEAN DEFAULT TRUE,
+
+    created_at           TIMESTAMPTZ DEFAULT now(),
+    updated_at           TIMESTAMPTZ DEFAULT now(),
+
+    -- Appeals integrity: cannot be assigned to the original determiner
+    CONSTRAINT chk_appeal_non_original CHECK (
+        assigned_reviewer_id IS NULL
+        OR original_reviewer_id IS NULL
+        OR assigned_reviewer_id <> original_reviewer_id
+    ),
+    CONSTRAINT chk_appeal_determination_date CHECK (
+        status NOT IN ('Overturned', 'Partially Overturned', 'Upheld')
+        OR determination_date IS NOT NULL
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_appeals_status    ON pa_appeals(status);
+CREATE INDEX IF NOT EXISTS idx_appeals_request   ON pa_appeals(auth_request_id);
+CREATE INDEX IF NOT EXISTS idx_appeals_reviewer  ON pa_appeals(assigned_reviewer_id)
+    WHERE assigned_reviewer_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_appeals_deadline  ON pa_appeals(cms_deadline)
+    WHERE status IN ('Received', 'In Review', 'Additional Info Requested', 'Peer Review Requested');
+
+CREATE TABLE IF NOT EXISTS pa_appeal_actions (
+    action_id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    appeal_id           UUID NOT NULL REFERENCES pa_appeals(appeal_id),
+    reviewer_id         UUID REFERENCES pa_reviewers(reviewer_id),
+    action_type         TEXT NOT NULL CHECK (action_type IN (
+                            'filed', 'assignment', 'reassignment', 'status_change',
+                            'note_added', 'info_requested', 'peer_review_requested',
+                            'hearing_scheduled', 'iro_referred', 'determination'
+                        )),
+    previous_status     appeal_status,
+    new_status          appeal_status,
+    note                TEXT,
+    metadata_json       JSONB,
+    created_at          TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_appeal_actions_appeal ON pa_appeal_actions(appeal_id, created_at DESC);
+
+-- CMS appeal deadline on INSERT (Part C: expedited 72h, standard 30 days pre-service,
+-- retrospective 60 days). Demo-simplified windows.
+CREATE OR REPLACE FUNCTION set_appeal_cms_deadline()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.urgency = 'expedited' THEN
+        NEW.cms_deadline = NEW.filed_date + INTERVAL '72 hours';
+    ELSIF NEW.urgency = 'standard' THEN
+        NEW.cms_deadline = NEW.filed_date + INTERVAL '30 days';
+    ELSE
+        NEW.cms_deadline = NEW.filed_date + INTERVAL '60 days';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_appeal_cms_deadline ON pa_appeals;
+CREATE TRIGGER trg_appeal_cms_deadline
+    BEFORE INSERT ON pa_appeals
+    FOR EACH ROW EXECUTE FUNCTION set_appeal_cms_deadline();
+
+CREATE OR REPLACE FUNCTION update_appeal_timestamps()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = now();
+
+    IF NEW.status IN ('Overturned', 'Partially Overturned', 'Upheld')
+       AND (OLD.status IS NULL OR OLD.status NOT IN ('Overturned', 'Partially Overturned', 'Upheld'))
+    THEN
+        NEW.determination_date = now();
+        NEW.turnaround_hours = EXTRACT(EPOCH FROM (now() - NEW.filed_date)) / 3600.0;
+        IF NEW.urgency = 'expedited' THEN
+            NEW.cms_compliant = (now() - NEW.filed_date) <= INTERVAL '72 hours';
+        ELSIF NEW.urgency = 'standard' THEN
+            NEW.cms_compliant = (now() - NEW.filed_date) <= INTERVAL '30 days';
+        ELSE
+            NEW.cms_compliant = (now() - NEW.filed_date) <= INTERVAL '60 days';
+        END IF;
+    END IF;
+
+    IF NEW.assigned_reviewer_id IS NOT NULL
+       AND (OLD.assigned_reviewer_id IS NULL OR OLD.assigned_reviewer_id != NEW.assigned_reviewer_id)
+    THEN
+        NEW.assigned_at = now();
+    END IF;
+
+    IF NEW.status != OLD.status THEN
+        NEW.status_changed_at = now();
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_appeal_updated_at ON pa_appeals;
+CREATE TRIGGER trg_appeal_updated_at
+    BEFORE UPDATE ON pa_appeals
+    FOR EACH ROW EXECUTE FUNCTION update_appeal_timestamps();
+
+-- Appeals work queue (linked to the original determination)
+CREATE OR REPLACE VIEW v_appeal_queue AS
+SELECT
+    a.appeal_id,
+    a.auth_request_id,
+    q.member_name,
+    q.service_type,
+    q.procedure_code,
+    q.procedure_description,
+    q.line_of_business,
+    q.denial_reason_code       AS original_denial_reason_code,
+    q.determination_reason     AS original_determination_reason,
+    q.status::text             AS original_status,
+    a.appeal_type::text,
+    a.urgency::text,
+    a.filed_by,
+    a.filed_date,
+    a.status::text,
+    a.determination,
+    orig.display_name          AS original_reviewer_name,
+    rev.display_name           AS appeal_reviewer_name,
+    rev.role::text             AS appeal_reviewer_role,
+    a.assigned_at,
+    a.cms_deadline,
+    a.cms_compliant,
+    a.determination_date,
+    a.turnaround_hours,
+    EXTRACT(EPOCH FROM (a.cms_deadline - now())) / 3600.0 AS hours_until_deadline
+FROM pa_appeals a
+JOIN pa_review_queue q  ON a.auth_request_id = q.auth_request_id
+LEFT JOIN pa_reviewers orig ON a.original_reviewer_id = orig.reviewer_id
+LEFT JOIN pa_reviewers rev  ON a.assigned_reviewer_id = rev.reviewer_id
+ORDER BY
+    CASE a.urgency WHEN 'expedited' THEN 1 WHEN 'standard' THEN 2 ELSE 3 END,
+    a.cms_deadline ASC NULLS LAST,
+    a.filed_date ASC;
+
+-- ===========================================================================
+-- PEER / PHYSICIAN REVIEW  (RFI: Prior Auth & Clinical Reviews — Peer Review)
+--
+-- Escalation from a UM nurse to a Medical Director / Peer Reviewer, with
+-- specialty matching and peer-to-peer (P2P) discussion tracking.
+-- ===========================================================================
+
+DO $$ BEGIN
+    CREATE TYPE peer_review_status AS ENUM (
+        'Requested',
+        'Scheduled',
+        'P2P Completed',
+        'Determination Made',
+        'Cancelled'
+    );
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
+
+CREATE TABLE IF NOT EXISTS pa_peer_reviews (
+    peer_review_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    auth_request_id      TEXT NOT NULL REFERENCES pa_review_queue(auth_request_id),
+    requested_by_id      UUID REFERENCES pa_reviewers(reviewer_id),      -- UM nurse
+    peer_reviewer_id     UUID REFERENCES pa_reviewers(reviewer_id),      -- Medical Director / Peer
+    requested_specialty  TEXT,                                           -- specialty match target
+    reason               TEXT,
+    status               peer_review_status NOT NULL DEFAULT 'Requested',
+    p2p_requested        BOOLEAN DEFAULT FALSE,      -- provider requested peer-to-peer
+    p2p_scheduled_at     TIMESTAMPTZ,
+    p2p_completed_at     TIMESTAMPTZ,
+    p2p_summary          TEXT,                        -- outcome of the discussion
+    determination        TEXT,                        -- uphold / overturn recommendation
+    determination_notes  TEXT,
+    notified_at          TIMESTAMPTZ,                 -- outcome notification sent
+    created_at           TIMESTAMPTZ DEFAULT now(),
+    updated_at           TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_peer_request  ON pa_peer_reviews(auth_request_id);
+CREATE INDEX IF NOT EXISTS idx_peer_status   ON pa_peer_reviews(status);
+CREATE INDEX IF NOT EXISTS idx_peer_reviewer ON pa_peer_reviews(peer_reviewer_id)
+    WHERE peer_reviewer_id IS NOT NULL;
+
+DROP TRIGGER IF EXISTS trg_peer_updated_at ON pa_peer_reviews;
+CREATE TRIGGER trg_peer_updated_at
+    BEFORE UPDATE ON pa_peer_reviews
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_pa();
+
+-- ===========================================================================
+-- CORRESPONDENCE  (RFI: Decision Processing + Correspondence Management)
+--
+-- Determination notices (approval / denial / partial) generated for a case,
+-- with template versioning, PHI-redaction gating, and delivery tracking.
+-- ===========================================================================
+
+DO $$ BEGIN
+    CREATE TYPE notice_type AS ENUM (
+        'approval',
+        'denial',
+        'partial_approval',
+        'additional_info_request',
+        'appeal_acknowledgement',
+        'appeal_determination'
+    );
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE delivery_channel AS ENUM ('portal', 'secure_email', 'print_mail', 'fax');
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE delivery_status AS ENUM (
+        'draft', 'pending_review', 'released', 'delivered', 'failed', 'returned'
+    );
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
+
+CREATE TABLE IF NOT EXISTS pa_correspondence (
+    notice_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    auth_request_id      TEXT REFERENCES pa_review_queue(auth_request_id),
+    appeal_id            UUID REFERENCES pa_appeals(appeal_id),
+    notice_type          notice_type NOT NULL,
+    recipient            TEXT,                        -- member / provider
+    recipient_role       TEXT,
+    language             TEXT DEFAULT 'en',
+    template_version     TEXT,
+    subject              TEXT,
+    body_markdown        TEXT,                         -- generated notice body
+    body_redacted        BOOLEAN DEFAULT FALSE,        -- passed PHI redaction gate
+    redaction_notes      TEXT,
+    includes_appeal_rights BOOLEAN DEFAULT FALSE,
+    criteria_citation    TEXT,                         -- policy/criteria version cited
+    pdf_path             TEXT,                          -- UC Volume path
+    delivery_channel     delivery_channel DEFAULT 'portal',
+    delivery_status      delivery_status NOT NULL DEFAULT 'draft',
+    generated_by         TEXT,                          -- reviewer or 'ai_query'
+    generated_at         TIMESTAMPTZ DEFAULT now(),
+    released_at          TIMESTAMPTZ,
+    delivered_at         TIMESTAMPTZ,
+    created_at           TIMESTAMPTZ DEFAULT now(),
+    updated_at           TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_corr_request ON pa_correspondence(auth_request_id);
+CREATE INDEX IF NOT EXISTS idx_corr_appeal  ON pa_correspondence(appeal_id) WHERE appeal_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_corr_status  ON pa_correspondence(delivery_status);
+
+DROP TRIGGER IF EXISTS trg_corr_updated_at ON pa_correspondence;
+CREATE TRIGGER trg_corr_updated_at
+    BEFORE UPDATE ON pa_correspondence
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_pa();
+
+-- ===========================================================================
+-- BUSINESS RULES ENGINE  (RFI: Business Rules Engine + Workflow Engine)
+--
+-- No-code, data-driven adjudication/routing rules authored by business users.
+-- PARALLEL-FIRST: this store runs ALONGSIDE the existing Tier-1 deterministic
+-- SQL (gold_pa_tier1_evaluation); it does not replace it. Each rule carries a
+-- JSON condition set, an action, priority, effective dating, versioning, and an
+-- approval workflow — with an immutable version audit for full traceability.
+-- ===========================================================================
+
+DO $$ BEGIN
+    CREATE TYPE rule_action AS ENUM ('auto_approve', 'auto_deny', 'pend', 'route');
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE rule_status AS ENUM ('draft', 'pending_approval', 'active', 'retired');
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
+
+CREATE TABLE IF NOT EXISTS pa_business_rules (
+    rule_id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name                 TEXT NOT NULL,
+    description          TEXT,
+    category             TEXT,                        -- e.g. 'auto-adjudication', 'routing', 'escalation'
+    line_of_business     TEXT,                        -- scope; NULL = all LOBs
+    service_type         TEXT,                        -- scope; NULL = all services
+    conditions_json      JSONB NOT NULL,              -- {"all":[{"field","op","value"}, ...]}
+    action               rule_action NOT NULL,
+    action_detail        TEXT,                        -- e.g. route target queue / reviewer role
+    priority             INT NOT NULL DEFAULT 100,    -- lower = evaluated first
+    effective_start_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    effective_end_date   DATE,                        -- NULL = open-ended
+    version              INT NOT NULL DEFAULT 1,
+    status               rule_status NOT NULL DEFAULT 'draft',
+    created_by           TEXT,
+    approved_by          TEXT,
+    approved_at          TIMESTAMPTZ,
+    created_at           TIMESTAMPTZ DEFAULT now(),
+    updated_at           TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_rules_status ON pa_business_rules(status);
+CREATE INDEX IF NOT EXISTS idx_rules_active ON pa_business_rules(priority)
+    WHERE status = 'active';
+
+-- Immutable version history (every create/edit/activate/retire snapshots here).
+CREATE TABLE IF NOT EXISTS pa_rule_versions (
+    version_id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    rule_id              UUID NOT NULL REFERENCES pa_business_rules(rule_id),
+    version              INT NOT NULL,
+    change_type          TEXT NOT NULL,               -- created / updated / activated / retired
+    snapshot_json        JSONB NOT NULL,              -- full rule state at this version
+    changed_by           TEXT,
+    change_reason        TEXT,
+    created_at           TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_rule_versions_rule ON pa_rule_versions(rule_id, version DESC);
+
+DROP TRIGGER IF EXISTS trg_rules_updated_at ON pa_business_rules;
+CREATE TRIGGER trg_rules_updated_at
+    BEFORE UPDATE ON pa_business_rules
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_pa();
+
+-- ===========================================================================
+-- LONGITUDINAL CASE TIMELINE  (RFI: one longitudinal record across workflows)
+-- Unions review actions, appeal actions, and correspondence into one stream.
+-- ===========================================================================
+
+CREATE OR REPLACE VIEW v_case_timeline AS
+SELECT
+    ra.auth_request_id,
+    'review'        AS workflow,
+    ra.action_type,
+    ra.previous_status::text AS previous_status,
+    ra.new_status::text      AS new_status,
+    ra.note,
+    rv.display_name AS actor,
+    ra.created_at
+FROM pa_review_actions ra
+LEFT JOIN pa_reviewers rv ON ra.reviewer_id = rv.reviewer_id
+UNION ALL
+SELECT
+    ap.auth_request_id,
+    'appeal'        AS workflow,
+    aa.action_type,
+    aa.previous_status::text,
+    aa.new_status::text,
+    aa.note,
+    rv.display_name,
+    aa.created_at
+FROM pa_appeal_actions aa
+JOIN pa_appeals ap ON aa.appeal_id = ap.appeal_id
+LEFT JOIN pa_reviewers rv ON aa.reviewer_id = rv.reviewer_id
+UNION ALL
+SELECT
+    c.auth_request_id,
+    'correspondence' AS workflow,
+    c.notice_type::text AS action_type,
+    NULL, c.delivery_status::text,
+    c.subject,
+    c.generated_by,
+    c.created_at
+FROM pa_correspondence c
+WHERE c.auth_request_id IS NOT NULL
+ORDER BY created_at DESC;

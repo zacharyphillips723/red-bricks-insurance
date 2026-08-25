@@ -297,6 +297,59 @@ print("✓ mv_denials created")
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ## mv_denial_prevention
+# MAGIC Provider denial-prevention program metrics: first-pass denial rate, preventable
+# MAGIC denied dollars (missing_info/no_auth/coding_mismatch/frequency_limit), and average
+# MAGIC model denial propensity — the governed KPIs behind the Claim Scrubber.
+# MAGIC Source: `claims.gold_denial_prevention`
+
+# COMMAND ----------
+
+spark.sql(f"""
+CREATE OR REPLACE VIEW {catalog_sql}.{ANALYTICS_SCHEMA}.mv_denial_prevention
+WITH METRICS
+LANGUAGE YAML
+AS {DD}
+  version: 1.1
+  comment: "Governed denial-prevention KPIs — first-pass denial rate, preventable denied dollars, and average denial propensity by LOB / reason / month. Powers the Claim Scrubber program view for Genie and AI/BI."
+  source: '{catalog_sql}.claims.gold_denial_prevention'
+  dimensions:
+    - name: line_of_business
+      expr: line_of_business
+    - name: reason_category
+      expr: reason_category
+    - name: service_year_month
+      expr: service_year_month
+  measures:
+    - name: Claim Count
+      expr: SUM(claim_count)
+      comment: "Total claims"
+    - name: Denial Count
+      expr: SUM(denied_count)
+      comment: "Total denied claims"
+    - name: First-Pass Denial Rate
+      expr: SUM(denied_count) / NULLIF(SUM(claim_count), 0)
+      comment: "Share of claims denied on first submission"
+    - name: Denied Amount
+      expr: SUM(denied_amount)
+      comment: "Total billed amount on denied claims"
+    - name: Preventable Denied $
+      expr: SUM(preventable_denied_amount)
+      comment: "Denied dollars in provider-preventable categories (missing info, no auth, coding, frequency)"
+    - name: Preventable Share
+      expr: SUM(preventable_denied_amount) / NULLIF(SUM(denied_amount), 0)
+      comment: "Fraction of denied dollars that were preventable pre-submission"
+    - name: Avg Denial Propensity
+      expr: SUM(sum_denial_propensity) / NULLIF(SUM(scored_claim_count), 0)
+      comment: "Model-estimated average denial probability across scored claims"
+{DD}
+""")
+
+print("✓ mv_denial_prevention created")
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## mv_cost_of_care
 # MAGIC Total Cost of Care and Total Cost Index for population health benchmarking.
 # MAGIC Source: `gold_member_tcoc`

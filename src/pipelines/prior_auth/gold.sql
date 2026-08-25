@@ -387,3 +387,45 @@ FROM LIVE.silver_pa_requests
 WHERE clinical_summary IS NOT NULL
   AND LENGTH(clinical_summary) > 20
   AND determination IN ('denied', 'pended');
+
+-- ---------------------------------------------------------------------------
+-- Gold: Appeals & Reconsiderations Metrics
+-- ---------------------------------------------------------------------------
+-- CMS-0057-F appeals reporting: appeal volume, overturn rates, and timeliness
+-- by line of business, service type, and month. Complements the operational
+-- appeals record in the pa_reviews Lakebase (which carries appeal_type,
+-- reviewer routing, and per-appeal turnaround); this view is the analytics-side
+-- rollup used by the PA Operations dashboard and the Genie space.
+-- ---------------------------------------------------------------------------
+CREATE OR REFRESH MATERIALIZED VIEW gold_pa_appeals_metrics
+COMMENT 'Appeals volume, overturn rate, and timeliness by LOB/service/month for CMS-0057-F appeals reporting.'
+TBLPROPERTIES (
+  'quality' = 'gold',
+  'domain'  = 'prior_auth'
+)
+AS
+SELECT
+  request_year_month,
+  line_of_business,
+  service_type,
+
+  SUM(CASE WHEN appeal_filed THEN 1 ELSE 0 END)                        AS appeals_filed,
+  SUM(CASE WHEN appeal_outcome = 'overturned' THEN 1 ELSE 0 END)       AS appeals_overturned,
+  SUM(CASE WHEN appeal_outcome = 'partially_overturned' THEN 1 ELSE 0 END)
+                                                                       AS appeals_partially_overturned,
+  SUM(CASE WHEN appeal_outcome = 'upheld' THEN 1 ELSE 0 END)           AS appeals_upheld,
+
+  -- Overturn rate = (fully + partially overturned) / appeals filed
+  ROUND(
+    SUM(CASE WHEN appeal_outcome IN ('overturned', 'partially_overturned') THEN 1 ELSE 0 END)
+    * 100.0 / NULLIF(SUM(CASE WHEN appeal_filed THEN 1 ELSE 0 END), 0), 2
+  )                                                                    AS overturn_rate_pct,
+
+  -- Appeal rate = appeals filed / denied determinations (denial defensibility signal)
+  ROUND(
+    SUM(CASE WHEN appeal_filed THEN 1 ELSE 0 END)
+    * 100.0 / NULLIF(SUM(CASE WHEN determination = 'denied' THEN 1 ELSE 0 END), 0), 2
+  )                                                                    AS appeal_rate_pct
+
+FROM LIVE.silver_pa_requests
+GROUP BY request_year_month, line_of_business, service_type;

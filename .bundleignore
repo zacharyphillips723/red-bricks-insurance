@@ -56,3 +56,12 @@ app-prior-auth/frontend/*.json
 app-prior-auth/frontend/*.ts
 app-prior-auth/frontend/*.js
 app-prior-auth/frontend/*.html
+
+# Exclude Provider Claim Scrubber frontend source/node_modules — pre-built assets in app-provider-scrub/static/
+app-provider-scrub/frontend/node_modules/
+app-provider-scrub/frontend/dist/
+app-provider-scrub/frontend/src/
+app-provider-scrub/frontend/*.json
+app-provider-scrub/frontend/*.ts
+app-provider-scrub/frontend/*.js
+app-provider-scrub/frontend/*.html
