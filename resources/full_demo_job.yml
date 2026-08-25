@@ -33,6 +33,16 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
 
+        # Standards-based intake: render + parse X12 278 and Da Vinci FHIR PAS
+        # into normalized UC tables (prior_auth.bronze_pa_intake / silver_pa_intake).
+        - task_key: build_pa_intake
+          depends_on:
+            - task_key: data_generation
+          notebook_task:
+            notebook_path: ../src/notebooks/build_pa_intake.py
+            base_parameters:
+              catalog: ${var.catalog}
+
 
         # Step 2: Domain pipelines (run in parallel after data generation)
         - task_key: members_pipeline
