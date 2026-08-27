@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import uuid
 from decimal import Decimal
 from typing import Optional
 
@@ -16,6 +17,7 @@ from .agent import _execute_sql
 from . import documents as docs
 from . import correspondence as corr
 from . import rules_engine as rules
+from . import workflow as wf
 from . import qa_scoring
 from .sample_records import generate_sample_pdf, list_scenarios
 from .env_config import (
@@ -36,12 +38,25 @@ from .models import (
     AssignReviewerIn,
     BusinessRuleIn,
     BusinessRuleOut,
+    AIQualityOut,
+    AIQualityTier,
     ComplianceMetricsOut,
     CorrespondenceOut,
     DashboardStats,
+    EscalationIn,
+    EscalationOut,
     FileAppealIn,
     GenerateNoticeIn,
+    InboundCorrespondenceOut,
+    InboundIndexIn,
+    InboundIngestIn,
     OverdueRequestOut,
+    ReassignIn,
+    RoutingRuleIn,
+    RoutingRuleOut,
+    StalledCaseOut,
+    WorkQueueOut,
+    WorkloadOut,
     RuleSimulationOut,
     PARequestDetailOut,
     PARequestListOut,
@@ -1118,9 +1133,10 @@ async def evaluate_request_rules(req_id: str):
 
 _CORR_COLS = """
     notice_id::text, auth_request_id, notice_type::text, recipient, recipient_role,
-    subject, body_markdown, body_redacted, redaction_notes, includes_appeal_rights,
+    language, subject, body_markdown, body_redacted, redaction_notes, includes_appeal_rights,
     criteria_citation, template_version, pdf_path,
     delivery_channel::text, delivery_status::text,
+    validation_status, validation_notes,
     generated_by, generated_at, released_at
 """
 
@@ -1162,8 +1178,11 @@ async def generate_notice(req_id: str, notice_in: GenerateNoticeIn):
             raise HTTPException(status_code=404, detail="PA request not found")
         facts = dict(row)
 
-    # 2. Build the notice (AI rationale + scaffold + redaction) and render a PDF.
-    notice = await asyncio.to_thread(corr.build_notice, notice_in.notice_type.value, facts)
+    # 2. Build the notice (AI rationale + scaffold + redaction + optional translation
+    #    + delivery validation) and render a PDF.
+    notice = await asyncio.to_thread(
+        corr.build_notice, notice_in.notice_type.value, facts, notice_in.language
+    )
     try:
         pdf_path = await asyncio.to_thread(corr.render_notice_pdf, notice, facts)
     except Exception as e:
@@ -1175,16 +1194,18 @@ async def generate_notice(req_id: str, notice_in: GenerateNoticeIn):
         ins = await session.execute(
             text(f"""
                 INSERT INTO pa_correspondence (
-                    auth_request_id, notice_type, recipient, recipient_role,
+                    auth_request_id, notice_type, recipient, recipient_role, language,
                     subject, body_markdown, body_redacted, redaction_notes,
                     includes_appeal_rights, criteria_citation, template_version,
-                    pdf_path, delivery_channel, delivery_status, generated_by
+                    pdf_path, delivery_channel, delivery_status,
+                    validation_status, validation_notes, generated_by
                 ) VALUES (
-                    :aid, CAST(:ntype AS notice_type), :recipient, :recipient_role,
+                    :aid, CAST(:ntype AS notice_type), :recipient, :recipient_role, :language,
                     :subject, :body, :redacted, :redaction_notes,
                     :appeal_rights, :citation, :tpl_version,
                     :pdf_path, CAST(:channel AS delivery_channel),
-                    'draft'::delivery_status, 'ai_query'
+                    'draft'::delivery_status,
+                    :val_status, :val_notes, 'ai_query'
                 )
                 RETURNING {_CORR_COLS}
             """),
@@ -1193,6 +1214,7 @@ async def generate_notice(req_id: str, notice_in: GenerateNoticeIn):
                 "ntype": notice["notice_type"],
                 "recipient": notice_in.recipient,
                 "recipient_role": notice_in.recipient_role,
+                "language": notice.get("language", "en"),
                 "subject": notice["subject"],
                 "body": notice["body_markdown"],
                 "redacted": notice["body_redacted"],
@@ -1202,6 +1224,8 @@ async def generate_notice(req_id: str, notice_in: GenerateNoticeIn):
                 "tpl_version": notice["template_version"],
                 "pdf_path": pdf_path,
                 "channel": notice_in.delivery_channel,
+                "val_status": notice.get("validation_status"),
+                "val_notes": notice.get("validation_notes"),
             },
         )
         created = ins.mappings().one()
@@ -1535,6 +1559,463 @@ async def get_qa_reviewer_scorecard():
             ORDER BY pass_rate_pct ASC NULLS LAST
         """))
         return [QAReviewerScorecard(**_coerce_row(r)) for r in result.mappings().all()]
+
+
+# ===================================================================
+# Workflow Engine & Management (queues, routing, workload, escalations)
+# ===================================================================
+
+@api.get("/workflow/queues", response_model=list[WorkQueueOut], operation_id="listWorkQueues")
+async def list_work_queues():
+    """Work-queue monitor: backlog, aging buckets, and SLA breach per queue."""
+    async with db.session() as session:
+        result = await session.execute(text("""
+            SELECT queue_id::text, name, queue_type, owner_team, sla_hours,
+                   open_cases, unassigned_cases, expedited_open,
+                   age_0_24h, age_24_72h, age_72h_plus, sla_breached, avg_age_hours
+            FROM v_work_queue_status
+        """))
+        return [WorkQueueOut(**_coerce_row(r)) for r in result.mappings().all()]
+
+
+@api.get("/workflow/bottlenecks", operation_id="getWorkflowBottlenecks")
+async def get_workflow_bottlenecks():
+    """Rank queues by bottleneck score (AI-assisted bottleneck identification)."""
+    async with db.session() as session:
+        result = await session.execute(text("""
+            SELECT queue_id::text, name, open_cases, unassigned_cases,
+                   age_72h_plus, sla_breached
+            FROM v_work_queue_status
+        """))
+        rows = [_coerce_row(r) for r in result.mappings().all()]
+    return {"bottlenecks": wf.detect_bottlenecks(rows)}
+
+
+@api.get("/workflow/workload", operation_id="getWorkloadBalance")
+async def get_workload_balance():
+    """Reviewer utilization + AI-assisted rebalancing recommendations."""
+    async with db.session() as session:
+        result = await session.execute(text("""
+            SELECT reviewer_id::text, display_name, role, specialty, max_caseload,
+                   active_cases, expedited_cases, available_capacity,
+                   utilization_pct, is_overloaded
+            FROM v_workload_balance ORDER BY utilization_pct DESC NULLS LAST
+        """))
+        rows = [_coerce_row(r) for r in result.mappings().all()]
+    workloads = [WorkloadOut(**r) for r in rows]
+    recommendation = wf.balance_recommendation(rows)
+    return {"workloads": [w.model_dump() for w in workloads], "recommendation": recommendation}
+
+
+_ROUTING_COLS = """
+    rr.routing_rule_id::text, rr.name, rr.description, rr.line_of_business, rr.service_type,
+    rr.conditions_json, rr.target_queue_id::text, wq.name AS target_queue_name,
+    rr.target_role, rr.assignment_strategy, rr.priority, rr.is_active,
+    rr.created_by, rr.created_at
+"""
+
+
+@api.get("/workflow/routing-rules", response_model=list[RoutingRuleOut], operation_id="listRoutingRules")
+async def list_routing_rules():
+    async with db.session() as session:
+        result = await session.execute(text(f"""
+            SELECT {_ROUTING_COLS}
+            FROM pa_routing_rules rr
+            LEFT JOIN pa_work_queues wq ON rr.target_queue_id = wq.queue_id
+            ORDER BY rr.priority ASC, rr.name ASC
+        """))
+        return [RoutingRuleOut(**_coerce_row(r)) for r in result.mappings().all()]
+
+
+@api.post("/workflow/routing-rules", response_model=RoutingRuleOut, operation_id="createRoutingRule")
+async def create_routing_rule(rule_in: RoutingRuleIn):
+    async with db.session() as session:
+        ins = await session.execute(
+            text("""
+                INSERT INTO pa_routing_rules
+                    (name, description, line_of_business, service_type, conditions_json,
+                     target_queue_id, target_role, assignment_strategy, priority, created_by)
+                VALUES (:name, :desc, :lob, :svc, CAST(:cond AS jsonb),
+                        CAST(:tq AS uuid), :role, :strategy, :priority, 'workflow_admin')
+                RETURNING routing_rule_id::text
+            """),
+            {
+                "name": rule_in.name, "desc": rule_in.description,
+                "lob": rule_in.line_of_business, "svc": rule_in.service_type,
+                "cond": json.dumps(rule_in.conditions_json),
+                "tq": rule_in.target_queue_id, "role": rule_in.target_role,
+                "strategy": rule_in.assignment_strategy, "priority": rule_in.priority,
+            },
+        )
+        rid = ins.mappings().one()["routing_rule_id"]
+        await session.commit()
+        result = await session.execute(
+            text(f"""
+                SELECT {_ROUTING_COLS} FROM pa_routing_rules rr
+                LEFT JOIN pa_work_queues wq ON rr.target_queue_id = wq.queue_id
+                WHERE rr.routing_rule_id = CAST(:rid AS uuid)
+            """),
+            {"rid": rid},
+        )
+        return RoutingRuleOut(**_coerce_row(result.mappings().one()))
+
+
+@api.post("/workflow/routing-rules/{rule_id}/toggle", response_model=RoutingRuleOut, operation_id="toggleRoutingRule")
+async def toggle_routing_rule(rule_id: str):
+    """Activate / deactivate a routing rule."""
+    async with db.session() as session:
+        result = await session.execute(
+            text("""
+                UPDATE pa_routing_rules SET is_active = NOT is_active
+                WHERE routing_rule_id = CAST(:rid AS uuid)
+                RETURNING routing_rule_id::text
+            """),
+            {"rid": rule_id},
+        )
+        if not result.first():
+            raise HTTPException(status_code=404, detail="Routing rule not found")
+        await session.commit()
+        rr = await session.execute(
+            text(f"""
+                SELECT {_ROUTING_COLS} FROM pa_routing_rules rr
+                LEFT JOIN pa_work_queues wq ON rr.target_queue_id = wq.queue_id
+                WHERE rr.routing_rule_id = CAST(:rid AS uuid)
+            """),
+            {"rid": rule_id},
+        )
+        return RoutingRuleOut(**_coerce_row(rr.mappings().one()))
+
+
+@api.get("/requests/{req_id}/route-preview", operation_id="previewRouting")
+async def preview_routing(req_id: str):
+    """Preview which routing rule would fire for a case (no state change)."""
+    async with db.session() as session:
+        req = await session.execute(
+            text("""
+                SELECT auth_request_id, line_of_business, service_type, procedure_code,
+                       diagnosis_codes, urgency::text, estimated_cost, region,
+                       (status::text) AS status
+                FROM pa_review_queue WHERE auth_request_id = :req_id
+            """),
+            {"req_id": req_id},
+        )
+        req_row = req.mappings().one_or_none()
+        if not req_row:
+            raise HTTPException(status_code=404, detail="PA request not found")
+        rules_res = await session.execute(text(f"""
+            SELECT {_ROUTING_COLS} FROM pa_routing_rules rr
+            LEFT JOIN pa_work_queues wq ON rr.target_queue_id = wq.queue_id
+            WHERE rr.is_active = TRUE
+        """))
+        routing_rules = [_coerce_row(r) for r in rules_res.mappings().all()]
+    return wf.route_case(routing_rules, _coerce_row(req_row))
+
+
+@api.post("/requests/{req_id}/reassign", response_model=PARequestDetailOut, operation_id="reassignCase")
+async def reassign_case(req_id: str, body: ReassignIn):
+    """Manual routing / reassignment between queues and reviewers (RFI: manual
+    routing + reassignment). Records an audit action."""
+    async with db.session() as session:
+        check = await session.execute(
+            text("SELECT status::text FROM pa_review_queue WHERE auth_request_id = :req_id"),
+            {"req_id": req_id},
+        )
+        if not check.mappings().one_or_none():
+            raise HTTPException(status_code=404, detail="PA request not found")
+
+        sets, params = [], {"req_id": req_id}
+        if body.queue_id:
+            sets.append("queue_id = CAST(:qid AS uuid)")
+            params["qid"] = body.queue_id
+        if body.reviewer_id:
+            sets.append("assigned_reviewer_id = CAST(:rid AS uuid)")
+            params["rid"] = body.reviewer_id
+        if not sets:
+            raise HTTPException(status_code=400, detail="Provide a queue_id and/or reviewer_id")
+        await session.execute(
+            text(f"UPDATE pa_review_queue SET {', '.join(sets)} WHERE auth_request_id = :req_id"),
+            params,
+        )
+        await session.execute(
+            text("""
+                INSERT INTO pa_review_actions
+                    (auth_request_id, reviewer_id, action_type, note)
+                VALUES (:req_id, CAST(:rid AS uuid), 'reassignment', :note)
+            """),
+            {"req_id": req_id, "rid": body.reviewer_id,
+             "note": body.note or "Manually routed via work management."},
+        )
+        await session.commit()
+    return await get_request(req_id)
+
+
+@api.get("/workflow/stalled", operation_id="getStalledCases")
+async def get_stalled_cases():
+    """Stalled / orphaned / at-risk work with a recommended remediation each."""
+    async with db.session() as session:
+        result = await session.execute(text("""
+            SELECT auth_request_id, member_name, service_type, urgency, status,
+                   queue_name, reviewer_name, request_date, cms_deadline,
+                   age_hours, hours_since_action, flag_reason
+            FROM v_stalled_cases LIMIT 200
+        """))
+        rows = [_coerce_row(r) for r in result.mappings().all()]
+    triage = wf.triage_stalled(rows)
+    triage["cases"] = [StalledCaseOut(**c).model_dump() for c in triage["cases"]]
+    return triage
+
+
+@api.get("/workflow/escalations", response_model=list[EscalationOut], operation_id="listEscalations")
+async def list_escalations(status: Optional[str] = None):
+    query = """
+        SELECT e.escalation_id::text, e.auth_request_id, e.reason, e.detail,
+               e.escalated_by, r.display_name AS escalated_to_name,
+               e.status::text, e.resolution, e.created_at, e.resolved_at
+        FROM pa_escalations e
+        LEFT JOIN pa_reviewers r ON e.escalated_to_id = r.reviewer_id
+        WHERE 1=1
+    """
+    params: dict = {}
+    if status:
+        query += " AND e.status = CAST(:status AS escalation_status)"
+        params["status"] = status
+    query += " ORDER BY e.created_at DESC LIMIT 200"
+    async with db.session() as session:
+        result = await session.execute(text(query), params)
+        return [EscalationOut(**dict(r)) for r in result.mappings().all()]
+
+
+@api.post("/workflow/escalations", response_model=EscalationOut, operation_id="createEscalation")
+async def create_escalation(body: EscalationIn):
+    async with db.session() as session:
+        check = await session.execute(
+            text("SELECT 1 FROM pa_review_queue WHERE auth_request_id = :req_id"),
+            {"req_id": body.auth_request_id},
+        )
+        if not check.first():
+            raise HTTPException(status_code=404, detail="PA request not found")
+        ins = await session.execute(
+            text("""
+                INSERT INTO pa_escalations
+                    (auth_request_id, reason, detail, escalated_by, escalated_to_id, status)
+                VALUES (:aid, :reason, :detail, 'supervisor', CAST(:to AS uuid), 'open'::escalation_status)
+                RETURNING escalation_id::text
+            """),
+            {"aid": body.auth_request_id, "reason": body.reason,
+             "detail": body.detail, "to": body.escalated_to_id},
+        )
+        eid = ins.mappings().one()["escalation_id"]
+        await session.execute(
+            text("""
+                INSERT INTO pa_review_actions (auth_request_id, action_type, note)
+                VALUES (:aid, 'note_added', :note)
+            """),
+            {"aid": body.auth_request_id, "note": f"Escalated ({body.reason}): {body.detail or ''}".strip()},
+        )
+        await session.commit()
+        result = await session.execute(
+            text("""
+                SELECT e.escalation_id::text, e.auth_request_id, e.reason, e.detail,
+                       e.escalated_by, r.display_name AS escalated_to_name,
+                       e.status::text, e.resolution, e.created_at, e.resolved_at
+                FROM pa_escalations e
+                LEFT JOIN pa_reviewers r ON e.escalated_to_id = r.reviewer_id
+                WHERE e.escalation_id = CAST(:eid AS uuid)
+            """),
+            {"eid": eid},
+        )
+        return EscalationOut(**dict(result.mappings().one()))
+
+
+@api.post("/workflow/escalations/{escalation_id}/resolve", response_model=EscalationOut, operation_id="resolveEscalation")
+async def resolve_escalation(escalation_id: str, payload: dict):
+    async with db.session() as session:
+        result = await session.execute(
+            text("""
+                UPDATE pa_escalations
+                SET status = 'resolved'::escalation_status, resolved_at = now(),
+                    resolution = :res
+                WHERE escalation_id = CAST(:eid AS uuid)
+                RETURNING escalation_id::text
+            """),
+            {"eid": escalation_id, "res": payload.get("resolution") or "Resolved."},
+        )
+        if not result.first():
+            raise HTTPException(status_code=404, detail="Escalation not found")
+        await session.commit()
+        row = await session.execute(
+            text("""
+                SELECT e.escalation_id::text, e.auth_request_id, e.reason, e.detail,
+                       e.escalated_by, r.display_name AS escalated_to_name,
+                       e.status::text, e.resolution, e.created_at, e.resolved_at
+                FROM pa_escalations e
+                LEFT JOIN pa_reviewers r ON e.escalated_to_id = r.reviewer_id
+                WHERE e.escalation_id = CAST(:eid AS uuid)
+            """),
+            {"eid": escalation_id},
+        )
+        return EscalationOut(**dict(row.mappings().one()))
+
+
+# ===================================================================
+# Inbound Correspondence (document capture + AI classification/indexing)
+# ===================================================================
+
+_INBOUND_COLS = """
+    inbound_id::text, auth_request_id, source_channel, sender, received_at,
+    classified_type, classification_confidence, extracted_summary, indexed, indexed_at
+"""
+
+
+@api.get("/correspondence/inbound", response_model=list[InboundCorrespondenceOut], operation_id="listInboundCorrespondence")
+async def list_inbound_correspondence(classified_type: Optional[str] = None):
+    query = f"SELECT {_INBOUND_COLS} FROM pa_inbound_correspondence WHERE 1=1"
+    params: dict = {}
+    if classified_type:
+        query += " AND classified_type = :ct"
+        params["ct"] = classified_type
+    query += " ORDER BY received_at DESC LIMIT 200"
+    async with db.session() as session:
+        result = await session.execute(text(query), params)
+        return [InboundCorrespondenceOut(**_coerce_row(r)) for r in result.mappings().all()]
+
+
+@api.post("/correspondence/inbound", response_model=InboundCorrespondenceOut, operation_id="ingestInboundCorrespondence")
+async def ingest_inbound_correspondence(body: InboundIngestIn):
+    """Digitize + AI-classify a piece of inbound correspondence and index it."""
+    classified = await asyncio.to_thread(corr.classify_inbound, body.raw_text)
+    async with db.session() as session:
+        ins = await session.execute(
+            text(f"""
+                INSERT INTO pa_inbound_correspondence
+                    (auth_request_id, source_channel, sender, raw_text,
+                     classified_type, classification_confidence, extracted_summary,
+                     indexed, indexed_at)
+                VALUES (:aid, :channel, :sender, :raw,
+                        :ctype, :conf, :summary,
+                        (:aid IS NOT NULL), CASE WHEN :aid IS NOT NULL THEN now() END)
+                RETURNING {_INBOUND_COLS}
+            """),
+            {
+                "aid": body.auth_request_id, "channel": body.source_channel,
+                "sender": body.sender, "raw": body.raw_text,
+                "ctype": classified["classified_type"],
+                "conf": classified["classification_confidence"],
+                "summary": classified["extracted_summary"],
+            },
+        )
+        row = ins.mappings().one()
+        if body.auth_request_id:
+            await session.execute(
+                text("""
+                    INSERT INTO pa_review_actions (auth_request_id, action_type, note)
+                    VALUES (:aid, 'note_added', :note)
+                """),
+                {"aid": body.auth_request_id,
+                 "note": f"Inbound {classified['classified_type']} correspondence indexed to case."},
+            )
+        await session.commit()
+        return InboundCorrespondenceOut(**_coerce_row(row))
+
+
+@api.post("/correspondence/inbound/{inbound_id}/index", response_model=InboundCorrespondenceOut, operation_id="indexInboundCorrespondence")
+async def index_inbound_correspondence(inbound_id: str, body: InboundIndexIn):
+    """Attach a classified inbound document to a case record."""
+    async with db.session() as session:
+        check = await session.execute(
+            text("SELECT 1 FROM pa_review_queue WHERE auth_request_id = :aid"),
+            {"aid": body.auth_request_id},
+        )
+        if not check.first():
+            raise HTTPException(status_code=404, detail="Target case not found")
+        result = await session.execute(
+            text(f"""
+                UPDATE pa_inbound_correspondence
+                SET auth_request_id = :aid, indexed = TRUE, indexed_at = now()
+                WHERE inbound_id = CAST(:iid AS uuid)
+                RETURNING {_INBOUND_COLS}
+            """),
+            {"aid": body.auth_request_id, "iid": inbound_id},
+        )
+        row = result.mappings().one_or_none()
+        if not row:
+            raise HTTPException(status_code=404, detail="Inbound correspondence not found")
+        await session.execute(
+            text("""
+                INSERT INTO pa_review_actions (auth_request_id, action_type, note)
+                VALUES (:aid, 'note_added', 'Inbound correspondence indexed to case.')
+            """),
+            {"aid": body.auth_request_id},
+        )
+        await session.commit()
+        return InboundCorrespondenceOut(**_coerce_row(row))
+
+
+# ===================================================================
+# AI Quality & Accuracy (RFI: AI & Advanced Intelligence — accuracy rate + eval)
+# ===================================================================
+
+# Evaluation scorers this app applies to AI-assisted PA recommendations. Surfaced
+# so the AI tab can name its validation methodology (RFI: describe AI testing +
+# validation). Backed by mlflow.genai.evaluate scorers in evaluate_agents.py.
+_AI_SCORERS = ["criteria_groundedness", "determination_agreement", "citation_faithfulness", "safety_guardrail"]
+
+
+@api.get("/observability/ai-quality", response_model=AIQualityOut, operation_id="getAIQuality")
+async def get_ai_quality():
+    """Measured AI accuracy for PA recommendations (RFI: 'describe AI accuracy rate').
+
+    Accuracy = share of tier-1 evaluations that agreed with the recorded human
+    determination (from gold_pa_tier1_evaluation); appeal overturn rate per tier
+    (gold_pa_auto_adjudication_performance) is surfaced as an inverse error signal.
+    """
+    def _q() -> dict:
+        by_tier = _execute_sql_safe("""
+            SELECT determination_tier AS tier,
+                   COUNT(*) AS total,
+                   ROUND(SUM(CASE WHEN tier1_accuracy IN ('correct_approve','correct_deny')
+                        THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*),0), 1) AS accuracy_pct
+            FROM gold_pa_tier1_evaluation
+            GROUP BY determination_tier
+            ORDER BY total DESC
+        """)
+        overturn = _execute_sql_safe("""
+            SELECT determination_tier AS tier,
+                   ROUND(AVG(appeal_overturn_rate_pct), 1) AS appeal_overturn_rate_pct
+            FROM gold_pa_auto_adjudication_performance
+            GROUP BY determination_tier
+        """)
+        overall = _execute_sql_safe("""
+            SELECT COUNT(*) AS total,
+                   ROUND(SUM(CASE WHEN tier1_accuracy IN ('correct_approve','correct_deny')
+                        THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*),0), 1) AS accuracy_pct
+            FROM gold_pa_tier1_evaluation
+        """)
+        return {"by_tier": by_tier, "overturn": overturn, "overall": overall}
+
+    data = await asyncio.to_thread(_q)
+    overturn_by_tier = {r.get("tier"): r.get("appeal_overturn_rate_pct") for r in data["overturn"]}
+    tiers = [
+        AIQualityTier(
+            tier=str(r.get("tier") or "unknown"),
+            total=int(r.get("total") or 0),
+            accuracy_pct=float(r["accuracy_pct"]) if r.get("accuracy_pct") is not None else None,
+            appeal_overturn_rate_pct=(
+                float(overturn_by_tier[r.get("tier")])
+                if overturn_by_tier.get(r.get("tier")) is not None else None
+            ),
+        )
+        for r in data["by_tier"]
+    ]
+    overall = data["overall"][0] if data["overall"] else {}
+    overturn_vals = [v for v in overturn_by_tier.values() if v is not None]
+    return AIQualityOut(
+        overall_accuracy_pct=float(overall["accuracy_pct"]) if overall.get("accuracy_pct") is not None else None,
+        overall_overturn_rate_pct=round(sum(map(float, overturn_vals)) / len(overturn_vals), 1) if overturn_vals else None,
+        evaluated_count=int(overall.get("total") or 0),
+        scorers=_AI_SCORERS,
+        by_tier=tiers,
+    )
 
 
 # ===================================================================

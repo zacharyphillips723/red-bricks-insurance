@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
-import { Activity, Loader2, DollarSign, Zap, RefreshCw } from "lucide-react";
+import { Activity, Loader2, DollarSign, Zap, RefreshCw, ShieldCheck, Target } from "lucide-react";
 import { api } from "@/lib/api";
-import type { ObservabilityTrace, CostSummary } from "@/lib/api";
+import type { ObservabilityTrace, CostSummary, AIQuality } from "@/lib/api";
 
 const MODEL_LABELS: Record<string, string> = {
   "databricks-llama-4-maverick": "Llama 4 Maverick",
@@ -17,18 +17,21 @@ const COST_PER_1K: Record<string, { input: number; output: number }> = {
 export function Observability() {
   const [traces, setTraces] = useState<ObservabilityTrace[]>([]);
   const [costs, setCosts] = useState<CostSummary[]>([]);
+  const [quality, setQuality] = useState<AIQuality | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const loadData = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     try {
-      const [traceRes, costRes] = await Promise.all([
+      const [traceRes, costRes, qualityRes] = await Promise.all([
         api.getTraces().catch(() => ({ traces: [] })),
         api.getCostSummary().catch(() => ({ costs: [] })),
+        api.getAIQuality().catch(() => null),
       ]);
       setTraces(traceRes.traces || []);
       setCosts(costRes.costs || []);
+      setQuality(qualityRes);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -111,6 +114,72 @@ export function Observability() {
           );
         })}
       </div>
+
+      {/* AI Quality & Accuracy (RFI: AI & Advanced Intelligence — accuracy rate + eval) */}
+      {quality && (
+        <div className="card">
+          <div className="p-4 border-b border-gray-200 flex items-center gap-2">
+            <ShieldCheck className="w-5 h-5 text-databricks-red" />
+            <h3 className="font-semibold text-databricks-dark">AI Quality & Accuracy</h3>
+            <span className="text-xs text-gray-400 ml-1">
+              measured over {quality.evaluated_count.toLocaleString()} evaluations
+            </span>
+          </div>
+          <div className="p-4 space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+              <div className="flex items-center gap-2">
+                <Target className="w-5 h-5 text-green-600" />
+                <div>
+                  <div className="text-2xl font-bold text-databricks-dark">
+                    {quality.overall_accuracy_pct != null ? `${quality.overall_accuracy_pct}%` : "—"}
+                  </div>
+                  <div className="text-xs text-gray-400">Determination agreement</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Activity className="w-5 h-5 text-amber-500" />
+                <div>
+                  <div className="text-2xl font-bold text-databricks-dark">
+                    {quality.overall_overturn_rate_pct != null ? `${quality.overall_overturn_rate_pct}%` : "—"}
+                  </div>
+                  <div className="text-xs text-gray-400">Appeal overturn (error signal)</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Per-tier accuracy */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium text-gray-600">Tier</th>
+                    <th className="px-3 py-2 text-right font-medium text-gray-600">Evaluated</th>
+                    <th className="px-3 py-2 text-right font-medium text-gray-600">Accuracy</th>
+                    <th className="px-3 py-2 text-right font-medium text-gray-600">Overturn Rate</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {quality.by_tier.map((t) => (
+                    <tr key={t.tier}>
+                      <td className="px-3 py-2 font-mono text-xs">{t.tier}</td>
+                      <td className="px-3 py-2 text-right">{t.total.toLocaleString()}</td>
+                      <td className="px-3 py-2 text-right font-medium">{t.accuracy_pct != null ? `${t.accuracy_pct}%` : "—"}</td>
+                      <td className="px-3 py-2 text-right text-gray-500">{t.appeal_overturn_rate_pct != null ? `${t.appeal_overturn_rate_pct}%` : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="text-xs text-gray-400">
+              Evaluation scorers (mlflow.genai.evaluate):{" "}
+              {quality.scorers.map((s) => (
+                <span key={s} className="inline-block bg-gray-100 text-gray-600 rounded px-1.5 py-0.5 mr-1 font-mono">{s}</span>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Recent traces */}
       <div className="card">

@@ -2750,6 +2750,160 @@ def seed_qa() -> tuple[int, int]:
     print(f"  QA: {len(questions)} questions, {sampled} sampled, {scored} scored.")
     return sampled, scored
 
+
+def seed_workflow() -> tuple[int, int, int]:
+    """Seed the Workflow Engine & Management layer (RFI: Workflow Engine tab):
+    configurable work queues + no-code routing rules, stamp queue/region onto the
+    existing review queue, and create a few open escalations + inbound docs.
+
+    Returns (queues, routing_rules, escalations).
+    """
+    import json as _json
+    import random as _rnd
+    _rnd.seed(11)
+
+    # Configurable work queues (by review/service type, each with an SLA target).
+    queues = [
+        ("Intake Triage", "New requests awaiting triage and assignment.", "intake", None, "team-intake", 24),
+        ("Clinical Review", "Standard nurse clinical review.", "clinical", "imaging|surgery|dme|pharmacy", "team-clinical", 72),
+        ("Behavioral Health", "Behavioral-health specialty review.", "clinical", "behavioral_health", "team-bh", 72),
+        ("Peer / Physician Review", "Escalated physician / peer review.", "peer_review", None, "team-md", 48),
+        ("Expedited", "Expedited (72h) requests across services.", "exception", None, "team-expedited", 72),
+        ("Appeals", "Appeals & reconsiderations.", "appeals", None, "team-appeals", 168),
+    ]
+
+    regions = ["West", "Midwest", "Northeast", "South"]
+    q_count = r_count = e_count = 0
+
+    with get_pg_connection(LAKEBASE_PROJECT_ID, "pa_reviews") as conn:
+        with conn.cursor() as cur:
+            # Idempotent reset of the workflow config (safe — config, not case data).
+            cur.execute("TRUNCATE pa_routing_rules")
+            cur.execute("TRUNCATE pa_escalations")
+            cur.execute("TRUNCATE pa_inbound_correspondence")
+            # Upsert queues by unique name.
+            queue_ids: dict[str, str] = {}
+            for name, desc, qtype, svcs, team, sla in queues:
+                cur.execute(
+                    """INSERT INTO pa_work_queues
+                        (name, description, queue_type, service_types, owner_team, sla_hours, is_active)
+                       VALUES (%s, %s, %s, %s, %s, %s, TRUE)
+                       ON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description,
+                         queue_type = EXCLUDED.queue_type, service_types = EXCLUDED.service_types,
+                         owner_team = EXCLUDED.owner_team, sla_hours = EXCLUDED.sla_hours
+                       RETURNING queue_id""",
+                    (name, desc, qtype, svcs, team, sla),
+                )
+                queue_ids[name] = cur.fetchone()[0]
+                q_count += 1
+
+            # No-code, prioritized routing rules (conditions_json mirrors pa_business_rules).
+            routing = [
+                ("Expedited → Expedited queue", None, None,
+                 {"all": [{"field": "urgency", "op": "eq", "value": "expedited"}]},
+                 "Expedited", "specialty_match", 10),
+                ("Behavioral health → BH queue", None, "behavioral_health",
+                 {}, "Behavioral Health", "specialty_match", 20),
+                ("Denials → Peer review", None, None,
+                 {"any": [{"field": "status", "op": "eq", "value": "Peer Review Requested"}]},
+                 "Peer / Physician Review", "specialty_match", 30),
+                ("High-cost surgery → Peer review", None, "surgery",
+                 {"all": [{"field": "estimated_cost", "op": "gt", "value": 25000}]},
+                 "Peer / Physician Review", "least_loaded", 40),
+                ("Default clinical routing", None, None,
+                 {}, "Clinical Review", "least_loaded", 900),
+            ]
+            for name, lob, svc, cond, target_queue, strategy, prio in routing:
+                cur.execute(
+                    """INSERT INTO pa_routing_rules
+                        (name, line_of_business, service_type, conditions_json,
+                         target_queue_id, assignment_strategy, priority, is_active, created_by)
+                       VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, TRUE, 'workflow_admin')""",
+                    (name, lob, svc, _json.dumps(cond), queue_ids.get(target_queue), strategy, prio),
+                )
+                r_count += 1
+
+            # Stamp queue_id + region onto existing queue rows so the monitor has data.
+            # Route by service type first, else expedited, else default clinical.
+            cur.execute(
+                "UPDATE pa_review_queue SET region = %s WHERE region IS NULL",
+                (regions[0],),
+            )
+            # Spread regions deterministically.
+            for i, reg in enumerate(regions):
+                cur.execute(
+                    "UPDATE pa_review_queue SET region = %s WHERE abs(hashtext(auth_request_id)) %% %s = %s",
+                    (reg, len(regions), i),
+                )
+            cur.execute(
+                "UPDATE pa_review_queue SET queue_id = %s WHERE service_type = 'behavioral_health'",
+                (queue_ids["Behavioral Health"],),
+            )
+            cur.execute(
+                """UPDATE pa_review_queue SET queue_id = %s
+                   WHERE urgency = 'expedited' AND queue_id IS NULL
+                     AND status IN ('Pending Review','In Review','Additional Info Requested','Peer Review Requested')""",
+                (queue_ids["Expedited"],),
+            )
+            cur.execute(
+                "UPDATE pa_review_queue SET queue_id = %s WHERE status = 'Peer Review Requested' AND queue_id IS NULL",
+                (queue_ids["Peer / Physician Review"],),
+            )
+            cur.execute(
+                "UPDATE pa_review_queue SET queue_id = %s WHERE status = 'Pending Review' AND queue_id IS NULL",
+                (queue_ids["Intake Triage"],),
+            )
+            cur.execute(
+                "UPDATE pa_review_queue SET queue_id = %s WHERE queue_id IS NULL",
+                (queue_ids["Clinical Review"],),
+            )
+
+            # A few supervisor escalations on at-risk cases.
+            cur.execute("""
+                SELECT auth_request_id FROM pa_review_queue
+                WHERE status IN ('Pending Review','In Review','Additional Info Requested')
+                  AND cms_deadline < now()
+                ORDER BY cms_deadline ASC LIMIT 6
+            """)
+            at_risk = [row[0] for row in cur.fetchall()]
+            cur.execute("""
+                SELECT reviewer_id FROM pa_reviewers
+                WHERE is_active = TRUE AND role = 'Medical Director' LIMIT 1
+            """)
+            sup_row = cur.fetchone()
+            supervisor = sup_row[0] if sup_row else None
+            for aid in at_risk:
+                cur.execute(
+                    """INSERT INTO pa_escalations
+                        (auth_request_id, reason, detail, escalated_by, escalated_to_id, status)
+                       VALUES (%s, 'sla_risk', 'Past CMS deadline — supervisor intervention required.',
+                               'supervisor', %s, 'open'::escalation_status)""",
+                    (aid, supervisor),
+                )
+                e_count += 1
+
+            # A couple of pre-classified inbound correspondence samples.
+            inbound_samples = [
+                ("fax", "Dr. Office", "clinical_records",
+                 "Office notes + imaging report attached supporting medical necessity.", 0.92),
+                ("mail", "Member", "appeal",
+                 "Member letter disputing the denial and requesting reconsideration.", 0.88),
+                ("secure_email", "Provider Portal", "additional_info",
+                 "Provider uploaded the requested conservative-treatment history.", 0.90),
+            ]
+            for ch, sender, ctype, summary, conf in inbound_samples:
+                cur.execute(
+                    """INSERT INTO pa_inbound_correspondence
+                        (source_channel, sender, raw_text, classified_type,
+                         classification_confidence, extracted_summary, indexed)
+                       VALUES (%s, %s, %s, %s, %s, %s, FALSE)""",
+                    (ch, sender, summary, ctype, conf, summary),
+                )
+            conn.commit()
+    print(f"  Workflow: {q_count} queues, {r_count} routing rules, {e_count} escalations, "
+          f"{len(inbound_samples)} inbound docs.")
+    return q_count, r_count, e_count
+
 # COMMAND ----------
 
 print("=" * 60)
@@ -2776,6 +2930,9 @@ rules_count = seed_business_rules()
 
 print("\n--- PA Quality Assurance ---")
 qa_sampled, qa_scored = seed_qa()
+
+print("\n--- PA Workflow (queues, routing, escalations) ---")
+wf_queues, wf_rules, wf_escalations = seed_workflow()
 
 # COMMAND ----------
 
@@ -2902,6 +3059,7 @@ except Exception:
 print(f"\n  Alerts seeded: {alert_count}")
 print(f"  Investigations seeded: {inv_count}")
 print(f"  PA reviews seeded: {pa_count}")
+print(f"  Workflow: {wf_queues} queues, {wf_rules} routing rules, {wf_escalations} escalations")
 print(f"  ML predictions table: {catalog}.analytics.fwa_ml_predictions")
 
 print(f"\n  Apps deployed/restarted: {deploy_count}")

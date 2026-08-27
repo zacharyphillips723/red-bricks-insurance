@@ -24,6 +24,16 @@ const NOTICE_TYPES = [
   { value: "additional_info_request", label: "Request Additional Info" },
 ];
 
+// Multilingual correspondence generation (RFI: Correspondence Management).
+const LANGUAGES = [
+  { value: "en", label: "English" },
+  { value: "es", label: "Spanish" },
+  { value: "zh", label: "Chinese" },
+  { value: "vi", label: "Vietnamese" },
+  { value: "tl", label: "Tagalog" },
+  { value: "ru", label: "Russian" },
+];
+
 function statusPill(s: string | null): string {
   if (s === "released") return "bg-green-50 text-green-700";
   if (s === "delivered") return "bg-blue-50 text-blue-700";
@@ -34,6 +44,7 @@ function statusPill(s: string | null): string {
 export function NoticesCard({ requestId, status }: NoticesCardProps) {
   const [notices, setNotices] = useState<Correspondence[]>([]);
   const [noticeType, setNoticeType] = useState(defaultNoticeType(status));
+  const [language, setLanguage] = useState("en");
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
 
@@ -50,6 +61,7 @@ export function NoticesCard({ requestId, status }: NoticesCardProps) {
       const created = await api.generateNotice(requestId, {
         notice_type: noticeType,
         delivery_channel: "portal",
+        language,
       });
       setExpanded(created.notice_id);
       load();
@@ -89,6 +101,16 @@ export function NoticesCard({ requestId, status }: NoticesCardProps) {
             <option key={n.value} value={n.value}>{n.label}</option>
           ))}
         </select>
+        <select
+          value={language}
+          onChange={(e) => setLanguage(e.target.value)}
+          className="border border-gray-300 rounded-md px-2 py-1.5 text-sm"
+          title="Correspondence language"
+        >
+          {LANGUAGES.map((l) => (
+            <option key={l.value} value={l.value}>{l.label}</option>
+          ))}
+        </select>
         <button onClick={handleGenerate} disabled={busy} className="btn-primary text-sm flex items-center gap-1">
           <FileText size={14} /> {busy ? "Generating…" : "Generate"}
         </button>
@@ -110,6 +132,9 @@ export function NoticesCard({ requestId, status }: NoticesCardProps) {
                 <span className="text-sm font-medium capitalize flex-1">
                   {n.notice_type.replace(/_/g, " ")}
                 </span>
+                {n.language && n.language !== "en" && (
+                  <span className="text-xs bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded uppercase">{n.language}</span>
+                )}
                 {n.includes_appeal_rights && (
                   <span className="text-xs text-gray-400">appeal rights</span>
                 )}
@@ -125,6 +150,11 @@ export function NoticesCard({ requestId, status }: NoticesCardProps) {
                   <div className="text-xs text-gray-500">
                     {n.criteria_citation} · template {n.template_version} · {n.redaction_notes}
                   </div>
+                  {n.validation_notes && (
+                    <div className={`text-xs flex items-center gap-1 ${n.validation_status === "passed" ? "text-green-600" : "text-amber-600"}`}>
+                      <ShieldCheck size={12} /> {n.validation_notes}
+                    </div>
+                  )}
                   <div className="prose prose-sm max-w-none bg-gray-50 rounded p-3 max-h-72 overflow-y-auto">
                     <ReactMarkdown>{n.body_markdown || ""}</ReactMarkdown>
                   </div>

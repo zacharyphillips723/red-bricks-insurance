@@ -144,11 +144,103 @@ def _draft_rationale(notice_type: str, facts: dict) -> str:
     )
 
 
-def build_notice(notice_type: str, facts: dict) -> dict:
+# Supported correspondence languages (RFI: multilingual generation). English is
+# native; others are produced by an ai_query translation pass over the assembled
+# regulatory body, so required language is authored once and translated verbatim.
+SUPPORTED_LANGUAGES = {
+    "en": "English", "es": "Spanish", "zh": "Chinese (Simplified)",
+    "vi": "Vietnamese", "tl": "Tagalog", "ru": "Russian",
+}
+
+
+def _translate_body(body_markdown: str, language: str) -> str:
+    """Translate an assembled notice body into a target language via ai_query.
+
+    Falls back to the English body (with a bilingual header note) if the model
+    call fails, so a notice is always issuable.
+    """
+    lang_name = SUPPORTED_LANGUAGES.get(language, language)
+    prompt = (
+        f"Translate the following health-plan prior authorization notice into {lang_name}. "
+        "Preserve all markdown structure, headings, dates, codes, identifiers, and the "
+        "meaning of the appeal-rights language exactly. Translate only the natural-language "
+        "text; do not add commentary. Notice:\n\n" + body_markdown
+    )
+    try:
+        rows = _execute_sql(
+            f"SELECT ai_query('{LLM_ENDPOINT}', '{_sql_str(prompt)}') AS body"
+        )
+        if rows and rows[0].get("body"):
+            return str(rows[0]["body"]).strip()
+    except Exception as e:  # pragma: no cover - defensive
+        print(f"[correspondence] ai_query translation failed: {e}")
+    return f"> _[Translation to {lang_name} unavailable — English text follows]_\n\n{body_markdown}"
+
+
+def validate_delivery(facts: dict) -> tuple[str, str]:
+    """Beneficiary / address validation before release (RFI: pre-release validation,
+    prevention of misdirected correspondence). Returns (status, notes).
+
+    Heuristic completeness checks a real integration would run against a
+    beneficiary/address master; here it demonstrates the pre-release gate.
+    """
+    issues: list[str] = []
+    if not (facts.get("member_name") or facts.get("member_id")):
+        issues.append("missing beneficiary identity")
+    if not facts.get("member_id"):
+        issues.append("missing member ID")
+    if not (facts.get("provider_name") or facts.get("requesting_provider_npi")):
+        issues.append("missing provider")
+    if issues:
+        return "warning", "Delivery validation warnings: " + "; ".join(issues) + "."
+    return "passed", "Beneficiary and provider identity validated for delivery."
+
+
+# Inbound-correspondence classification labels (RFI: automated indexing/classification).
+_INBOUND_TYPES = ["clinical_records", "appeal", "p2p_request", "additional_info", "other"]
+
+
+def classify_inbound(raw_text: str) -> dict:
+    """AI-classify a piece of inbound correspondence + extract a short summary.
+
+    RFI: automated indexing and classification of incoming correspondence +
+    AI-assisted extraction. Uses ai_query; falls back to a keyword heuristic.
+    """
+    snippet = (raw_text or "")[:3000]
+    prompt = (
+        "Classify this inbound health-plan correspondence into exactly one of: "
+        f"{', '.join(_INBOUND_TYPES)}. Then give a one-sentence summary. "
+        "Respond as 'TYPE | summary'. Correspondence:\n\n" + snippet
+    )
+    try:
+        rows = _execute_sql(f"SELECT ai_query('{LLM_ENDPOINT}', '{_sql_str(prompt)}') AS out")
+        if rows and rows[0].get("out"):
+            out = str(rows[0]["out"]).strip()
+            label, _, summary = out.partition("|")
+            label = label.strip().lower().replace(" ", "_")
+            if label not in _INBOUND_TYPES:
+                label = next((t for t in _INBOUND_TYPES if t in out.lower()), "other")
+            return {"classified_type": label, "extracted_summary": summary.strip() or out,
+                    "classification_confidence": 0.9}
+    except Exception as e:  # pragma: no cover - defensive
+        print(f"[correspondence] ai_query inbound classification failed: {e}")
+    # Keyword fallback.
+    low = snippet.lower()
+    label = ("appeal" if "appeal" in low else
+             "p2p_request" if "peer-to-peer" in low or "p2p" in low else
+             "additional_info" if "additional information" in low or "requested records" in low else
+             "clinical_records" if any(k in low for k in ("history", "diagnosis", "clinical", "chart")) else
+             "other")
+    return {"classified_type": label, "extracted_summary": snippet[:200],
+            "classification_confidence": 0.5}
+
+
+def build_notice(notice_type: str, facts: dict, language: str = "en") -> dict:
     """Assemble a full determination notice: subject + markdown body + metadata.
 
     Returns everything the router persists into pa_correspondence, including the
     PHI-redaction result so an un-redacted notice can never be marked released.
+    When ``language`` is not English the redacted body is translated via ai_query.
     """
     spec = _NOTICE_SPEC.get(notice_type)
     if not spec:
@@ -207,15 +299,24 @@ def build_notice(notice_type: str, facts: dict) -> dict:
         else "No PHI/PII identifiers detected."
     )
 
+    # Multilingual pass runs AFTER redaction so PHI is never sent to translation.
+    if language and language != "en":
+        clean_body = _translate_body(clean_body, language)
+
+    validation_status, validation_notes = validate_delivery(facts)
+
     return {
         "notice_type": notice_type,
         "subject": spec["title"],
+        "language": language or "en",
         "body_markdown": clean_body,
         "body_redacted": True,  # gate has run
         "redaction_notes": redaction_notes,
         "includes_appeal_rights": spec["appeal_rights"],
         "criteria_citation": criteria_citation,
         "template_version": TEMPLATE_VERSION,
+        "validation_status": validation_status,
+        "validation_notes": validation_notes,
     }
 
 

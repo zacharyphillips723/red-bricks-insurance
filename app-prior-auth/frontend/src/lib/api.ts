@@ -298,6 +298,7 @@ export interface Correspondence {
   notice_type: string;
   recipient: string | null;
   recipient_role: string | null;
+  language: string | null;
   subject: string | null;
   body_markdown: string | null;
   body_redacted: boolean | null;
@@ -308,9 +309,148 @@ export interface Correspondence {
   pdf_path: string | null;
   delivery_channel: string | null;
   delivery_status: string | null;
+  validation_status: string | null;
+  validation_notes: string | null;
   generated_by: string | null;
   generated_at: string | null;
   released_at: string | null;
+}
+
+export interface InboundCorrespondence {
+  inbound_id: string;
+  auth_request_id: string | null;
+  source_channel: string;
+  sender: string | null;
+  received_at: string | null;
+  classified_type: string | null;
+  classification_confidence: number | null;
+  extracted_summary: string | null;
+  indexed: boolean | null;
+  indexed_at: string | null;
+}
+
+// --- Workflow Engine & Management ---
+export interface WorkQueue {
+  queue_id: string;
+  name: string;
+  queue_type: string | null;
+  owner_team: string | null;
+  sla_hours: number;
+  open_cases: number;
+  unassigned_cases: number;
+  expedited_open: number;
+  age_0_24h: number;
+  age_24_72h: number;
+  age_72h_plus: number;
+  sla_breached: number;
+  avg_age_hours: number | null;
+}
+
+export interface Bottleneck {
+  queue_id: string;
+  name: string;
+  open_cases: number;
+  sla_breached: number;
+  bottleneck_score: number;
+  reason: string;
+}
+
+export interface Workload {
+  reviewer_id: string;
+  display_name: string;
+  role: string;
+  specialty: string | null;
+  max_caseload: number;
+  active_cases: number;
+  expedited_cases: number;
+  available_capacity: number;
+  utilization_pct: number | null;
+  is_overloaded: boolean | null;
+}
+
+export interface BalanceMove {
+  from_reviewer_id: string;
+  from_name: string | null;
+  to_reviewer_id: string;
+  to_name: string | null;
+  cases: number;
+  reason: string;
+}
+
+export interface WorkloadResponse {
+  workloads: Workload[];
+  recommendation: {
+    overloaded_count: number;
+    underutilized_count: number;
+    target_utilization_pct: number;
+    moves: BalanceMove[];
+    rebalanced_cases: number;
+  };
+}
+
+export interface RoutingRule {
+  routing_rule_id: string;
+  name: string;
+  description: string | null;
+  line_of_business: string | null;
+  service_type: string | null;
+  conditions_json: Record<string, unknown>;
+  target_queue_id: string | null;
+  target_queue_name: string | null;
+  target_role: string | null;
+  assignment_strategy: string;
+  priority: number;
+  is_active: boolean;
+  created_by: string | null;
+  created_at: string | null;
+}
+
+export interface StalledCase {
+  auth_request_id: string;
+  member_name: string | null;
+  service_type: string | null;
+  urgency: string | null;
+  status: string | null;
+  queue_name: string | null;
+  reviewer_name: string | null;
+  request_date: string | null;
+  cms_deadline: string | null;
+  age_hours: number | null;
+  hours_since_action: number | null;
+  flag_reason: string;
+  recommended_action: string | null;
+}
+
+export interface StalledResponse {
+  total: number;
+  by_flag: Record<string, number>;
+  cases: StalledCase[];
+}
+
+export interface Escalation {
+  escalation_id: string;
+  auth_request_id: string;
+  reason: string;
+  detail: string | null;
+  escalated_by: string | null;
+  escalated_to_name: string | null;
+  status: string;
+  resolution: string | null;
+  created_at: string | null;
+  resolved_at: string | null;
+}
+
+export interface AIQuality {
+  overall_accuracy_pct: number | null;
+  overall_overturn_rate_pct: number | null;
+  evaluated_count: number;
+  scorers: string[];
+  by_tier: {
+    tier: string;
+    total: number;
+    accuracy_pct: number | null;
+    appeal_overturn_rate_pct: number | null;
+  }[];
 }
 
 export interface PortalProvider {
@@ -588,7 +728,7 @@ export const api = {
     fetchApi<Correspondence[]>(`/requests/${reqId}/notices`),
   generateNotice: (
     reqId: string,
-    body: { notice_type: string; recipient?: string; delivery_channel?: string },
+    body: { notice_type: string; recipient?: string; delivery_channel?: string; language?: string },
   ) =>
     fetchApi<Correspondence>(`/requests/${reqId}/notices`, {
       method: "POST",
@@ -597,9 +737,51 @@ export const api = {
   releaseNotice: (noticeId: string) =>
     fetchApi<Correspondence>(`/notices/${noticeId}/release`, { method: "POST" }),
 
+  // --- Inbound Correspondence (capture + AI classification/indexing) ---
+  listInboundCorrespondence: (classifiedType?: string) => {
+    const qs = classifiedType ? `?classified_type=${encodeURIComponent(classifiedType)}` : "";
+    return fetchApi<InboundCorrespondence[]>(`/correspondence/inbound${qs}`);
+  },
+  ingestInboundCorrespondence: (body: {
+    source_channel: string; sender?: string; raw_text: string; auth_request_id?: string;
+  }) =>
+    fetchApi<InboundCorrespondence>("/correspondence/inbound", {
+      method: "POST", body: JSON.stringify(body),
+    }),
+  indexInboundCorrespondence: (inboundId: string, authRequestId: string) =>
+    fetchApi<InboundCorrespondence>(`/correspondence/inbound/${inboundId}/index`, {
+      method: "POST", body: JSON.stringify({ auth_request_id: authRequestId }),
+    }),
+
+  // --- Workflow Engine & Management ---
+  listWorkQueues: () => fetchApi<WorkQueue[]>("/workflow/queues"),
+  getWorkflowBottlenecks: () => fetchApi<{ bottlenecks: Bottleneck[] }>("/workflow/bottlenecks"),
+  getWorkloadBalance: () => fetchApi<WorkloadResponse>("/workflow/workload"),
+  listRoutingRules: () => fetchApi<RoutingRule[]>("/workflow/routing-rules"),
+  createRoutingRule: (body: Partial<RoutingRule> & { name: string }) =>
+    fetchApi<RoutingRule>("/workflow/routing-rules", { method: "POST", body: JSON.stringify(body) }),
+  toggleRoutingRule: (id: string) =>
+    fetchApi<RoutingRule>(`/workflow/routing-rules/${id}/toggle`, { method: "POST" }),
+  previewRouting: (reqId: string) =>
+    fetchApi<Record<string, unknown>>(`/requests/${reqId}/route-preview`),
+  reassignCase: (reqId: string, body: { queue_id?: string; reviewer_id?: string; note?: string }) =>
+    fetchApi<PARequestDetail>(`/requests/${reqId}/reassign`, { method: "POST", body: JSON.stringify(body) }),
+  getStalledCases: () => fetchApi<StalledResponse>("/workflow/stalled"),
+  listEscalations: (status?: string) => {
+    const qs = status ? `?status=${encodeURIComponent(status)}` : "";
+    return fetchApi<Escalation[]>(`/workflow/escalations${qs}`);
+  },
+  createEscalation: (body: { auth_request_id: string; reason?: string; detail?: string; escalated_to_id?: string }) =>
+    fetchApi<Escalation>("/workflow/escalations", { method: "POST", body: JSON.stringify(body) }),
+  resolveEscalation: (id: string, resolution?: string) =>
+    fetchApi<Escalation>(`/workflow/escalations/${id}/resolve`, {
+      method: "POST", body: JSON.stringify({ resolution }),
+    }),
+
   // --- Observability ---
   getTraces: () => fetchApi<{ traces: ObservabilityTrace[] }>("/observability/traces"),
   getCostSummary: () => fetchApi<{ costs: CostSummary[] }>("/observability/costs"),
+  getAIQuality: () => fetchApi<AIQuality>("/observability/ai-quality"),
 
   // --- Document Intake ---
   listSampleScenarios: () =>

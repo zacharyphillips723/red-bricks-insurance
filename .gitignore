@@ -27,3 +27,7 @@ app-underwriting-sim/frontend/dist/
 .vscode/
 *.swp
 resources/app.yml.bak
+
+# Local MLflow test artifacts (app dev loop)
+app-prior-auth/mlflow.db
+app-prior-auth/mlruns/

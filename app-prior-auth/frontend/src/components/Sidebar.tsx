@@ -11,6 +11,7 @@ import {
   Workflow,
   Building2,
   ClipboardCheck,
+  Network,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -26,6 +27,7 @@ const NAV_ITEMS = [
   { id: "policies", label: "Policy Library", icon: BookOpen },
   { id: "agent", label: "PA Review Agent", icon: Bot },
   { id: "appeals", label: "Appeals", icon: Scale },
+  { id: "workflow", label: "Work Management", icon: Network },
   { id: "rules", label: "Rules Studio", icon: Workflow },
   { id: "qa", label: "Quality Assurance", icon: ClipboardCheck },
   { id: "portal", label: "Provider Portal", icon: Building2 },

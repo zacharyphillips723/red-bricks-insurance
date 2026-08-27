@@ -96,3 +96,47 @@ def test_notice_body_is_phi_safe():
 def test_unknown_notice_type_rejected():
     with pytest.raises(ValueError):
         corr.build_notice("not_a_type", _facts())
+
+
+# --------------------------------------------------------------------------
+# Multilingual + delivery validation + inbound classification
+# --------------------------------------------------------------------------
+
+def test_english_notice_not_translated():
+    notice = corr.build_notice("approval", _facts(), language="en")
+    assert notice["language"] == "en"
+    # Canned _execute_sql body is only used for rationale, not a translation wrapper.
+    assert "Translation to" not in notice["body_markdown"]
+
+
+def test_spanish_notice_runs_translation_pass(monkeypatch):
+    # Route rationale vs translation by prompt content.
+    def fake_sql(sql):
+        if "Translate the following" in sql:
+            return [{"body": "AVISO (traducido)"}]
+        return [{"body": "rationale"}]
+    monkeypatch.setattr(corr, "_execute_sql", fake_sql)
+    notice = corr.build_notice("denial", _facts(), language="es")
+    assert notice["language"] == "es"
+    assert "AVISO (traducido)" in notice["body_markdown"]
+
+
+def test_validate_delivery_flags_missing_identity():
+    status, notes = corr.validate_delivery({"member_id": None, "member_name": None})
+    assert status == "warning"
+    assert "beneficiary" in notes.lower()
+
+
+def test_validate_delivery_passes_complete():
+    status, _ = corr.validate_delivery(_facts())
+    assert status == "passed"
+
+
+def test_classify_inbound_keyword_fallback(monkeypatch):
+    # ai_query unavailable -> keyword heuristic still classifies.
+    def boom(sql):
+        raise RuntimeError("no workspace")
+    monkeypatch.setattr(corr, "_execute_sql", boom)
+    r = corr.classify_inbound("Member letter to file an appeal of the denial.")
+    assert r["classified_type"] == "appeal"
+    assert r["classification_confidence"] == 0.5

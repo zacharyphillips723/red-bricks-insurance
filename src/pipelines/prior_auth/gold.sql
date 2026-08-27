@@ -429,3 +429,49 @@ SELECT
 
 FROM LIVE.silver_pa_requests
 GROUP BY request_year_month, line_of_business, service_type;
+
+-- ---------------------------------------------------------------------------
+-- Gold: Workflow & Operations Metrics (RFI: Workflow Engine & Management)
+-- ---------------------------------------------------------------------------
+-- Intake-to-decision cycle times, throughput, and SLA performance by month /
+-- LOB / service. Complements the OPERATIONAL work-management state in Lakebase
+-- (queues, routing, aging, escalations); this is the analytics-side rollup used
+-- by the Work Management dashboard and the Genie space for workflow reporting:
+-- cycle-time tracking, queue/backlog trends, and operational KPI dashboarding.
+-- ---------------------------------------------------------------------------
+CREATE OR REFRESH MATERIALIZED VIEW gold_pa_workflow_metrics
+COMMENT 'Workflow operations: intake-to-decision cycle time, throughput, and SLA performance by month/LOB/service for work-management dashboards.'
+TBLPROPERTIES (
+  'quality' = 'gold',
+  'domain'  = 'prior_auth'
+)
+AS
+SELECT
+  request_year_month,
+  line_of_business,
+  service_type,
+  urgency,
+
+  COUNT(*)                                                             AS total_cases,
+  SUM(CASE WHEN determination IN ('approved','denied','pended') THEN 1 ELSE 0 END) AS decided_cases,
+
+  -- Intake-to-decision cycle time
+  ROUND(AVG(turnaround_hours), 1)                                      AS avg_cycle_hours,
+  ROUND(PERCENTILE_APPROX(turnaround_hours, 0.5), 1)                   AS median_cycle_hours,
+  ROUND(PERCENTILE_APPROX(turnaround_hours, 0.95), 1)                  AS p95_cycle_hours,
+
+  -- SLA performance (CMS turnaround compliance is the SLA here)
+  ROUND(SUM(CASE WHEN cms_compliant THEN 1 ELSE 0 END)
+    * 100.0 / NULLIF(SUM(CASE WHEN determination IN ('approved','denied','pended')
+        THEN 1 ELSE 0 END), 0), 2)                                     AS sla_met_pct,
+
+  -- Auto-adjudication share (straight-through processing = workflow efficiency)
+  ROUND(SUM(CASE WHEN determination_tier = 'tier_1_auto' THEN 1 ELSE 0 END)
+    * 100.0 / NULLIF(COUNT(*), 0), 2)                                  AS straight_through_pct,
+
+  -- Rework signal: appeals as a share of decided work
+  ROUND(SUM(CASE WHEN appeal_filed THEN 1 ELSE 0 END)
+    * 100.0 / NULLIF(COUNT(*), 0), 2)                                  AS rework_rate_pct
+
+FROM LIVE.silver_pa_requests
+GROUP BY request_year_month, line_of_business, service_type, urgency;

@@ -897,6 +897,213 @@ LEFT JOIN pa_qa_reviews q ON r.reviewer_id = q.case_reviewer_id
 GROUP BY r.reviewer_id, r.display_name, r.role;
 
 -- ===========================================================================
+-- WORKFLOW ENGINE & MANAGEMENT  (RFI: Workflow Engine & Management tab)
+--
+-- Configurable work queues + no-code routing rules + escalations + queue-aging /
+-- SLA / workload monitoring. This is the operational "work management" layer that
+-- sits over pa_review_queue: cases are routed to a queue by data-driven rules,
+-- monitored for aging/backlog/SLA breach, balanced across reviewers, and escalated
+-- to supervisors when they stall. Routing rules reuse the same conditions_json
+-- shape as pa_business_rules so the backend rules engine evaluates both.
+-- ===========================================================================
+
+DO $$ BEGIN
+    CREATE TYPE escalation_status AS ENUM ('open', 'acknowledged', 'resolved');
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
+
+-- Configurable work queues (RFI: queues by case/service/review type, SLA per queue).
+CREATE TABLE IF NOT EXISTS pa_work_queues (
+    queue_id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name                 TEXT NOT NULL UNIQUE,
+    description          TEXT,
+    queue_type           TEXT,                        -- 'intake' | 'clinical' | 'peer_review' | 'appeals' | 'exception'
+    service_types        TEXT,                        -- pipe-delimited applicability (NULL = all)
+    owner_team           TEXT,
+    sla_hours            INT NOT NULL DEFAULT 72,      -- queue-level SLA target
+    is_active            BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at           TIMESTAMPTZ DEFAULT now(),
+    updated_at           TIMESTAMPTZ DEFAULT now()
+);
+
+DROP TRIGGER IF EXISTS trg_queues_updated_at ON pa_work_queues;
+CREATE TRIGGER trg_queues_updated_at
+    BEFORE UPDATE ON pa_work_queues
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_pa();
+
+-- No-code, configurable, prioritized routing rules (RFI: configurable + automated
+-- routing; auto-assignment by service type / priority / specialty / region / workload;
+-- automated decision-based routing e.g. denials -> physician review).
+CREATE TABLE IF NOT EXISTS pa_routing_rules (
+    routing_rule_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name                 TEXT NOT NULL,
+    description          TEXT,
+    line_of_business     TEXT,                        -- scope; NULL = all
+    service_type         TEXT,                        -- scope; NULL = all
+    conditions_json      JSONB NOT NULL DEFAULT '{}', -- same shape as pa_business_rules
+    target_queue_id      UUID REFERENCES pa_work_queues(queue_id),
+    target_role          TEXT,                        -- reviewer role to assign to (optional)
+    assignment_strategy  TEXT NOT NULL DEFAULT 'least_loaded',  -- 'least_loaded' | 'specialty_match' | 'round_robin'
+    priority             INT NOT NULL DEFAULT 100,    -- lower = evaluated first
+    is_active            BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by           TEXT,
+    created_at           TIMESTAMPTZ DEFAULT now(),
+    updated_at           TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_routing_active ON pa_routing_rules(priority) WHERE is_active = TRUE;
+
+DROP TRIGGER IF EXISTS trg_routing_updated_at ON pa_routing_rules;
+CREATE TRIGGER trg_routing_updated_at
+    BEFORE UPDATE ON pa_routing_rules
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_pa();
+
+-- Queue + region assignment on the core queue (idempotent so existing tables upgrade).
+ALTER TABLE pa_review_queue ADD COLUMN IF NOT EXISTS queue_id UUID REFERENCES pa_work_queues(queue_id);
+ALTER TABLE pa_review_queue ADD COLUMN IF NOT EXISTS region TEXT;                    -- routing dimension
+ALTER TABLE pa_review_queue ADD COLUMN IF NOT EXISTS priority_score INT DEFAULT 0;   -- computed prioritization
+CREATE INDEX IF NOT EXISTS idx_pa_queue_id ON pa_review_queue(queue_id) WHERE queue_id IS NOT NULL;
+
+-- Supervisor escalations (RFI: workload escalations + supervisor intervention).
+CREATE TABLE IF NOT EXISTS pa_escalations (
+    escalation_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    auth_request_id      TEXT NOT NULL REFERENCES pa_review_queue(auth_request_id),
+    reason               TEXT NOT NULL,               -- 'sla_risk' | 'stalled' | 'complexity' | 'workload'
+    detail               TEXT,
+    escalated_by         TEXT,
+    escalated_to_id      UUID REFERENCES pa_reviewers(reviewer_id),
+    status               escalation_status NOT NULL DEFAULT 'open',
+    resolution           TEXT,
+    created_at           TIMESTAMPTZ DEFAULT now(),
+    resolved_at          TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_escalations_status  ON pa_escalations(status);
+CREATE INDEX IF NOT EXISTS idx_escalations_request ON pa_escalations(auth_request_id);
+
+-- Queue monitor: per-queue backlog, aging buckets, SLA breach (RFI: queue monitoring,
+-- aging + time-sensitive tracking, backlog reporting).
+CREATE OR REPLACE VIEW v_work_queue_status AS
+SELECT
+    wq.queue_id,
+    wq.name,
+    wq.queue_type,
+    wq.owner_team,
+    wq.sla_hours,
+    COUNT(q.auth_request_id) FILTER (WHERE q.status IN
+        ('Pending Review','In Review','Additional Info Requested','Peer Review Requested')) AS open_cases,
+    COUNT(q.auth_request_id) FILTER (WHERE q.status = 'Pending Review') AS unassigned_cases,
+    COUNT(q.auth_request_id) FILTER (WHERE q.urgency = 'expedited' AND q.status IN
+        ('Pending Review','In Review','Additional Info Requested','Peer Review Requested')) AS expedited_open,
+    -- Aging buckets by time open (only open cases)
+    COUNT(q.auth_request_id) FILTER (WHERE q.status IN
+        ('Pending Review','In Review','Additional Info Requested','Peer Review Requested')
+        AND now() - q.request_date < INTERVAL '24 hours') AS age_0_24h,
+    COUNT(q.auth_request_id) FILTER (WHERE q.status IN
+        ('Pending Review','In Review','Additional Info Requested','Peer Review Requested')
+        AND now() - q.request_date >= INTERVAL '24 hours'
+        AND now() - q.request_date < INTERVAL '72 hours') AS age_24_72h,
+    COUNT(q.auth_request_id) FILTER (WHERE q.status IN
+        ('Pending Review','In Review','Additional Info Requested','Peer Review Requested')
+        AND now() - q.request_date >= INTERVAL '72 hours') AS age_72h_plus,
+    -- SLA breach = open past the CMS deadline
+    COUNT(q.auth_request_id) FILTER (WHERE q.status IN
+        ('Pending Review','In Review','Additional Info Requested','Peer Review Requested')
+        AND q.cms_deadline < now()) AS sla_breached,
+    ROUND(AVG(EXTRACT(EPOCH FROM (now() - q.request_date)) / 3600.0) FILTER (WHERE q.status IN
+        ('Pending Review','In Review','Additional Info Requested','Peer Review Requested')), 1) AS avg_age_hours
+FROM pa_work_queues wq
+LEFT JOIN pa_review_queue q ON q.queue_id = wq.queue_id
+WHERE wq.is_active = TRUE
+GROUP BY wq.queue_id, wq.name, wq.queue_type, wq.owner_team, wq.sla_hours
+ORDER BY sla_breached DESC, open_cases DESC;
+
+-- Workload balance: reviewer utilization vs capacity (RFI: workload balancing + capacity).
+CREATE OR REPLACE VIEW v_workload_balance AS
+SELECT
+    c.reviewer_id,
+    c.display_name,
+    c.role,
+    c.specialty,
+    c.max_caseload,
+    c.active_cases,
+    c.expedited_cases,
+    c.available_capacity,
+    ROUND(c.active_cases * 100.0 / NULLIF(c.max_caseload, 0), 1) AS utilization_pct,
+    (c.active_cases > c.max_caseload) AS is_overloaded
+FROM v_reviewer_caseload c;
+
+-- Stalled / orphaned / at-risk work (RFI: AI-assisted detection of stalled, orphaned,
+-- or unassigned work). A case is flagged when it is open AND (past its SLA deadline,
+-- OR unassigned beyond a grace window, OR has had no action recently).
+CREATE OR REPLACE VIEW v_stalled_cases AS
+WITH last_action AS (
+    SELECT auth_request_id, MAX(created_at) AS last_action_at
+    FROM pa_review_actions GROUP BY auth_request_id
+)
+SELECT
+    q.auth_request_id,
+    q.member_name,
+    q.service_type,
+    q.urgency::text,
+    q.status::text,
+    wq.name AS queue_name,
+    r.display_name AS reviewer_name,
+    q.request_date,
+    q.cms_deadline,
+    la.last_action_at,
+    ROUND(EXTRACT(EPOCH FROM (now() - q.request_date)) / 3600.0, 1) AS age_hours,
+    ROUND(EXTRACT(EPOCH FROM (now() - COALESCE(la.last_action_at, q.request_date))) / 3600.0, 1) AS hours_since_action,
+    CASE
+        WHEN q.cms_deadline < now() THEN 'sla_breached'
+        WHEN q.assigned_reviewer_id IS NULL AND now() - q.request_date > INTERVAL '24 hours' THEN 'orphaned'
+        WHEN now() - COALESCE(la.last_action_at, q.request_date) > INTERVAL '48 hours' THEN 'stalled'
+        ELSE 'at_risk'
+    END AS flag_reason
+FROM pa_review_queue q
+LEFT JOIN pa_work_queues wq ON q.queue_id = wq.queue_id
+LEFT JOIN pa_reviewers r ON q.assigned_reviewer_id = r.reviewer_id
+LEFT JOIN last_action la ON q.auth_request_id = la.auth_request_id
+WHERE q.status IN ('Pending Review','In Review','Additional Info Requested','Peer Review Requested')
+  AND (
+        q.cms_deadline < now()
+        OR (q.assigned_reviewer_id IS NULL AND now() - q.request_date > INTERVAL '24 hours')
+        OR now() - COALESCE(la.last_action_at, q.request_date) > INTERVAL '48 hours'
+      )
+ORDER BY q.cms_deadline ASC NULLS LAST;
+
+-- ===========================================================================
+-- INBOUND CORRESPONDENCE  (RFI: Correspondence Management — document capture,
+-- OCR/indexing, automated classification + attachment to the case record,
+-- AI-assisted extraction). Outbound notices live in pa_correspondence; this is
+-- the INBOUND side: faxed/mailed/emailed correspondence digitized, classified,
+-- and linked to a case.
+-- ===========================================================================
+
+CREATE TABLE IF NOT EXISTS pa_inbound_correspondence (
+    inbound_id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    auth_request_id      TEXT REFERENCES pa_review_queue(auth_request_id),  -- linked case (NULL until indexed)
+    source_channel       TEXT NOT NULL,               -- 'fax' | 'mail' | 'secure_email' | 'portal'
+    sender               TEXT,
+    received_at          TIMESTAMPTZ DEFAULT now(),
+    raw_text             TEXT,                          -- OCR / parsed text
+    classified_type      TEXT,                          -- AI classification: 'clinical_records' | 'appeal' | 'p2p_request' | 'additional_info' | 'other'
+    classification_confidence NUMERIC(4,3),
+    extracted_summary    TEXT,                          -- AI-extracted summary
+    indexed              BOOLEAN DEFAULT FALSE,         -- attached to a case record
+    indexed_at           TIMESTAMPTZ,
+    created_at           TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_inbound_request ON pa_inbound_correspondence(auth_request_id);
+CREATE INDEX IF NOT EXISTS idx_inbound_type    ON pa_inbound_correspondence(classified_type);
+
+-- Language + delivery-validation columns on outbound notices (RFI: multilingual
+-- correspondence; beneficiary/address validation prior to release).
+ALTER TABLE pa_correspondence ADD COLUMN IF NOT EXISTS validation_status TEXT;   -- 'passed' | 'warning' | 'failed'
+ALTER TABLE pa_correspondence ADD COLUMN IF NOT EXISTS validation_notes TEXT;
+
+-- ===========================================================================
 -- LONGITUDINAL CASE TIMELINE  (RFI: one longitudinal record across workflows)
 -- Unions review actions, appeal actions, and correspondence into one stream.
 -- ===========================================================================

@@ -333,6 +333,7 @@ class GenerateNoticeIn(BaseModel):
     recipient: Optional[str] = None
     recipient_role: Optional[str] = None
     delivery_channel: str = "portal"
+    language: str = "en"          # RFI: multilingual correspondence generation
 
 
 class CorrespondenceOut(BaseModel):
@@ -341,6 +342,7 @@ class CorrespondenceOut(BaseModel):
     notice_type: str
     recipient: Optional[str] = None
     recipient_role: Optional[str] = None
+    language: Optional[str] = None
     subject: Optional[str] = None
     body_markdown: Optional[str] = None
     body_redacted: Optional[bool] = None
@@ -351,9 +353,39 @@ class CorrespondenceOut(BaseModel):
     pdf_path: Optional[str] = None
     delivery_channel: Optional[str] = None
     delivery_status: Optional[str] = None
+    validation_status: Optional[str] = None
+    validation_notes: Optional[str] = None
     generated_by: Optional[str] = None
     generated_at: Optional[datetime] = None
     released_at: Optional[datetime] = None
+
+
+# ---------------------------------------------------------------------------
+# Inbound Correspondence (document capture + AI classification/indexing)
+# ---------------------------------------------------------------------------
+
+class InboundIngestIn(BaseModel):
+    source_channel: str = "fax"          # fax | mail | secure_email | portal
+    sender: Optional[str] = None
+    raw_text: str
+    auth_request_id: Optional[str] = None   # optional pre-link
+
+
+class InboundIndexIn(BaseModel):
+    auth_request_id: str
+
+
+class InboundCorrespondenceOut(BaseModel):
+    inbound_id: str
+    auth_request_id: Optional[str] = None
+    source_channel: str
+    sender: Optional[str] = None
+    received_at: Optional[datetime] = None
+    classified_type: Optional[str] = None
+    classification_confidence: Optional[float] = None
+    extracted_summary: Optional[str] = None
+    indexed: Optional[bool] = None
+    indexed_at: Optional[datetime] = None
 
 
 # ---------------------------------------------------------------------------
@@ -546,3 +578,127 @@ class QAReviewerScorecard(BaseModel):
     failed: int
     critical_errors: int
     pass_rate_pct: Optional[float] = None
+
+
+# ---------------------------------------------------------------------------
+# Workflow Engine & Management
+# ---------------------------------------------------------------------------
+
+class WorkQueueOut(BaseModel):
+    queue_id: str
+    name: str
+    queue_type: Optional[str] = None
+    owner_team: Optional[str] = None
+    sla_hours: int = 72
+    open_cases: int = 0
+    unassigned_cases: int = 0
+    expedited_open: int = 0
+    age_0_24h: int = 0
+    age_24_72h: int = 0
+    age_72h_plus: int = 0
+    sla_breached: int = 0
+    avg_age_hours: Optional[float] = None
+
+
+class WorkloadOut(BaseModel):
+    reviewer_id: str
+    display_name: str
+    role: str
+    specialty: Optional[str] = None
+    max_caseload: int
+    active_cases: int
+    expedited_cases: int
+    available_capacity: int
+    utilization_pct: Optional[float] = None
+    is_overloaded: Optional[bool] = None
+
+
+class RoutingRuleIn(BaseModel):
+    name: str
+    description: Optional[str] = None
+    line_of_business: Optional[str] = None
+    service_type: Optional[str] = None
+    conditions_json: dict = {}
+    target_queue_id: Optional[str] = None
+    target_role: Optional[str] = None
+    assignment_strategy: str = "least_loaded"
+    priority: int = 100
+
+
+class RoutingRuleOut(BaseModel):
+    routing_rule_id: str
+    name: str
+    description: Optional[str] = None
+    line_of_business: Optional[str] = None
+    service_type: Optional[str] = None
+    conditions_json: dict = {}
+    target_queue_id: Optional[str] = None
+    target_queue_name: Optional[str] = None
+    target_role: Optional[str] = None
+    assignment_strategy: str = "least_loaded"
+    priority: int = 100
+    is_active: bool = True
+    created_by: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
+class ReassignIn(BaseModel):
+    queue_id: Optional[str] = None
+    reviewer_id: Optional[str] = None
+    note: Optional[str] = None
+
+
+class EscalationIn(BaseModel):
+    auth_request_id: str
+    reason: str = "sla_risk"
+    detail: Optional[str] = None
+    escalated_to_id: Optional[str] = None
+
+
+class EscalationOut(BaseModel):
+    escalation_id: str
+    auth_request_id: str
+    reason: str
+    detail: Optional[str] = None
+    escalated_by: Optional[str] = None
+    escalated_to_name: Optional[str] = None
+    status: str
+    resolution: Optional[str] = None
+    created_at: Optional[datetime] = None
+    resolved_at: Optional[datetime] = None
+
+
+class StalledCaseOut(BaseModel):
+    auth_request_id: str
+    member_name: Optional[str] = None
+    service_type: Optional[str] = None
+    urgency: Optional[str] = None
+    status: Optional[str] = None
+    queue_name: Optional[str] = None
+    reviewer_name: Optional[str] = None
+    request_date: Optional[datetime] = None
+    cms_deadline: Optional[datetime] = None
+    age_hours: Optional[float] = None
+    hours_since_action: Optional[float] = None
+    flag_reason: str
+    recommended_action: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# AI Quality & Accuracy (RFI: AI & Advanced Intelligence — accuracy rate,
+# validation methodology, evaluation)
+# ---------------------------------------------------------------------------
+
+class AIQualityTier(BaseModel):
+    tier: str
+    total: int
+    accuracy_pct: Optional[float] = None
+    appeal_overturn_rate_pct: Optional[float] = None
+
+
+class AIQualityOut(BaseModel):
+    overall_accuracy_pct: Optional[float] = None
+    overall_overturn_rate_pct: Optional[float] = None
+    evaluated_count: int = 0
+    scorers: list[str] = []
+    by_tier: list[AIQualityTier] = []

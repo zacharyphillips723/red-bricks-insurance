@@ -12,13 +12,14 @@ import { DocumentIntake } from "@/pages/DocumentIntake";
 import { Observability } from "@/pages/Observability";
 import { Appeals } from "@/pages/Appeals";
 import { RulesStudio } from "@/pages/RulesStudio";
+import { WorkManagement } from "@/pages/WorkManagement";
 import { ProviderPortal } from "@/pages/ProviderPortal";
 import { QualityAssurance } from "@/pages/QualityAssurance";
 import { useHashRouter } from "@/lib/useHashRouter";
 import { api } from "@/lib/api";
 
 export default function App() {
-  const [page, setPage] = useHashRouter("dashboard");
+  const [page, setPage] = useHashRouter<string>("dashboard");
   const [selectedReqId, setSelectedReqId] = useState<string | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
 
@@ -61,6 +62,8 @@ export default function App() {
         return <CaseloadView />;
       case "appeals":
         return <Appeals />;
+      case "workflow":
+        return <WorkManagement />;
       case "rules":
         return <RulesStudio />;
       case "portal":
