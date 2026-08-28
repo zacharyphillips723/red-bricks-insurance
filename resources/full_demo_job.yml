@@ -13,6 +13,11 @@ resources:
               catalog: ${var.catalog}
               lakebase_project_id: ${var.lakebase_project_id}
           environment_key: lakebase_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
         # Step 1a: Run Synthea patient generation (serverless — requires Java 17+)
         # Serverless environment v5+ ships Java 17. The notebook auto-detects and
@@ -229,6 +234,11 @@ resources:
               catalog: ${var.catalog}
               lakebase_project_id: ${var.lakebase_project_id}
           environment_key: feature_store_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
 
         # Step 3d: Register UC tool functions in ai_tools schema
@@ -263,6 +273,11 @@ resources:
               catalog: ${var.catalog}
 
           environment_key: agent_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
         # Step 6: Register Care Intelligence Agent v2 (depends on vector search + gold analytics + benefits)
         - task_key: deploy_agent_v2
@@ -276,6 +291,11 @@ resources:
               catalog: ${var.catalog}
 
           environment_key: agent_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
         # Step 6b: Register Group Sales Coach Agent (depends on gold analytics)
         - task_key: deploy_group_sales_agent
@@ -287,6 +307,11 @@ resources:
               catalog: ${var.catalog}
 
           environment_key: agent_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
         # Step 6c: Train FWA fraud scoring model with XGBoost
         - task_key: train_fwa_model
@@ -298,6 +323,11 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
           environment_key: ml_training_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
         # Step 6c-ii: Train 30-day inpatient readmission risk model with XGBoost.
         # Reads the ADT gold_readmission_features index-stay table and joins member
@@ -312,6 +342,11 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
           environment_key: ml_training_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
         # Step 6c-iii: Stand up the readmission-scorer serving endpoint and WAIT until
         # READY. Endpoint provisioning takes ~10-20 min, so this runs as its own task
@@ -330,6 +365,11 @@ resources:
               deploy_endpoint: "true"
               wait_minutes: "25"
           environment_key: serving_deploy_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
         # Step 6c-iv: Seed the CARC reference + provider remediation playbook
         # (static reference tables in the claims schema — read by the Claim Scrubber
@@ -356,6 +396,11 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
           environment_key: ml_training_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
         # Step 6c-vi: Stand up the denial-risk-scorer serving endpoint and WAIT until
         # READY (mirrors deploy_readmission_endpoint — provisioning takes ~10-20 min).
@@ -368,6 +413,11 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
           environment_key: serving_deploy_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
         # Step 6c-vii: Monthly denial forecast (ai_forecast → Prophet fallback)
         - task_key: build_denial_forecast
@@ -398,6 +448,11 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
           environment_key: ml_training_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
         # Step 6c-x: Champion/challenger experiment + gated promotion
         - task_key: experiment_denial_model
@@ -409,6 +464,11 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
           environment_key: ml_training_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
         # Step 6d: Deploy FWA Investigation Agent
         - task_key: deploy_fwa_agent
@@ -423,6 +483,11 @@ resources:
               catalog: ${var.catalog}
 
           environment_key: agent_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
         # Step 6d-i: Medical policy Vector Search index for FWA agent RAG
         # Reads PDFs directly from the UC volume (written by data_generation)
@@ -460,6 +525,11 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
           environment_key: agent_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
         # Step 6e: Train Prior Auth ML model
         - task_key: train_pa_model
@@ -470,6 +540,11 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
           environment_key: ml_training_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
         # Step 6f: Deploy Prior Auth Agent
         - task_key: deploy_pa_agent
@@ -481,6 +556,11 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
           environment_key: agent_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
         # Step 6g: Parse medical policy documents for PA agent RAG
         - task_key: parse_medical_policies
@@ -491,6 +571,11 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
           environment_key: agent_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
         # Step 6h: PA model governance (monitoring, drift detection)
         - task_key: pa_model_governance
@@ -501,6 +586,11 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
           environment_key: ml_training_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
         # Step 6d-iii: Evaluate FWA agent across multiple models
         - task_key: evaluate_fwa_agent
@@ -512,6 +602,11 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
           environment_key: agent_eval_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
         # Step 6d-iv: Materialize MLflow traces to UC for SQL queryability
         - task_key: materialize_traces
@@ -522,6 +617,11 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
           environment_key: agent_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
         # Step 7: Evaluate v1 vs v2 agents (depends on both being registered)
         - task_key: evaluate_agents
@@ -534,6 +634,11 @@ resources:
               catalog: ${var.catalog}
 
           environment_key: agent_eval_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
         # Step 7b: Care Agent Evaluation Suite (MLflow GenAI scorers)
         - task_key: evaluate_care_agent
@@ -545,6 +650,11 @@ resources:
               catalog: ${var.catalog}
 
           environment_key: agent_eval_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
         # Step 7c: Apply UC governance — row filters & column masks on PHI tables
         - task_key: setup_uc_governance
@@ -585,6 +695,11 @@ resources:
               warehouse_id: ${var.warehouse_id}
               lakebase_project_id: ${var.lakebase_project_id}
           environment_key: bootstrap_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
         # Step 9: Deploy app source code and start compute
         - task_key: deploy_app_source
@@ -595,6 +710,11 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
           environment_key: app_deploy_env
+          # Transient serverless library-install failures (PyPI wheel hash
+          # mismatch) are retried after a delay so a fresh artifact is fetched
+          # instead of re-hitting the same corrupted download immediately.
+          max_retries: 2
+          min_retry_interval_millis: 300000
 
       environments:
         - environment_key: agent_env
