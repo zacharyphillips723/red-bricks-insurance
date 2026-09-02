@@ -402,7 +402,7 @@ async def write_back_to_queue(session, facts: dict, result: dict, handle: dict) 
 
     Uses the provided async SQLAlchemy session. Returns the new auth_request_id.
     """
-    from sqlalchemy import text
+    from .database import text
 
     status, tier = _DECISION_TO_STATUS.get(result["decision"], ("Pending Review", "manual"))
     is_determined = status in ("Approved", "Denied")
@@ -434,7 +434,8 @@ async def write_back_to_queue(session, facts: dict, result: dict, handle: dict) 
                 ai_recommendation, ai_confidence, tier1_auto_eligible,
                 clinical_extraction, determination_reason,
                 request_date, determination_date, cms_deadline, cms_compliant
-            ) VALUES (
+            )
+            SELECT
                 :aid, :member_id, :member_name,
                 :npi, :provider_name,
                 :service_type, :proc_code, :proc_desc,
@@ -445,9 +446,10 @@ async def write_back_to_queue(session, facts: dict, result: dict, handle: dict) 
                 :extraction, :det_reason,
                 now(),
                 CASE WHEN :is_determined THEN now() ELSE NULL END,
-                now() + make_interval(hours => :deadline_hours), TRUE
+                timestampadd(HOUR, :deadline_hours, now()), TRUE
+            WHERE NOT EXISTS (
+                SELECT 1 FROM pa_review_queue WHERE auth_request_id = :aid
             )
-            ON CONFLICT (auth_request_id) DO NOTHING
         """),
         {
             "aid": auth_request_id,

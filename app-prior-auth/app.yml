@@ -4,12 +4,8 @@ command:
   - --host=0.0.0.0
   - --port=8000
 env:
-  - name: LAKEBASE_PROJECT_ID
-    value: red-bricks-insurance
-  - name: LAKEBASE_DATABASE_NAME
-    value: pa_reviews
-  - name: LAKEBASE_BRANCH
-    value: production
+  - name: APP_STATE_SCHEMA
+    value: app_state
   - name: SQL_WAREHOUSE_ID
     value: auto
   - name: LLM_ENDPOINT

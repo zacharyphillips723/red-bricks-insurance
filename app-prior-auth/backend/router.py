@@ -9,7 +9,7 @@ from typing import Optional
 from databricks.sdk import WorkspaceClient
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse, Response
-from sqlalchemy import text
+from .database import text
 
 from .database import db
 from .agent import query_pa_agent, stream_pa_agent, get_pa_analytics, get_policy_rules, get_ml_prediction
@@ -92,7 +92,7 @@ async def health_check():
     return {
         "status": "ok",
         "db_initialized": db._initialized,
-        "lakebase_project": os.environ.get("LAKEBASE_PROJECT_ID", "not set"),
+        "app_state_schema": os.environ.get("APP_STATE_SCHEMA", "app_state"),
     }
 
 
@@ -207,7 +207,8 @@ async def list_requests(
             q.request_date,
             q.cms_deadline,
             q.cms_compliant,
-            to_char(now() - q.request_date, 'DD "d" HH24 "h"') AS time_open,
+            CONCAT(FLOOR(timestampdiff(HOUR, q.request_date, current_timestamp()) / 24), 'd ',
+                   MOD(timestampdiff(HOUR, q.request_date, current_timestamp()), 24), 'h') AS time_open,
             EXTRACT(EPOCH FROM (q.cms_deadline - now())) / 3600.0 AS hours_until_deadline
         FROM pa_review_queue q
         LEFT JOIN pa_reviewers r ON q.assigned_reviewer_id = r.reviewer_id
@@ -495,7 +496,7 @@ async def get_compliance_metrics():
         # Weekly compliance trend
         trend_result = await session.execute(text("""
             SELECT
-                to_char(date_trunc('week', determination_date), 'YYYY-MM-DD') AS week,
+                date_format(date_trunc('WEEK', determination_date), 'yyyy-MM-dd') AS week,
                 ROUND(
                     SUM(CASE WHEN cms_compliant THEN 1 ELSE 0 END) * 100.0
                     / NULLIF(COUNT(*), 0), 2
@@ -604,17 +605,18 @@ async def file_appeal(appeal_in: FileAppealIn):
                 detail="Only denied or partially-approved determinations can be appealed",
             )
 
-        result = await session.execute(
+        appeal_id = uuid.uuid4().hex
+        await session.execute(
             text("""
                 INSERT INTO pa_appeals
-                    (auth_request_id, appeal_type, urgency, filed_by, filed_role,
+                    (appeal_id, auth_request_id, appeal_type, urgency, filed_by, filed_role,
                      filing_reason, original_reviewer_id, status)
-                VALUES (:req_id, CAST(:atype AS appeal_type), CAST(:urg AS pa_urgency),
+                VALUES (:appeal_id, :req_id, CAST(:atype AS appeal_type), CAST(:urg AS pa_urgency),
                         :filed_by, :filed_role, :reason,
                         CAST(:orig AS uuid), 'Received'::appeal_status)
-                RETURNING appeal_id::text
             """),
             {
+                "appeal_id": appeal_id,
                 "req_id": appeal_in.auth_request_id,
                 "atype": appeal_in.appeal_type.value,
                 "urg": appeal_in.urgency.value,
@@ -624,7 +626,6 @@ async def file_appeal(appeal_in: FileAppealIn):
                 "orig": src_row["assigned_reviewer_id"],
             },
         )
-        appeal_id = result.mappings().one()["appeal_id"]
 
         await session.execute(
             text("""
@@ -840,25 +841,25 @@ async def request_peer_review(req_id: str, pr_in: RequestPeerReviewIn):
             m = match.mappings().one_or_none()
             peer_id = m["reviewer_id"] if m else None
 
-        result = await session.execute(
+        peer_review_id = uuid.uuid4().hex
+        await session.execute(
             text(f"""
                 INSERT INTO pa_peer_reviews
-                    (auth_request_id, requested_by_id, peer_reviewer_id,
+                    (peer_review_id, auth_request_id, requested_by_id, peer_reviewer_id,
                      requested_specialty, reason, status, p2p_requested,
                      p2p_scheduled_at)
-                VALUES (:req_id, CAST(:rb AS uuid), CAST(:peer AS uuid),
+                VALUES (:prid, :req_id, CAST(:rb AS uuid), CAST(:peer AS uuid),
                         :spec, :reason,
                         CASE WHEN :peer IS NULL THEN 'Requested' ELSE 'Scheduled' END::peer_review_status,
-                        :p2p, CASE WHEN :p2p THEN now() + INTERVAL '1 day' ELSE NULL END)
-                RETURNING peer_review_id::text
+                        :p2p, CASE WHEN :p2p THEN current_timestamp() + INTERVAL 1 DAY ELSE NULL END)
             """),
             {
+                "prid": peer_review_id,
                 "req_id": req_id, "rb": row["assigned_reviewer_id"],
                 "peer": peer_id, "spec": pr_in.requested_specialty,
                 "reason": pr_in.reason, "p2p": pr_in.p2p_requested,
             },
         )
-        peer_review_id = result.mappings().one()["peer_review_id"]
 
         # Flip the case into peer review + audit.
         await session.execute(
@@ -947,7 +948,7 @@ async def _snapshot_rule(session, rule_id: str, change_type: str, changed_by: st
         text("""
             INSERT INTO pa_rule_versions
                 (rule_id, version, change_type, snapshot_json, changed_by, change_reason)
-            SELECT rule_id, version, :ctype, to_jsonb(r), :by, :reason
+            SELECT rule_id, version, :ctype, to_json(struct(r.*)), :by, :reason
             FROM pa_business_rules r
             WHERE rule_id = CAST(:rid AS uuid)
         """),
@@ -971,24 +972,28 @@ async def list_rules(status: Optional[str] = None):
 @api.post("/rules", response_model=BusinessRuleOut, operation_id="createRule")
 async def create_rule(rule_in: BusinessRuleIn):
     async with db.session() as session:
-        result = await session.execute(
+        rule_id_new = uuid.uuid4().hex
+        await session.execute(
             text(f"""
                 INSERT INTO pa_business_rules
-                    (name, description, category, line_of_business, service_type,
+                    (rule_id, name, description, category, line_of_business, service_type,
                      conditions_json, action, action_detail, priority, status, created_by)
-                VALUES (:name, :desc, :category, :lob, :svc,
+                VALUES (:rule_id, :name, :desc, :category, :lob, :svc,
                         CAST(:conditions AS jsonb), CAST(:action AS rule_action),
                         :action_detail, :priority, 'draft'::rule_status, 'business_admin')
-                RETURNING {_RULE_COLS}
             """),
             {
+                "rule_id": rule_id_new,
                 "name": rule_in.name, "desc": rule_in.description, "category": rule_in.category,
                 "lob": rule_in.line_of_business, "svc": rule_in.service_type,
                 "conditions": json.dumps(rule_in.conditions_json), "action": rule_in.action.value,
                 "action_detail": rule_in.action_detail, "priority": rule_in.priority,
             },
         )
-        created = result.mappings().one()
+        created = (await session.execute(
+            text(f"SELECT {_RULE_COLS} FROM pa_business_rules WHERE rule_id = :rid"),
+            {"rid": rule_id_new},
+        )).mappings().one()
         await _snapshot_rule(session, created["rule_id"], "created", "business_admin", rule_in.change_reason)
         await session.commit()
         return BusinessRuleOut(**_coerce_row(created))
@@ -1003,7 +1008,7 @@ async def update_rule(rule_id: str, rule_in: BusinessRuleIn):
         )
         if not exists.first():
             raise HTTPException(status_code=404, detail="Rule not found")
-        result = await session.execute(
+        await session.execute(
             text(f"""
                 UPDATE pa_business_rules
                 SET name = :name, description = :desc, category = :category,
@@ -1012,7 +1017,6 @@ async def update_rule(rule_id: str, rule_in: BusinessRuleIn):
                     action = CAST(:action AS rule_action), action_detail = :action_detail,
                     priority = :priority, version = version + 1
                 WHERE rule_id = CAST(:rid AS uuid)
-                RETURNING {_RULE_COLS}
             """),
             {
                 "rid": rule_id, "name": rule_in.name, "desc": rule_in.description,
@@ -1022,7 +1026,10 @@ async def update_rule(rule_id: str, rule_in: BusinessRuleIn):
                 "priority": rule_in.priority,
             },
         )
-        updated = result.mappings().one()
+        updated = (await session.execute(
+            text(f"SELECT {_RULE_COLS} FROM pa_business_rules WHERE rule_id = :rid"),
+            {"rid": rule_id},
+        )).mappings().one()
         await _snapshot_rule(session, rule_id, "updated", "business_admin", rule_in.change_reason)
         await session.commit()
         return BusinessRuleOut(**_coerce_row(updated))
@@ -1032,16 +1039,18 @@ async def update_rule(rule_id: str, rule_in: BusinessRuleIn):
 async def activate_rule(rule_id: str):
     """Approve + activate a rule for production (RFI: signoff workflow for deployment)."""
     async with db.session() as session:
-        result = await session.execute(
-            text(f"""
+        await session.execute(
+            text("""
                 UPDATE pa_business_rules
                 SET status = 'active'::rule_status, approved_by = 'medical_director', approved_at = now()
                 WHERE rule_id = CAST(:rid AS uuid)
-                RETURNING {_RULE_COLS}
             """),
             {"rid": rule_id},
         )
-        row = result.mappings().one_or_none()
+        row = (await session.execute(
+            text(f"SELECT {_RULE_COLS} FROM pa_business_rules WHERE rule_id = :rid"),
+            {"rid": rule_id},
+        )).mappings().one_or_none()
         if not row:
             raise HTTPException(status_code=404, detail="Rule not found")
         await _snapshot_rule(session, rule_id, "activated", "medical_director", "Approved for production")
@@ -1052,16 +1061,18 @@ async def activate_rule(rule_id: str):
 @api.post("/rules/{rule_id}/retire", response_model=BusinessRuleOut, operation_id="retireRule")
 async def retire_rule(rule_id: str):
     async with db.session() as session:
-        result = await session.execute(
-            text(f"""
+        await session.execute(
+            text("""
                 UPDATE pa_business_rules
                 SET status = 'retired'::rule_status, effective_end_date = CURRENT_DATE
                 WHERE rule_id = CAST(:rid AS uuid)
-                RETURNING {_RULE_COLS}
             """),
             {"rid": rule_id},
         )
-        row = result.mappings().one_or_none()
+        row = (await session.execute(
+            text(f"SELECT {_RULE_COLS} FROM pa_business_rules WHERE rule_id = :rid"),
+            {"rid": rule_id},
+        )).mappings().one_or_none()
         if not row:
             raise HTTPException(status_code=404, detail="Rule not found")
         await _snapshot_rule(session, rule_id, "retired", "business_admin", "Retired")
@@ -1191,25 +1202,26 @@ async def generate_notice(req_id: str, notice_in: GenerateNoticeIn):
 
     # 3. Persist the correspondence row (draft state) + an audit action.
     async with db.session() as session:
-        ins = await session.execute(
+        notice_id_new = uuid.uuid4().hex
+        await session.execute(
             text(f"""
                 INSERT INTO pa_correspondence (
-                    auth_request_id, notice_type, recipient, recipient_role, language,
+                    notice_id, auth_request_id, notice_type, recipient, recipient_role, language,
                     subject, body_markdown, body_redacted, redaction_notes,
                     includes_appeal_rights, criteria_citation, template_version,
                     pdf_path, delivery_channel, delivery_status,
                     validation_status, validation_notes, generated_by
                 ) VALUES (
-                    :aid, CAST(:ntype AS notice_type), :recipient, :recipient_role, :language,
+                    :notice_id, :aid, CAST(:ntype AS notice_type), :recipient, :recipient_role, :language,
                     :subject, :body, :redacted, :redaction_notes,
                     :appeal_rights, :citation, :tpl_version,
                     :pdf_path, CAST(:channel AS delivery_channel),
                     'draft'::delivery_status,
                     :val_status, :val_notes, 'ai_query'
                 )
-                RETURNING {_CORR_COLS}
             """),
             {
+                "notice_id": notice_id_new,
                 "aid": req_id,
                 "ntype": notice["notice_type"],
                 "recipient": notice_in.recipient,
@@ -1228,7 +1240,10 @@ async def generate_notice(req_id: str, notice_in: GenerateNoticeIn):
                 "val_notes": notice.get("validation_notes"),
             },
         )
-        created = ins.mappings().one()
+        created = (await session.execute(
+            text(f"SELECT {_CORR_COLS} FROM pa_correspondence WHERE notice_id = :nid"),
+            {"nid": notice_id_new},
+        )).mappings().one()
         await session.execute(
             text("""
                 INSERT INTO pa_review_actions (auth_request_id, action_type, note, metadata_json)
@@ -1258,17 +1273,20 @@ async def release_notice(notice_id: str):
         if not row["body_redacted"]:
             raise HTTPException(status_code=400, detail="Notice has not passed the PHI-redaction gate")
 
-        result = await session.execute(
-            text(f"""
+        await session.execute(
+            text("""
                 UPDATE pa_correspondence
                 SET delivery_status = 'released'::delivery_status, released_at = now()
                 WHERE notice_id = CAST(:nid AS uuid)
-                RETURNING {_CORR_COLS}
             """),
             {"nid": notice_id},
         )
+        released = (await session.execute(
+            text(f"SELECT {_CORR_COLS} FROM pa_correspondence WHERE notice_id = :nid"),
+            {"nid": notice_id},
+        )).mappings().one()
         await session.commit()
-        return CorrespondenceOut(**dict(result.mappings().one()))
+        return CorrespondenceOut(**dict(released))
 
 
 # ===================================================================
@@ -1476,20 +1494,28 @@ async def generate_qa_sample(body: QASampleIn):
     """Randomly sample a % of determined cases into the QA queue (not already sampled)."""
     pct = max(0.1, min(body.sample_pct, 100.0)) / 100.0
     async with db.session() as session:
-        result = await session.execute(
+        candidates = (await session.execute(
             text("""
-                INSERT INTO pa_qa_reviews (auth_request_id, case_reviewer_id, sample_reason, status)
-                SELECT q.auth_request_id, q.assigned_reviewer_id, :reason, 'Pending Score'::qa_status
+                SELECT q.auth_request_id::text AS auth_request_id,
+                       q.assigned_reviewer_id::text AS case_reviewer_id
                 FROM pa_review_queue q
                 WHERE q.status IN ('Approved','Denied','Partially Approved')
                   AND q.auth_request_id NOT IN (SELECT auth_request_id FROM pa_qa_reviews)
                   AND random() < :pct
-                RETURNING qa_id
             """),
-            {"reason": body.reason, "pct": pct},
-        )
-        n = len(result.fetchall())
+            {"pct": pct},
+        )).mappings().all()
+        for c in candidates:
+            await session.execute(
+                text("""
+                    INSERT INTO pa_qa_reviews (qa_id, auth_request_id, case_reviewer_id, sample_reason, status)
+                    VALUES (:qid, :aid, CAST(:crev AS uuid), :reason, 'Pending Score'::qa_status)
+                """),
+                {"qid": uuid.uuid4().hex, "aid": c["auth_request_id"],
+                 "crev": c["case_reviewer_id"], "reason": body.reason},
+            )
         await session.commit()
+        n = len(candidates)
     return {"sampled": n, "sample_pct": body.sample_pct}
 
 
@@ -1508,7 +1534,7 @@ async def score_qa_review(qa_id: str, body: QAScoreIn):
 
         result = qa_scoring.compute_qa_score(questions, body.awarded)
 
-        upd = await session.execute(
+        await session.execute(
             text(f"""
                 UPDATE pa_qa_reviews
                 SET status = 'Scored'::qa_status,
@@ -1519,7 +1545,6 @@ async def score_qa_review(qa_id: str, body: QAScoreIn):
                     findings = :findings, coaching_notes = :coaching,
                     scored_at = now()
                 WHERE qa_id = CAST(:qid AS uuid)
-                RETURNING qa_id
             """),
             {
                 "qid": qa_id, "qa_rev": body.qa_reviewer_id,
@@ -1530,8 +1555,6 @@ async def score_qa_review(qa_id: str, body: QAScoreIn):
                 "findings": body.findings, "coaching": body.coaching_notes,
             },
         )
-        if not upd.first():
-            raise HTTPException(status_code=404, detail="QA review not found")
         await session.commit()
 
         detail = await session.execute(
@@ -1545,7 +1568,10 @@ async def score_qa_review(qa_id: str, body: QAScoreIn):
             """),
             {"qid": qa_id},
         )
-        return QAReviewOut(**_coerce_row(detail.mappings().one()))
+        row = detail.mappings().one_or_none()
+        if not row:
+            raise HTTPException(status_code=404, detail="QA review not found")
+        return QAReviewOut(**_coerce_row(row))
 
 
 @api.get("/qa/scorecard", response_model=list[QAReviewerScorecard], operation_id="getQAReviewerScorecard")
@@ -1630,16 +1656,17 @@ async def list_routing_rules():
 @api.post("/workflow/routing-rules", response_model=RoutingRuleOut, operation_id="createRoutingRule")
 async def create_routing_rule(rule_in: RoutingRuleIn):
     async with db.session() as session:
-        ins = await session.execute(
+        rid = uuid.uuid4().hex
+        await session.execute(
             text("""
                 INSERT INTO pa_routing_rules
-                    (name, description, line_of_business, service_type, conditions_json,
+                    (routing_rule_id, name, description, line_of_business, service_type, conditions_json,
                      target_queue_id, target_role, assignment_strategy, priority, created_by)
-                VALUES (:name, :desc, :lob, :svc, CAST(:cond AS jsonb),
+                VALUES (:rid, :name, :desc, :lob, :svc, CAST(:cond AS jsonb),
                         CAST(:tq AS uuid), :role, :strategy, :priority, 'workflow_admin')
-                RETURNING routing_rule_id::text
             """),
             {
+                "rid": rid,
                 "name": rule_in.name, "desc": rule_in.description,
                 "lob": rule_in.line_of_business, "svc": rule_in.service_type,
                 "cond": json.dumps(rule_in.conditions_json),
@@ -1647,7 +1674,6 @@ async def create_routing_rule(rule_in: RoutingRuleIn):
                 "strategy": rule_in.assignment_strategy, "priority": rule_in.priority,
             },
         )
-        rid = ins.mappings().one()["routing_rule_id"]
         await session.commit()
         result = await session.execute(
             text(f"""
@@ -1664,16 +1690,13 @@ async def create_routing_rule(rule_in: RoutingRuleIn):
 async def toggle_routing_rule(rule_id: str):
     """Activate / deactivate a routing rule."""
     async with db.session() as session:
-        result = await session.execute(
+        await session.execute(
             text("""
                 UPDATE pa_routing_rules SET is_active = NOT is_active
                 WHERE routing_rule_id = CAST(:rid AS uuid)
-                RETURNING routing_rule_id::text
             """),
             {"rid": rule_id},
         )
-        if not result.first():
-            raise HTTPException(status_code=404, detail="Routing rule not found")
         await session.commit()
         rr = await session.execute(
             text(f"""
@@ -1683,7 +1706,10 @@ async def toggle_routing_rule(rule_id: str):
             """),
             {"rid": rule_id},
         )
-        return RoutingRuleOut(**_coerce_row(rr.mappings().one()))
+        row = rr.mappings().one_or_none()
+        if not row:
+            raise HTTPException(status_code=404, detail="Routing rule not found")
+        return RoutingRuleOut(**_coerce_row(row))
 
 
 @api.get("/requests/{req_id}/route-preview", operation_id="previewRouting")
@@ -1794,17 +1820,16 @@ async def create_escalation(body: EscalationIn):
         )
         if not check.first():
             raise HTTPException(status_code=404, detail="PA request not found")
-        ins = await session.execute(
+        eid = uuid.uuid4().hex
+        await session.execute(
             text("""
                 INSERT INTO pa_escalations
-                    (auth_request_id, reason, detail, escalated_by, escalated_to_id, status)
-                VALUES (:aid, :reason, :detail, 'supervisor', CAST(:to AS uuid), 'open'::escalation_status)
-                RETURNING escalation_id::text
+                    (escalation_id, auth_request_id, reason, detail, escalated_by, escalated_to_id, status)
+                VALUES (:eid, :aid, :reason, :detail, 'supervisor', CAST(:to AS uuid), 'open'::escalation_status)
             """),
-            {"aid": body.auth_request_id, "reason": body.reason,
+            {"eid": eid, "aid": body.auth_request_id, "reason": body.reason,
              "detail": body.detail, "to": body.escalated_to_id},
         )
-        eid = ins.mappings().one()["escalation_id"]
         await session.execute(
             text("""
                 INSERT INTO pa_review_actions (auth_request_id, action_type, note)
@@ -1830,18 +1855,15 @@ async def create_escalation(body: EscalationIn):
 @api.post("/workflow/escalations/{escalation_id}/resolve", response_model=EscalationOut, operation_id="resolveEscalation")
 async def resolve_escalation(escalation_id: str, payload: dict):
     async with db.session() as session:
-        result = await session.execute(
+        await session.execute(
             text("""
                 UPDATE pa_escalations
                 SET status = 'resolved'::escalation_status, resolved_at = now(),
                     resolution = :res
                 WHERE escalation_id = CAST(:eid AS uuid)
-                RETURNING escalation_id::text
             """),
             {"eid": escalation_id, "res": payload.get("resolution") or "Resolved."},
         )
-        if not result.first():
-            raise HTTPException(status_code=404, detail="Escalation not found")
         await session.commit()
         row = await session.execute(
             text("""
@@ -1854,7 +1876,10 @@ async def resolve_escalation(escalation_id: str, payload: dict):
             """),
             {"eid": escalation_id},
         )
-        return EscalationOut(**dict(row.mappings().one()))
+        esc_row = row.mappings().one_or_none()
+        if not esc_row:
+            raise HTTPException(status_code=404, detail="Escalation not found")
+        return EscalationOut(**dict(esc_row))
 
 
 # ===================================================================
@@ -1885,18 +1910,19 @@ async def ingest_inbound_correspondence(body: InboundIngestIn):
     """Digitize + AI-classify a piece of inbound correspondence and index it."""
     classified = await asyncio.to_thread(corr.classify_inbound, body.raw_text)
     async with db.session() as session:
-        ins = await session.execute(
-            text(f"""
+        inbound_id_new = uuid.uuid4().hex
+        await session.execute(
+            text("""
                 INSERT INTO pa_inbound_correspondence
-                    (auth_request_id, source_channel, sender, raw_text,
+                    (inbound_id, auth_request_id, source_channel, sender, raw_text,
                      classified_type, classification_confidence, extracted_summary,
                      indexed, indexed_at)
-                VALUES (:aid, :channel, :sender, :raw,
+                VALUES (:iid, :aid, :channel, :sender, :raw,
                         :ctype, :conf, :summary,
                         (:aid IS NOT NULL), CASE WHEN :aid IS NOT NULL THEN now() END)
-                RETURNING {_INBOUND_COLS}
             """),
             {
+                "iid": inbound_id_new,
                 "aid": body.auth_request_id, "channel": body.source_channel,
                 "sender": body.sender, "raw": body.raw_text,
                 "ctype": classified["classified_type"],
@@ -1904,7 +1930,10 @@ async def ingest_inbound_correspondence(body: InboundIngestIn):
                 "summary": classified["extracted_summary"],
             },
         )
-        row = ins.mappings().one()
+        row = (await session.execute(
+            text(f"SELECT {_INBOUND_COLS} FROM pa_inbound_correspondence WHERE inbound_id = :iid"),
+            {"iid": inbound_id_new},
+        )).mappings().one()
         if body.auth_request_id:
             await session.execute(
                 text("""
@@ -1928,16 +1957,18 @@ async def index_inbound_correspondence(inbound_id: str, body: InboundIndexIn):
         )
         if not check.first():
             raise HTTPException(status_code=404, detail="Target case not found")
-        result = await session.execute(
-            text(f"""
+        await session.execute(
+            text("""
                 UPDATE pa_inbound_correspondence
                 SET auth_request_id = :aid, indexed = TRUE, indexed_at = now()
                 WHERE inbound_id = CAST(:iid AS uuid)
-                RETURNING {_INBOUND_COLS}
             """),
             {"aid": body.auth_request_id, "iid": inbound_id},
         )
-        row = result.mappings().one_or_none()
+        row = (await session.execute(
+            text(f"SELECT {_INBOUND_COLS} FROM pa_inbound_correspondence WHERE inbound_id = :iid"),
+            {"iid": inbound_id},
+        )).mappings().one_or_none()
         if not row:
             raise HTTPException(status_code=404, detail="Inbound correspondence not found")
         await session.execute(
@@ -2329,8 +2360,20 @@ async def adjudicate_document_stream(payload: dict):
 # ===================================================================
 
 def _coerce_row(row) -> dict:
-    """Convert Decimal values to float for Pydantic compatibility."""
-    return {k: float(v) if isinstance(v, Decimal) else v for k, v in dict(row).items()}
+    """Convert Decimal->float and parse JSON-text columns (former Postgres JSONB,
+    now stored as STRING in Delta) back into dict/list for Pydantic compatibility."""
+    out = {}
+    for k, v in dict(row).items():
+        if isinstance(v, Decimal):
+            out[k] = float(v)
+        elif isinstance(v, str) and v and k.endswith("_json"):
+            try:
+                out[k] = json.loads(v)
+            except (ValueError, TypeError):
+                out[k] = v
+        else:
+            out[k] = v
+    return out
 
 
 def _execute_sql_safe(sql: str) -> list[dict]:

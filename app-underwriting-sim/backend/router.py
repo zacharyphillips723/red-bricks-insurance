@@ -82,7 +82,7 @@ async def health():
     return {
         "status": "ok",
         "db_initialized": db._initialized,
-        "lakebase_project": os.environ.get("LAKEBASE_PROJECT_ID", "not set"),
+        "app_state_schema": os.environ.get("APP_STATE_SCHEMA", "app_state"),
     }
 
 

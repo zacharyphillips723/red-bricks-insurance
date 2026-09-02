@@ -17,6 +17,8 @@ from databricks.sdk.service.sql import StatementParameterListItem
 from .env_config import UC_CATALOG, SQL_WAREHOUSE_ID, LLM_ENDPOINT, PA_AGENT_ENDPOINT
 
 _CAT = f"`{UC_CATALOG}`"
+# App-state (former Lakebase) tables now live in the Lakehouse under this schema.
+_APP_STATE = f"{_CAT}.`{os.environ.get('APP_STATE_SCHEMA', 'app_state')}`"
 
 # Allowed schemas the agent can query
 ALLOWED_SCHEMAS = ["prior_auth", "members", "providers", "claims", "clinical", "analytics"]
@@ -326,49 +328,33 @@ def get_ml_prediction(auth_request_id: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def _fetch_pa_request_from_lakebase(auth_request_id: str) -> str | None:
+    """Pre-fetch the PA request from the Lakehouse app-state schema for agent context."""
     try:
-        import psycopg
-
-        project_id = os.environ.get("LAKEBASE_PROJECT_ID", "red-bricks-insurance")
-        branch = os.environ.get("LAKEBASE_BRANCH", "production")
-        database_name = os.environ.get("LAKEBASE_DATABASE_NAME", "pa_reviews")
-        endpoint_path = f"projects/{project_id}/branches/{branch}/endpoints/primary"
-
-        w = WorkspaceClient()
-        ep = w.postgres.get_endpoint(name=endpoint_path)
-        host = ep.status.hosts.host
-        cred = w.postgres.generate_database_credential(endpoint=endpoint_path)
-        username = w.current_user.me().user_name
-        conn = psycopg.connect(
-            f"host={host} dbname={database_name} user={username} "
-            f"password={cred.token} sslmode=require"
-        )
-        cur = conn.cursor()
-        cur.execute("""
+        rows = _execute_sql(
+            f"""
             SELECT q.auth_request_id, q.member_id, q.member_name,
                    q.requesting_provider_npi, q.provider_name,
                    q.service_type, q.procedure_code, q.procedure_description,
                    q.diagnosis_codes, q.policy_id, q.policy_name,
                    q.line_of_business, q.clinical_summary,
-                   q.urgency::text, q.estimated_cost, q.status::text,
-                   q.determination_tier::text, q.ai_recommendation, q.ai_confidence,
+                   q.urgency, q.estimated_cost, q.status,
+                   q.determination_tier, q.ai_recommendation, q.ai_confidence,
                    q.tier1_auto_eligible, q.clinical_extraction,
                    r.display_name AS reviewer_name,
                    q.request_date, q.determination_date, q.cms_deadline
-            FROM pa_review_queue q
-            LEFT JOIN pa_reviewers r ON q.assigned_reviewer_id = r.reviewer_id
-            WHERE q.auth_request_id = %s
-        """, (auth_request_id,))
-        cols = [desc[0] for desc in cur.description]
-        row = cur.fetchone()
-        cur.close()
-        conn.close()
-        if not row:
+            FROM {_APP_STATE}.pa_review_queue q
+            LEFT JOIN {_APP_STATE}.pa_reviewers r
+                   ON q.assigned_reviewer_id = r.reviewer_id
+            WHERE q.auth_request_id = :aid
+            LIMIT 1
+            """,
+            [{"name": "aid", "value": auth_request_id}],
+        )
+        if not rows:
             return None
-        data = dict(zip(cols, row))
-        return json.dumps(data, default=str, indent=2)
+        return json.dumps(rows[0], default=str, indent=2)
     except Exception as e:
-        print(f"[PA Agent] Lakebase fetch error: {e}")
+        print(f"[PA Agent] app-state fetch error: {e}")
         return None
 
 

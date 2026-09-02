@@ -69,9 +69,12 @@ async def lifespan(app: FastAPI):
 
     try:
         db.initialize()
+        # Create the Lakehouse app-state schema + Delta tables/views (idempotent).
+        # Replaces the former Lakebase bootstrap; safe to run on every startup.
+        db.ensure_tables((Path(__file__).parent / "backend" / "lakehouse_schema.sql").read_text())
         db.start_refresh()
     except Exception as e:
-        print(f"ERROR: Lakebase initialization failed: {e}")
+        print(f"ERROR: Lakehouse app-state initialization failed: {e}")
         traceback.print_exc()
     yield
     await db.close()

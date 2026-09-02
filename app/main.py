@@ -73,12 +73,13 @@ from backend.websocket import notifications
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup/shutdown lifecycle — initialize and tear down Lakebase connection."""
+    """Startup/shutdown lifecycle — initialize the Lakehouse (Delta) app-state store."""
     try:
         db.initialize()
+        db.ensure_tables((Path(__file__).parent / "backend" / "lakehouse_schema.sql").read_text())
         db.start_refresh()
     except Exception as e:
-        print(f"ERROR: Lakebase initialization failed: {e}")
+        print(f"ERROR: Lakehouse app-state initialization failed: {e}")
         traceback.print_exc()
     try:
         await cleanup_expired_conversations()

@@ -17,12 +17,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SHARED="$SCRIPT_DIR/lib/shared_backend"
 
-# Apps that use Lakebase (have database.py)
-DB_APPS=("app" "app-fwa" "app-underwriting-sim" "app-prior-auth" "app-provider-scrub")
+# Apps that persist state via the Lakehouse writeback shim (have database.py).
+# NOTE: app-provider-scrub is intentionally excluded from the Lakehouse migration
+# and still uses Lakebase — do NOT sync the shim to it.
+DB_APPS=("app" "app-fwa" "app-underwriting-sim" "app-prior-auth")
 
 echo "Syncing shared backend modules..."
 
-# --- database.py → apps with Lakebase ---
+# --- database.py (Lakehouse Delta writeback shim) → app-state apps ---
 for app in "${DB_APPS[@]}"; do
     target="$SCRIPT_DIR/$app/backend/database.py"
     if [ -d "$SCRIPT_DIR/$app/backend" ]; then

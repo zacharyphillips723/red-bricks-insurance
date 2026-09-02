@@ -50,11 +50,12 @@ async def lifespan(app: FastAPI):
 
     try:
         db.initialize()
+        db.ensure_tables((Path(__file__).parent / "backend" / "lakehouse_schema.sql").read_text())
         db.start_refresh()
-        print("[main] Lakebase connection initialized")
+        print("[main] Lakehouse app-state initialized")
     except Exception as e:
-        print(f"[main] WARNING: Lakebase init failed (simulations will still work, "
-              f"but save/load requires DB): {e}")
+        print(f"[main] WARNING: Lakehouse app-state init failed (simulations will still work, "
+              f"but save/load requires the app-state schema): {e}")
         traceback.print_exc()
     yield
     await db.close()

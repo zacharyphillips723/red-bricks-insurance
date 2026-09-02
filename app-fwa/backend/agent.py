@@ -210,7 +210,7 @@ GEMINI_TOOLS = [
         "function": {
             "name": "query_lakebase_cases",
             "description": (
-                "Query the Lakebase FWA investigation case database for operational data. "
+                "Query the FWA investigation case database (Unity Catalog Delta tables) for operational data. "
                 "Returns investigation details, audit trail, evidence records, and case status. "
                 "Tables: fwa_investigations, investigation_audit_log, investigation_evidence, fraud_investigators. "
                 "Use this to get the current status, timeline, assigned investigator, and prior actions on a case."
@@ -220,7 +220,7 @@ GEMINI_TOOLS = [
                 "properties": {
                     "sql": {
                         "type": "string",
-                        "description": "SQL query against the fwa_cases Lakebase database. Key tables: fwa_investigations, investigation_audit_log, investigation_evidence, fraud_investigators.",
+                        "description": "Databricks SQL SELECT against the case database (unqualified table names resolve automatically). Key tables: fwa_investigations, investigation_audit_log, investigation_evidence, fraud_investigators.",
                     },
                     "purpose": {
                         "type": "string",
@@ -265,6 +265,38 @@ def _execute_sql(sql: str, params: list | None = None) -> list[dict]:
     kwargs = {
         "warehouse_id": SQL_WAREHOUSE_ID,
         "statement": sql,
+        "wait_timeout": "30s",
+    }
+    if params:
+        kwargs["parameters"] = [
+            StatementParameterListItem(name=p["name"], value=p["value"], type=p.get("type", "STRING"))
+            for p in params
+        ]
+    stmt = w.statement_execution.execute_statement(**kwargs)
+    if not stmt.result or not stmt.result.data_array:
+        return []
+    col_names = [c.name for c in stmt.manifest.schema.columns] if stmt.manifest and stmt.manifest.schema else []
+    if not col_names:
+        return []
+    return [dict(zip(col_names, row)) for row in stmt.result.data_array]
+
+
+def _execute_appstate_sql(sql: str, params: list | None = None) -> list[dict]:
+    """Run a read-only query against the Lakehouse app-state Delta schema
+    ({UC_CATALOG}.{APP_STATE_SCHEMA}). Postgres-flavored SQL is translated to
+    Databricks SQL, and unqualified table names (fwa_investigations, etc.)
+    resolve to the app-state schema via the statement's default catalog/schema.
+    Replaces the former direct psycopg connection to Lakebase."""
+    from .database import _translate
+    from .env_config import UC_CATALOG
+
+    schema = os.environ.get("APP_STATE_SCHEMA", "app_state")
+    w = WorkspaceClient()
+    kwargs = {
+        "warehouse_id": SQL_WAREHOUSE_ID,
+        "statement": _translate(sql),
+        "catalog": UC_CATALOG,
+        "schema": schema,
         "wait_timeout": "30s",
     }
     if params:
@@ -441,31 +473,14 @@ def _execute_tool(tool_name: str, tool_args: dict) -> str:
         # Safety: read-only queries only
         first_word = sql.split()[0].upper() if sql.split() else ""
         if first_word not in ("SELECT", "WITH"):
-            return json.dumps({"error": "Only SELECT/WITH queries are allowed against Lakebase."})
-        print(f"[Gemini Agent] Lakebase query ({purpose}): {sql[:100]}")
+            return json.dumps({"error": "Only SELECT/WITH queries are allowed against the case database."})
+        print(f"[Gemini Agent] Case DB query ({purpose}): {sql[:100]}")
         try:
-            import psycopg
-            project_id = os.environ.get("LAKEBASE_PROJECT_ID", "red-bricks-insurance")
-            branch = os.environ.get("LAKEBASE_BRANCH", "production")
-            database_name = os.environ.get("LAKEBASE_DATABASE_NAME", "fwa_cases")
-            endpoint_path = f"projects/{project_id}/branches/{branch}/endpoints/primary"
-            w = WorkspaceClient()
-            ep = w.postgres.get_endpoint(name=endpoint_path)
-            host = ep.status.hosts.host
-            cred = w.postgres.generate_database_credential(endpoint=endpoint_path)
-            username = w.current_user.me().user_name
-            conn = psycopg.connect(
-                f"host={host} dbname={database_name} user={username} password={cred.token} sslmode=require"
-            )
-            cur = conn.cursor()
-            cur.execute(sql)
-            cols = [desc[0] for desc in cur.description]
-            rows = [dict(zip(cols, row)) for row in cur.fetchall()]
-            cur.close()
-            conn.close()
+            rows = _execute_appstate_sql(sql)
+            cols = list(rows[0].keys()) if rows else []
             return json.dumps({"purpose": purpose, "columns": cols, "rows": rows[:50], "row_count": len(rows)}, default=str)
         except Exception as e:
-            return json.dumps({"error": f"Lakebase query failed: {str(e)}"})
+            return json.dumps({"error": f"Case database query failed: {str(e)}"})
 
     return json.dumps({"error": f"Unknown tool: {tool_name}"})
 
@@ -996,30 +1011,10 @@ def stream_fwa_agent(target_id: str, target_type: str, question: str):
 # ---------------------------------------------------------------------------
 
 def _fetch_investigation_from_lakebase(inv_id: str) -> str | None:
-    """Pre-fetch investigation details from Lakebase for agent context."""
+    """Pre-fetch investigation details from the Lakehouse app-state tables for agent context."""
     try:
-        import psycopg
-
-        project_id = os.environ.get("LAKEBASE_PROJECT_ID", "red-bricks-insurance")
-        branch = os.environ.get("LAKEBASE_BRANCH", "production")
-        database_name = os.environ.get("LAKEBASE_DATABASE_NAME", "fwa_cases")
-        endpoint_path = f"projects/{project_id}/branches/{branch}/endpoints/primary"
-
-        w = WorkspaceClient()
-        ep = w.postgres.get_endpoint(name=endpoint_path)
-        host = ep.status.hosts.host
-        cred = w.postgres.generate_database_credential(endpoint=endpoint_path)
-        username = w.current_user.me().user_name
-        conn_string = (
-            f"host={host} "
-            f"dbname={database_name} "
-            f"user={username} "
-            f"password={cred.token} "
-            f"sslmode=require"
-        )
-        conn = psycopg.connect(conn_string)
-        cur = conn.cursor()
-        cur.execute("""
+        rows = _execute_appstate_sql(
+            """
             SELECT i.investigation_id, i.investigation_type::text, i.target_type, i.target_id,
                    i.target_name, i.fraud_types, i.severity::text, i.status::text, i.source::text,
                    inv.display_name AS investigator_name,
@@ -1029,18 +1024,15 @@ def _fetch_investigation_from_lakebase(inv_id: str) -> str | None:
                    i.created_at, i.updated_at, i.closed_at
             FROM fwa_investigations i
             LEFT JOIN fraud_investigators inv ON i.assigned_investigator_id = inv.investigator_id
-            WHERE i.investigation_id = %s
-        """, (inv_id,))
-        cols = [desc[0] for desc in cur.description]
-        row = cur.fetchone()
-        cur.close()
-        conn.close()
-        if not row:
+            WHERE i.investigation_id = :inv_id
+            """,
+            [{"name": "inv_id", "value": inv_id}],
+        )
+        if not rows:
             return None
-        data = dict(zip(cols, row))
-        return json.dumps(data, default=str, indent=2)
+        return json.dumps(rows[0], default=str, indent=2)
     except Exception as e:
-        print(f"[Supervisor] Lakebase fetch error: {e}")
+        print(f"[Supervisor] app-state fetch error: {e}")
         return None
 
 

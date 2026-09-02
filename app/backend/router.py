@@ -5,11 +5,12 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import text
+from .database import text
 
 import asyncio
 import json
 import traceback
+import uuid
 
 from .database import db
 from .genie import ask_genie
@@ -156,9 +157,8 @@ async def health_check():
     diag = {
         "status": "ok",
         "db_initialized": db._initialized,
-        "lakebase_pg_url_set": bool(os.environ.get("LAKEBASE_PG_URL")),
-        "lakebase_project": os.environ.get("LAKEBASE_PROJECT_ID", "not set"),
-        "lakebase_database": os.environ.get("LAKEBASE_DATABASE_NAME", "not set"),
+        "app_state_schema": os.environ.get("APP_STATE_SCHEMA", "app_state"),
+        "uc_catalog": os.environ.get("UC_CATALOG", "not set"),
         "genie_space_id": os.environ.get("GENIE_SPACE_ID", "not set"),
         "sql_warehouse_id": os.environ.get("SQL_WAREHOUSE_ID", "not set"),
     }
@@ -188,9 +188,9 @@ async def get_dashboard_stats():
                 COUNT(*) FILTER (WHERE risk_tier = 'Critical') AS critical_count,
                 COUNT(*) FILTER (WHERE risk_tier = 'High') AS high_count,
                 COUNT(*) FILTER (WHERE status = 'Resolved'
-                    AND resolved_at >= date_trunc('month', now())) AS resolved_this_month,
-                EXTRACT(EPOCH FROM AVG(assigned_at - created_at) FILTER
-                    (WHERE assigned_at IS NOT NULL)) / 3600 AS avg_time_to_assign_hours
+                    AND resolved_at >= date_trunc('month', current_timestamp())) AS resolved_this_month,
+                AVG(timestampdiff(SECOND, created_at, assigned_at)) FILTER
+                    (WHERE assigned_at IS NOT NULL) / 3600 AS avg_time_to_assign_hours
             FROM risk_stratification_alerts
         """))
         row = result.mappings().one()
@@ -253,7 +253,8 @@ async def list_alerts(
             cm.display_name AS care_manager_name,
             cm.role::text AS care_manager_role,
             CASE WHEN a.status = 'Unassigned'
-                THEN to_char(now() - a.created_at, 'DD "d" HH24 "h"')
+                THEN CONCAT(FLOOR(timestampdiff(HOUR, a.created_at, current_timestamp()) / 24), 'd ',
+                            MOD(timestampdiff(HOUR, a.created_at, current_timestamp()), 24), 'h')
                 ELSE NULL
             END AS time_unassigned,
             a.created_at,
@@ -319,7 +320,7 @@ async def _get_alert_impl(alert_id: str):
                     a.risk_tier::text,
                     a.risk_score,
                     a.primary_driver,
-                    COALESCE(a.secondary_drivers, ARRAY[]::text[]) AS secondary_drivers,
+                    a.secondary_drivers,
                     a.alert_source::text,
                     a.assigned_care_manager_id::text,
                     cm.display_name AS care_manager_name,
@@ -333,7 +334,7 @@ async def _get_alert_impl(alert_id: str):
                     a.last_encounter_date,
                     a.last_facility,
                     a.payer,
-                    COALESCE(a.active_medications, ARRAY[]::text[]) AS active_medications,
+                    a.active_medications,
                     a.notes,
                     a.created_at,
                     a.updated_at,
@@ -371,6 +372,10 @@ async def _get_alert_impl(alert_id: str):
         activities = [ActivityLogOut(**dict(r)) for r in log_result.mappings().all()]
 
         alert_data = dict(row)
+        # Array columns are stored as JSON text in Delta — parse back to lists.
+        for _f in ("secondary_drivers", "active_medications"):
+            _v = alert_data.get(_f)
+            alert_data[_f] = json.loads(_v) if isinstance(_v, str) and _v else (_v or [])
         alert_data["activity_log"] = activities
         return AlertDetailOut(**alert_data)
 
@@ -1357,16 +1362,15 @@ async def get_cohort_filter_options():
 async def save_cohort(body: SaveCohortIn, request: Request):
     """Save a cohort definition for later reuse."""
     user = get_current_user(request)
+    cohort_id = uuid.uuid4().hex
     async with db.session() as session:
-        result = await session.execute(
+        await session.execute(
             text("""
-                INSERT INTO saved_cohorts (cohort_name, description, criteria, member_count, created_by)
-                VALUES (:name, :description, CAST(:criteria AS jsonb), :member_count, :created_by)
-                RETURNING cohort_id::text, cohort_name, description,
-                          criteria::text, member_count, created_by,
-                          created_at::text
+                INSERT INTO saved_cohorts (cohort_id, cohort_name, description, criteria, member_count, created_by)
+                VALUES (:cohort_id, :name, :description, :criteria, :member_count, :created_by)
             """),
             {
+                "cohort_id": cohort_id,
                 "name": body.cohort_name,
                 "description": body.description,
                 "criteria": json.dumps(body.criteria),
@@ -1375,6 +1379,15 @@ async def save_cohort(body: SaveCohortIn, request: Request):
             },
         )
         await session.commit()
+        result = await session.execute(
+            text("""
+                SELECT cohort_id::string AS cohort_id, cohort_name, description,
+                       criteria::string AS criteria, member_count, created_by,
+                       created_at::string AS created_at
+                FROM saved_cohorts WHERE cohort_id = :cohort_id
+            """),
+            {"cohort_id": cohort_id},
+        )
         row = result.mappings().one()
         return SavedCohortOut(
             cohort_id=row["cohort_id"],
@@ -1425,12 +1438,16 @@ async def get_saved_cohorts():
 async def delete_saved_cohort(cohort_id: str):
     """Delete a saved cohort by ID."""
     async with db.session() as session:
-        result = await session.execute(
-            text("DELETE FROM saved_cohorts WHERE cohort_id = CAST(:id AS uuid) RETURNING cohort_id"),
+        existing = await session.execute(
+            text("SELECT cohort_id FROM saved_cohorts WHERE cohort_id = :id"),
             {"id": cohort_id},
         )
-        if not result.fetchone():
+        if not existing.fetchone():
             raise HTTPException(status_code=404, detail="Saved cohort not found")
+        await session.execute(
+            text("DELETE FROM saved_cohorts WHERE cohort_id = :id"),
+            {"id": cohort_id},
+        )
         await session.commit()
     return {"status": "deleted", "cohort_id": cohort_id}
 

@@ -1,7 +1,5 @@
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
-sqlalchemy[asyncio]>=2.0.0
-psycopg[binary]>=3.2.0
 databricks-sdk>=0.81.0
 pydantic>=2.0.0
 databricks-langchain>=0.4.0

@@ -9,8 +9,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from .database import text, _Session as AsyncSession
 
 
 # ---------------------------------------------------------------------------
@@ -171,18 +170,17 @@ async def create_comparison(
 ) -> dict:
     """Create a comparison set linking 2-4 simulations."""
     comp_id = str(uuid.uuid4())
-    ids_array = "{" + ",".join(simulation_ids) + "}"
     await session.execute(
         text("""
             INSERT INTO comparison_sets
                 (comparison_id, comparison_name, simulation_ids, created_by, notes)
             VALUES
-                (:cid, :name, CAST(:sids AS uuid[]), :actor, :notes)
+                (:cid, :name, :sids, :actor, :notes)
         """),
         {
             "cid": comp_id,
             "name": comparison_name,
-            "sids": ids_array,
+            "sids": simulation_ids,  # list -> JSON text (STRING column) via the store
             "actor": created_by,
             "notes": notes,
         },
@@ -278,10 +276,23 @@ async def _log_audit(
 # Helpers
 # ---------------------------------------------------------------------------
 
+_JSON_COLS = {"parameters", "results", "baseline_snapshot", "simulation_ids", "details"}
+
+
 def _row_to_dict(row) -> dict:
-    """Convert a SQLAlchemy mapping row to a plain dict with JSON-safe types."""
+    """Convert a result-mapping row to a plain dict with JSON-safe types.
+
+    Former Postgres JSONB / array columns are stored as STRING (JSON text) in
+    Delta and are parsed back into dict/list here.
+    """
     d = dict(row)
     for k, v in d.items():
+        if k in _JSON_COLS and isinstance(v, str) and v:
+            try:
+                d[k] = json.loads(v)
+                continue
+            except (ValueError, TypeError):
+                pass
         if isinstance(v, datetime):
             d[k] = v.isoformat()
         elif isinstance(v, uuid.UUID):

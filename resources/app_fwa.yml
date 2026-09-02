@@ -17,12 +17,8 @@ resources:
             value: local
           - name: FWA_AGENT_ENDPOINT
             value: fwa-supervisor-agent
-          - name: LAKEBASE_PROJECT_ID
-            value: ${var.lakebase_project_id}
-          - name: LAKEBASE_DATABASE_NAME
-            value: fwa_cases
-          - name: LAKEBASE_BRANCH
-            value: production
+          - name: APP_STATE_SCHEMA
+            value: app_state
           - name: GENIE_SPACE_ID
             value: auto
           - name: SQL_WAREHOUSE_ID

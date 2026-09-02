@@ -4,12 +4,13 @@ import asyncio
 import json
 import logging
 import os
+import uuid
 from typing import Optional
 
 from databricks.sdk import WorkspaceClient
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy import text
+from .database import text
 
 from .database import db
 from .env_config import (
@@ -49,6 +50,25 @@ log = logging.getLogger(__name__)
 _CAT = f"`{UC_CATALOG}`"
 
 
+def _parse_json_list(v):
+    """Former Postgres array/JSONB columns now come back as JSON text on the
+    Lakehouse. Parse to a Python list; tolerate NULL and legacy '{a,b}' arrays."""
+    if v is None or v == "":
+        return []
+    if isinstance(v, str):
+        try:
+            return json.loads(v)
+        except (ValueError, TypeError):
+            return [s for s in v.strip("{}").split(",") if s]
+    return v
+
+
+def _with_fraud_types(row: dict) -> dict:
+    if "fraud_types" in row:
+        row["fraud_types"] = _parse_json_list(row["fraud_types"])
+    return row
+
+
 def _uc_query(sql: str) -> list[dict]:
     """Execute a read-only SQL query against Unity Catalog via Statement Execution."""
     w = WorkspaceClient()
@@ -75,7 +95,7 @@ async def health_check():
     return {
         "status": "ok",
         "db_initialized": db._initialized,
-        "lakebase_project": os.environ.get("LAKEBASE_PROJECT_ID", "not set"),
+        "app_state_schema": os.environ.get("APP_STATE_SCHEMA", "app_state"),
     }
 
 
@@ -174,7 +194,8 @@ async def list_investigations(
             inv.role AS investigator_role,
             i.assigned_at,
             i.created_at,
-            to_char(now() - i.created_at, 'DD "d" HH24 "h"') AS time_open
+            CONCAT(datediff(current_timestamp(), i.created_at), 'd ',
+                   MOD(timestampdiff(HOUR, i.created_at, current_timestamp()), 24), 'h') AS time_open
         FROM fwa_investigations i
         LEFT JOIN fraud_investigators inv ON i.assigned_investigator_id = inv.investigator_id
         WHERE 1=1
@@ -204,7 +225,7 @@ async def list_investigations(
 
     async with db.session() as session:
         result = await session.execute(text(query), params)
-        return [InvestigationListOut(**dict(r)) for r in result.mappings().all()]
+        return [InvestigationListOut(**_with_fraud_types(dict(r))) for r in result.mappings().all()]
 
 
 @api.get("/investigations/{inv_id}", response_model=InvestigationDetailOut, operation_id="getInvestigation")
@@ -278,7 +299,7 @@ async def get_investigation(inv_id: str):
         )
         evidence = [EvidenceOut(**dict(r)) for r in evidence_result.mappings().all()]
 
-        inv_data = dict(row)
+        inv_data = _with_fraud_types(dict(row))
         inv_data["audit_log"] = audit_log
         inv_data["evidence"] = evidence
         return InvestigationDetailOut(**inv_data)
@@ -311,11 +332,11 @@ async def assign_investigation(inv_id: str, assign_in: AssignInvestigatorIn):
         await session.execute(
             text("""
                 INSERT INTO investigation_audit_log
-                    (investigation_id, investigator_id, action_type, previous_status, new_status)
-                VALUES (:inv_id, CAST(:inv_id2 AS uuid), 'assignment',
+                    (audit_id, investigation_id, investigator_id, action_type, previous_status, new_status)
+                VALUES (:audit_id, :inv_id, CAST(:inv_id2 AS uuid), 'assignment',
                     CAST(:old AS investigation_status), 'Under Review'::investigation_status)
             """),
-            {"inv_id": inv_id, "inv_id2": assign_in.investigator_id, "old": old_status},
+            {"audit_id": uuid.uuid4().hex, "inv_id": inv_id, "inv_id2": assign_in.investigator_id, "old": old_status},
         )
         await session.commit()
 
@@ -366,11 +387,12 @@ async def update_status(inv_id: str, status_in: UpdateStatusIn):
         await session.execute(
             text("""
                 INSERT INTO investigation_audit_log
-                    (investigation_id, investigator_id, action_type, previous_status, new_status, note)
-                VALUES (:inv_id, CAST(:cm_id AS uuid), 'status_change',
+                    (audit_id, investigation_id, investigator_id, action_type, previous_status, new_status, note)
+                VALUES (:audit_id, :inv_id, CAST(:cm_id AS uuid), 'status_change',
                     CAST(:old AS investigation_status), CAST(:new AS investigation_status), :note)
             """),
             {
+                "audit_id": uuid.uuid4().hex,
                 "inv_id": inv_id, "cm_id": current_investigator_id,
                 "old": row["status"], "new": status_in.status.value, "note": status_in.note,
             },
@@ -395,10 +417,10 @@ async def add_note(inv_id: str, note_in: AddNoteIn):
         await session.execute(
             text("""
                 INSERT INTO investigation_audit_log
-                    (investigation_id, investigator_id, action_type, note)
-                VALUES (:inv_id, CAST(:cm_id AS uuid), 'note_added', :note)
+                    (audit_id, investigation_id, investigator_id, action_type, note)
+                VALUES (:audit_id, :inv_id, CAST(:cm_id AS uuid), 'note_added', :note)
             """),
-            {"inv_id": inv_id, "cm_id": row["assigned_investigator_id"], "note": note_in.note},
+            {"audit_id": uuid.uuid4().hex, "inv_id": inv_id, "cm_id": row["assigned_investigator_id"], "note": note_in.note},
         )
         await session.commit()
 
@@ -427,11 +449,12 @@ async def record_recovery(inv_id: str, recovery_in: RecordRecoveryIn):
         await session.execute(
             text("""
                 INSERT INTO investigation_audit_log
-                    (investigation_id, investigator_id, action_type, note, metadata_json)
-                VALUES (:inv_id, CAST(:cm_id AS uuid), 'recovery_recorded', :note,
+                    (audit_id, investigation_id, investigator_id, action_type, note, metadata_json)
+                VALUES (:audit_id, :inv_id, CAST(:cm_id AS uuid), 'recovery_recorded', :note,
                     CAST(:meta AS jsonb))
             """),
             {
+                "audit_id": uuid.uuid4().hex,
                 "inv_id": inv_id,
                 "cm_id": row["assigned_investigator_id"],
                 "note": recovery_in.note or f"Recovery of ${recovery_in.recovered_amount:,.2f} recorded.",
