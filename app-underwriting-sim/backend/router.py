@@ -38,6 +38,8 @@ from .models import (
     SimulationListOut,
     SimulationUpdateIn,
     AuditLogEntry,
+    ScenarioPackageIn,
+    ScenarioPackageOut,
 )
 from .scenarios import (
     create_comparison,
@@ -52,6 +54,7 @@ from .scenarios import (
 )
 from .pricing_engine import compute_rate_buildup, compute_risk_pool, get_book_of_business_summary, get_factor_tables
 from .simulation_engine import run_simulation
+from .scenario_packager import package_scenarios
 
 api = APIRouter(prefix="/api")
 
@@ -150,6 +153,19 @@ async def simulate(body: SimulateIn, request: Request):
         narrative=result["narrative"],
         warnings=result.get("warnings", []),
     )
+
+
+# ===================================================================
+# Packaged Scenarios (Standard / Competitive / Retention / Custom)
+# ===================================================================
+
+@api.post("/scenarios/package", response_model=ScenarioPackageOut)
+async def scenarios_package(body: ScenarioPackageIn):
+    """Generate Standard/Competitive/Retention/Custom renewal pricing scenarios,
+    each with projected margin, MLR, and modeled retention, plus an explainable
+    recommendation that maximizes expected retained margin."""
+    result = await asyncio.to_thread(package_scenarios, data_cache, body.model_dump())
+    return ScenarioPackageOut(**result)
 
 
 # ===================================================================

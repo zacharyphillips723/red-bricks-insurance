@@ -271,3 +271,50 @@ class BookOfBusinessSummaryOut(BaseModel):
     raf_distribution: list[dict]
     age_distribution: list[dict]
     top_chronic_conditions: list[dict]
+
+
+# ---------------------------------------------------------------------------
+# Packaged Scenarios (Standard / Competitive / Retention / Custom)
+# ---------------------------------------------------------------------------
+
+class ScenarioPackageIn(BaseModel):
+    """Input for generating packaged renewal pricing scenarios."""
+    group_id: Optional[str] = Field(None, description="Group to renew; book averages used if no experience")
+    lob: Optional[str] = Field(None, description="Line of business (book fallback)")
+    target_mlr: float = Field(82.0, description="MLR target driving the Standard scenario")
+    admin_load_pct: float = Field(12.0, description="Expense/admin load as % of premium")
+    market_trend_pct: float = Field(7.0, description="Expected market renewal increase (retention curve center)")
+    min_margin_pct: float = Field(3.0, description="Margin floor for the Retention scenario")
+    competitor_pmpm: Optional[float] = Field(None, description="Competitor's quoted PMPM (drives Competitive)")
+    competitor_within_pct: float = Field(2.0, description="Price within N% of the competitor")
+    custom_rate_change_pct: Optional[float] = Field(None, description="Underwriter-defined rate change")
+
+
+class ScenarioLeg(BaseModel):
+    """One packaged pricing scenario."""
+    name: str
+    label: str
+    rate_change_pct: float
+    projected_premium: float
+    projected_mlr: float
+    margin_pct: float
+    margin_dollars: float
+    retention_probability: float
+    expected_retained_margin: float
+    rationale: str
+
+
+class ScenarioPackageOut(BaseModel):
+    """Packaged scenarios with an explainable recommendation."""
+    group_id: Optional[str] = None
+    lob: Optional[str] = None
+    basis: str
+    current_premium: float
+    current_claims: float
+    current_mlr: float
+    member_count: int
+    target_mlr: float
+    admin_load_pct: float
+    scenarios: list[ScenarioLeg]
+    recommended_scenario: str
+    recommendation_narrative: str
