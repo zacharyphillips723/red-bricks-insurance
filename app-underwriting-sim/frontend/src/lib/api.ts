@@ -171,6 +171,50 @@ export interface FactorTables {
   industry_factors: FactorTable;
   trend_factors: FactorTable;
   experience_mod_ranges: FactorTable;
+  // 'uc_table' when read from the governed UC table, else 'fallback'.
+  source?: string;
+}
+
+// --- Packaged Scenarios Types ---
+
+export interface ScenarioPackageInput {
+  group_id?: string;
+  lob?: string;
+  target_mlr?: number;
+  admin_load_pct?: number;
+  market_trend_pct?: number;
+  min_margin_pct?: number;
+  competitor_pmpm?: number;
+  competitor_within_pct?: number;
+  custom_rate_change_pct?: number;
+}
+
+export interface ScenarioLeg {
+  name: string;
+  label: string;
+  rate_change_pct: number;
+  projected_premium: number;
+  projected_mlr: number;
+  margin_pct: number;
+  margin_dollars: number;
+  retention_probability: number;
+  expected_retained_margin: number;
+  rationale: string;
+}
+
+export interface ScenarioPackage {
+  group_id?: string;
+  lob?: string;
+  basis: string;
+  current_premium: number;
+  current_claims: number;
+  current_mlr: number;
+  member_count: number;
+  target_mlr: number;
+  admin_load_pct: number;
+  scenarios: ScenarioLeg[];
+  recommended_scenario: string;
+  recommendation_narrative: string;
 }
 
 // --- Risk Pool Types ---
@@ -359,6 +403,13 @@ export const api = {
 
   getFactorTables: () =>
     fetchApi<FactorTables>("/pricing/factor-tables"),
+
+  // Packaged Scenarios
+  packageScenarios: (input: ScenarioPackageInput) =>
+    fetchApi<ScenarioPackage>("/scenarios/package", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
 
   // Risk Pool
   getGroupRiskPool: (groupId: string) =>

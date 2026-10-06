@@ -9,18 +9,21 @@ import {
   BarChart3,
   Activity,
   Sparkles,
+  Layers,
+  ShieldCheck,
 } from "lucide-react";
-
-type Page = "dashboard" | "builder" | "comparison" | "history" | "agent" | "rate-buildup" | "risk-pool" | "observability" | "genie";
+import { Page } from "@/lib/personas";
 
 interface SidebarProps {
   currentPage: Page;
   onNavigate: (page: Page) => void;
   savedCount: number;
+  visiblePages: Set<Page>;
 }
 
 const NAV_ITEMS: { page: Page; label: string; icon: React.ElementType; section?: string }[] = [
   { page: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { page: "scenarios", label: "Packaged Scenarios", icon: Layers },
   { page: "builder", label: "Simulation Builder", icon: Calculator },
   { page: "rate-buildup", label: "Rate Build-Up", icon: DollarSign, section: "Actuarial" },
   { page: "risk-pool", label: "Risk Pool Analysis", icon: BarChart3 },
@@ -28,10 +31,11 @@ const NAV_ITEMS: { page: Page; label: string; icon: React.ElementType; section?:
   { page: "history", label: "Simulation History", icon: History },
   { page: "agent", label: "Underwriting Agent", icon: Bot },
   { page: "genie", label: "Genie Search", icon: Sparkles },
+  { page: "governance", label: "Governance", icon: ShieldCheck, section: "Trust" },
   { page: "observability", label: "Observability", icon: Activity },
 ];
 
-export default function Sidebar({ currentPage, onNavigate, savedCount }: SidebarProps) {
+export default function Sidebar({ currentPage, onNavigate, savedCount, visiblePages }: SidebarProps) {
   let lastSection = "";
 
   return (
@@ -51,7 +55,7 @@ export default function Sidebar({ currentPage, onNavigate, savedCount }: Sidebar
 
       {/* Navigation */}
       <nav className="flex-1 p-4 space-y-1">
-        {NAV_ITEMS.map(({ page, label, icon: Icon, section }) => {
+        {NAV_ITEMS.filter(({ page }) => visiblePages.has(page)).map(({ page, label, icon: Icon, section }) => {
           const showSection = section && section !== lastSection;
           if (section) lastSection = section;
 
