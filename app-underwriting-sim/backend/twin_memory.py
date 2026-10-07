@@ -1,12 +1,15 @@
-"""Agentic memory + recall for the Underwriting Digital Twin (Phase 4, optional).
+"""Agentic memory + recall for the Underwriting Digital Twin (Phase 4).
 
-Stores every candidate/committed underwriting decision and a semantic embedding of
-its context, so the twin can recall relevant precedent before an analyst commits a
-policy. The recall interface is deliberately abstracted: this implementation is
-Delta-backed (embeddings stored as JSON, cosine computed in Python at demo scale),
-which is the roadmap's sanctioned fallback for when Lakebase + pgvector isn't
-provisioned. Swapping in a Lakebase/pgvector backend means reimplementing only the
-`record_decision` / `recall_semantic` internals — the preflight loop is unchanged.
+Backed by **Lakebase (Postgres + pgvector)** — the twin's hot memory layer. Stores
+every candidate/committed decision plus a 1024-dim embedding of its context, and
+recalls relevant precedent with pgvector cosine ANN (`embedding <=> query`). Delta
+remains system-of-record for the rest of the app; this module is the only Lakebase
+consumer (via `twin_db`).
+
+If the `vector` extension isn't available on the target Lakebase, `decision_memory`
+and the structured tables still work and recall degrades to cohort + recency
+ordering (no semantic similarity) — the function signatures and return shapes are
+identical either way, so the preflight loop never changes.
 """
 
 import json
@@ -16,11 +19,11 @@ from datetime import datetime
 from typing import Optional
 
 from databricks.sdk import WorkspaceClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from .database import text, _Session as AsyncSession
+from .twin_db import twin_db, text
 
-# Databricks FM API embedding endpoint (1024-dim). Overridable via env in env_config
-# if a different model is standardized; kept local to the memory layer.
+# Databricks FM API embedding endpoint (1024-dim).
 EMBED_ENDPOINT = "databricks-gte-large-en"
 
 
@@ -42,17 +45,13 @@ def embed(embed_text: str) -> list[float]:
         if isinstance(data, dict) and data.get("data"):
             return [float(x) for x in data["data"][0].get("embedding", [])]
     except Exception as e:  # pragma: no cover - depends on endpoint availability
-        print(f"[twin_memory] embedding failed, recall will fall back to recency/cohort: {e}")
+        print(f"[twin_memory] embedding failed, recall falls back to recency/cohort: {e}")
     return []
 
 
-def _cosine(a: list[float], b: list[float]) -> float:
-    if not a or not b or len(a) != len(b):
-        return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
-    return (dot / (na * nb)) if na and nb else 0.0
+def _vec_literal(vector: list[float]) -> str:
+    """pgvector text literal: [0.1,0.2,...]."""
+    return "[" + ",".join(repr(float(x)) for x in vector) + "]"
 
 
 def size_band(group_size: Optional[int]) -> str:
@@ -83,7 +82,7 @@ def build_context_text(decision: dict) -> str:
 # ---------------------------------------------------------------------------
 
 async def record_decision(session: AsyncSession, decision: dict) -> str:
-    """Persist a decision + its embedding. Returns the decision_id."""
+    """Persist a decision + (if pgvector is available) its embedding. Returns decision_id."""
     decision_id = decision.get("decision_id") or str(uuid.uuid4())
     gsize = decision.get("group_size")
     band = decision.get("group_size_band") or size_band(gsize)
@@ -97,7 +96,7 @@ async def record_decision(session: AsyncSession, decision: dict) -> str:
                  analyst_response, status)
             VALUES
                 (:did, :analyst, :arr, :lob, :gid, :gsize,
-                 :band, :industry, :scenario, CAST(:params AS jsonb), CAST(:projected AS jsonb),
+                 :band, :industry, :scenario, (:params)::jsonb, (:projected)::jsonb,
                  :margin, :mlr, :impact, :rationale, :verdict,
                  :response, :status)
         """),
@@ -122,18 +121,26 @@ async def record_decision(session: AsyncSession, decision: dict) -> str:
             "status": decision.get("status") or "candidate",
         },
     )
-
-    embed_text = build_context_text({**decision, "group_size_band": band})
-    vector = embed(embed_text)
-    if vector:
-        await session.execute(
-            text("""
-                INSERT INTO decision_embeddings (decision_id, embedding, embed_text)
-                VALUES (:did, :emb, :etext)
-            """),
-            {"did": decision_id, "emb": json.dumps(vector), "etext": embed_text},
-        )
     await session.commit()
+
+    if await twin_db.pgvector_available():
+        embed_text = build_context_text({**decision, "group_size_band": band})
+        vector = embed(embed_text)
+        if vector:
+            try:
+                await session.execute(
+                    text("""
+                        INSERT INTO decision_embeddings (decision_id, embedding, embed_text)
+                        VALUES (:did, (:emb)::vector, :etext)
+                        ON CONFLICT (decision_id) DO UPDATE
+                            SET embedding = (:emb)::vector, embed_text = :etext
+                    """),
+                    {"did": decision_id, "emb": _vec_literal(vector), "etext": embed_text},
+                )
+                await session.commit()
+            except Exception as e:  # pragma: no cover - vector write best-effort
+                print(f"[twin_memory] embedding write skipped: {e}")
+                await session.rollback()
     return decision_id
 
 
@@ -154,12 +161,9 @@ async def record_outcome(
             VALUES (:fid, :did, :mlr, :margin, :retained, :note)
         """),
         {
-            "fid": feedback_id,
-            "did": decision_id,
-            "mlr": _f(actual_mlr),
-            "margin": _f(actual_margin),
-            "retained": retained,
-            "note": note,
+            "fid": feedback_id, "did": decision_id,
+            "mlr": _f(actual_mlr), "margin": _f(actual_margin),
+            "retained": retained, "note": note,
         },
     )
     await session.commit()
@@ -170,6 +174,29 @@ async def record_outcome(
 # Recall
 # ---------------------------------------------------------------------------
 
+# Latest outcome per decision, joined into recall results.
+_OUTCOME_JOIN = """
+    LEFT JOIN (
+        SELECT DISTINCT ON (decision_id)
+               decision_id, actual_mlr, actual_margin, retained
+        FROM outcome_feedback
+        ORDER BY decision_id, observed_at DESC
+    ) oe ON oe.decision_id = dm.decision_id
+"""
+
+
+def _cohort_where(cohort: dict, params: dict) -> str:
+    conds = ["dm.funding_arrangement = :arr"]
+    params["arr"] = cohort.get("funding_arrangement")
+    if cohort.get("group_size_band"):
+        conds.append("dm.group_size_band = :band")
+        params["band"] = cohort["group_size_band"]
+    if cohort.get("lob"):
+        conds.append("(dm.lob = :lob OR dm.lob IS NULL)")
+        params["lob"] = cohort["lob"]
+    return " AND ".join(conds)
+
+
 async def recall_semantic(
     session: AsyncSession,
     query_text: str,
@@ -177,77 +204,66 @@ async def recall_semantic(
     *,
     k: int = 6,
 ) -> list[dict]:
-    """Top-K similar past decisions in the cohort, outcome-annotated.
+    """Top-K similar past decisions in the cohort via pgvector cosine ANN,
+    outcome-annotated. Falls back to cohort+recency when pgvector is unavailable."""
+    params: dict = {"k": k}
+    where = _cohort_where(cohort, params)
 
-    Falls back to recency ordering when embeddings are unavailable.
-    """
-    conditions = ["dm.funding_arrangement = :arr"]
-    params: dict = {"arr": cohort.get("funding_arrangement")}
-    if cohort.get("group_size_band"):
-        conditions.append("dm.group_size_band = :band")
-        params["band"] = cohort["group_size_band"]
-    if cohort.get("lob"):
-        conditions.append("(dm.lob = :lob OR dm.lob IS NULL)")
-        params["lob"] = cohort["lob"]
-    where = " AND ".join(conditions)
+    use_vector = await twin_db.pgvector_available()
+    q_vec = embed(query_text) if use_vector else []
 
-    rows = await _mappings(
-        session,
-        f"""
-            SELECT dm.*, de.embedding AS _embedding
+    if use_vector and q_vec:
+        params["q"] = _vec_literal(q_vec)
+        sql = f"""
+            SELECT dm.*, oe.actual_mlr, oe.actual_margin, oe.retained,
+                   1 - (de.embedding <=> (:q)::vector) AS similarity
+            FROM decision_embeddings de
+            JOIN decision_memory dm ON dm.decision_id = de.decision_id
+            {_OUTCOME_JOIN}
+            WHERE {where}
+            ORDER BY de.embedding <=> (:q)::vector
+            LIMIT :k
+        """
+    else:
+        sql = f"""
+            SELECT dm.*, oe.actual_mlr, oe.actual_margin, oe.retained,
+                   NULL::double precision AS similarity
             FROM decision_memory dm
-            LEFT JOIN decision_embeddings de ON dm.decision_id = de.decision_id
+            {_OUTCOME_JOIN}
             WHERE {where}
             ORDER BY dm.created_at DESC
-            LIMIT 100
-        """,
-        params,
-    )
-    outcomes = await _outcome_map(session)
-
-    q_vec = embed(query_text)
-    scored = []
-    for r in rows:
-        d = _row_to_dict(r)
-        emb = d.pop("_embedding", None)
-        vec = _parse_vec(emb)
-        d["similarity"] = round(_cosine(q_vec, vec), 4) if (q_vec and vec) else None
-        d["outcome"] = outcomes.get(d["decision_id"])
-        scored.append(d)
-
-    if q_vec and any(s["similarity"] is not None for s in scored):
-        scored.sort(key=lambda s: (s["similarity"] or -1), reverse=True)
-    # else: already recency-ordered from SQL
-    return scored[:k]
+            LIMIT :k
+        """
+    result = await session.execute(text(sql), params)
+    return [_recall_row(r) for r in result.mappings().all()]
 
 
 async def recall_analyst(session: AsyncSession, analyst_id: str, *, limit: int = 5) -> list[dict]:
-    rows = await _mappings(
-        session,
-        """
+    result = await session.execute(
+        text("""
             SELECT * FROM decision_memory
             WHERE analyst_id = :analyst
             ORDER BY created_at DESC
             LIMIT :lim
-        """,
+        """),
         {"analyst": analyst_id, "lim": limit},
     )
-    return [_row_to_dict(r) for r in rows]
+    return [_row_to_dict(r) for r in result.mappings().all()]
 
 
 async def recent_memory(session: AsyncSession, limit: int = 25) -> list[dict]:
-    rows = await _mappings(
-        session,
-        "SELECT * FROM decision_memory ORDER BY created_at DESC LIMIT :lim",
+    result = await session.execute(
+        text(f"""
+            SELECT dm.*, oe.actual_mlr, oe.actual_margin, oe.retained,
+                   NULL::double precision AS similarity
+            FROM decision_memory dm
+            {_OUTCOME_JOIN}
+            ORDER BY dm.created_at DESC
+            LIMIT :lim
+        """),
         {"lim": limit},
     )
-    outcomes = await _outcome_map(session)
-    out = []
-    for r in rows:
-        d = _row_to_dict(r)
-        d["outcome"] = outcomes.get(d["decision_id"])
-        out.append(d)
-    return out
+    return [_recall_row(r) for r in result.mappings().all()]
 
 
 # ---------------------------------------------------------------------------
@@ -255,22 +271,21 @@ async def recent_memory(session: AsyncSession, limit: int = 25) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 DEFAULT_GUARDRAILS = [
-    {"rule_type": "margin_floor", "scope": {}, "threshold": 2.0, "severity": "block",
+    {"rule_type": "margin_floor", "threshold": 2.0, "severity": "block",
      "note": "Underwriting margin must be at least 2%."},
-    {"rule_type": "mlr_ceiling", "scope": {}, "threshold": 92.0, "severity": "block",
+    {"rule_type": "mlr_ceiling", "threshold": 92.0, "severity": "block",
      "note": "Projected MLR may not exceed 92%."},
-    {"rule_type": "mlr_ceiling", "scope": {}, "threshold": 88.0, "severity": "warn",
+    {"rule_type": "mlr_ceiling", "threshold": 88.0, "severity": "warn",
      "note": "Projected MLR above 88% warrants senior review."},
-    {"rule_type": "authority_limit", "scope": {}, "threshold": 5_000_000.0, "severity": "warn",
+    {"rule_type": "authority_limit", "threshold": 5_000_000.0, "severity": "warn",
      "note": "Dollar impact above $5M requires Chief Actuary sign-off."},
 ]
 
 
 async def seed_default_guardrails(session: AsyncSession, approved_by: str = "chief_actuary") -> int:
     """Idempotently seed the default guardrail set if none exist. Returns rows added."""
-    existing = await _mappings(session, "SELECT COUNT(*) AS c FROM org_guardrails", {})
-    count = int((existing[0] if existing else {}).get("c", 0) or 0)
-    if count > 0:
+    result = await session.execute(text("SELECT COUNT(*) FROM org_guardrails"))
+    if int(result.scalar() or 0) > 0:
         return 0
     for g in DEFAULT_GUARDRAILS:
         await _insert_guardrail(session, g, version=1, approved_by=approved_by)
@@ -280,10 +295,10 @@ async def seed_default_guardrails(session: AsyncSession, approved_by: str = "chi
 
 async def list_guardrails(session: AsyncSession, *, active_only: bool = True) -> list[dict]:
     where = "WHERE active = true" if active_only else ""
-    rows = await _mappings(
-        session, f"SELECT * FROM org_guardrails {where} ORDER BY rule_type, version DESC", {}
+    result = await session.execute(
+        text(f"SELECT * FROM org_guardrails {where} ORDER BY rule_type, version DESC")
     )
-    return [_row_to_dict(r) for r in rows]
+    return [_row_to_dict(r) for r in result.mappings().all()]
 
 
 async def create_guardrail(
@@ -295,13 +310,11 @@ async def create_guardrail(
     scope: Optional[dict] = None,
     approved_by: str,
 ) -> dict:
-    # New version = max existing version for this rule_type + 1.
-    rows = await _mappings(
-        session,
-        "SELECT COALESCE(MAX(version), 0) AS v FROM org_guardrails WHERE rule_type = :rt",
+    result = await session.execute(
+        text("SELECT COALESCE(MAX(version), 0) FROM org_guardrails WHERE rule_type = :rt"),
         {"rt": rule_type},
     )
-    version = int((rows[0] if rows else {}).get("v", 0) or 0) + 1
+    version = int(result.scalar() or 0) + 1
     gid = await _insert_guardrail(
         session,
         {"rule_type": rule_type, "scope": scope or {}, "threshold": threshold,
@@ -309,8 +322,11 @@ async def create_guardrail(
         version=version, approved_by=approved_by,
     )
     await session.commit()
-    rows = await _mappings(session, "SELECT * FROM org_guardrails WHERE guardrail_id = :g", {"g": gid})
-    return _row_to_dict(rows[0]) if rows else {"guardrail_id": gid}
+    result = await session.execute(
+        text("SELECT * FROM org_guardrails WHERE guardrail_id = :g"), {"g": gid}
+    )
+    row = result.mappings().first()
+    return _row_to_dict(row) if row else {"guardrail_id": gid}
 
 
 async def _insert_guardrail(session: AsyncSession, g: dict, *, version: int, approved_by: str) -> str:
@@ -322,7 +338,7 @@ async def _insert_guardrail(session: AsyncSession, g: dict, *, version: int, app
         text("""
             INSERT INTO org_guardrails
                 (guardrail_id, version, rule_type, scope, threshold, severity, active, approved_by)
-            VALUES (:gid, :ver, :rt, CAST(:scope AS jsonb), :thr, :sev, true, :by)
+            VALUES (:gid, :ver, :rt, (:scope)::jsonb, :thr, :sev, true, :by)
         """),
         {
             "gid": gid, "ver": version, "rt": g["rule_type"],
@@ -338,10 +354,11 @@ async def _insert_guardrail(session: AsyncSession, g: dict, *, version: int, app
 # ---------------------------------------------------------------------------
 
 async def get_profile(session: AsyncSession, analyst_id: str) -> Optional[dict]:
-    rows = await _mappings(
-        session, "SELECT * FROM analyst_profile WHERE analyst_id = :a", {"a": analyst_id}
+    result = await session.execute(
+        text("SELECT * FROM analyst_profile WHERE analyst_id = :a"), {"a": analyst_id}
     )
-    return _row_to_dict(rows[0]) if rows else None
+    row = result.mappings().first()
+    return _row_to_dict(row) if row else None
 
 
 async def update_analyst_profile(session: AsyncSession, analyst_id: str, decision: dict) -> None:
@@ -350,27 +367,21 @@ async def update_analyst_profile(session: AsyncSession, analyst_id: str, decisio
     margin = _f(decision.get("projected_margin")) or 0.0
     if existing:
         count = int(existing.get("decision_count") or 0) + 1
-        prev_margin = float(existing.get("typical_margin") or margin)
-        typical = round((prev_margin * (count - 1) + margin) / count, 2)
-        appetite = _appetite(typical)
-        await session.execute(
-            text("""
-                UPDATE analyst_profile
-                SET typical_margin = :tm, risk_appetite = :ra, decision_count = :c,
-                    updated_at = current_timestamp()
-                WHERE analyst_id = :a
-            """),
-            {"tm": typical, "ra": appetite, "c": count, "a": analyst_id},
-        )
+        prev = float(existing.get("typical_margin") or margin)
+        typical = round((prev * (count - 1) + margin) / count, 2)
     else:
-        await session.execute(
-            text("""
-                INSERT INTO analyst_profile
-                    (analyst_id, risk_appetite, typical_margin, typical_overrides, decision_count)
-                VALUES (:a, :ra, :tm, CAST(:ov AS jsonb), 1)
-            """),
-            {"a": analyst_id, "ra": _appetite(margin), "tm": margin, "ov": json.dumps({})},
-        )
+        count, typical = 1, margin
+    await session.execute(
+        text("""
+            INSERT INTO analyst_profile
+                (analyst_id, risk_appetite, typical_margin, typical_overrides, decision_count)
+            VALUES (:a, :ra, :tm, '{}'::jsonb, :c)
+            ON CONFLICT (analyst_id) DO UPDATE SET
+                risk_appetite = :ra, typical_margin = :tm,
+                decision_count = :c, updated_at = now()
+        """),
+        {"a": analyst_id, "ra": _appetite(typical), "tm": typical, "c": count},
+    )
     await session.commit()
 
 
@@ -386,43 +397,6 @@ def _appetite(typical_margin: float) -> str:
 # Helpers
 # ---------------------------------------------------------------------------
 
-_JSON_COLS = {"parameters", "projected", "scope", "typical_overrides"}
-
-
-async def _mappings(session: AsyncSession, sql: str, params: dict) -> list:
-    result = await session.execute(text(sql), params)
-    return result.mappings().all()
-
-
-async def _outcome_map(session: AsyncSession) -> dict:
-    rows = await _mappings(
-        session,
-        "SELECT decision_id, actual_mlr, actual_margin, retained, observed_at FROM outcome_feedback "
-        "ORDER BY observed_at ASC",
-        {},
-    )
-    out: dict = {}
-    for r in rows:
-        d = dict(r)
-        out[d["decision_id"]] = {
-            "actual_mlr": d.get("actual_mlr"),
-            "actual_margin": d.get("actual_margin"),
-            "retained": d.get("retained"),
-        }
-    return out
-
-
-def _parse_vec(raw) -> list[float]:
-    if not raw:
-        return []
-    if isinstance(raw, list):
-        return [float(x) for x in raw]
-    try:
-        return [float(x) for x in json.loads(raw)]
-    except (ValueError, TypeError):
-        return []
-
-
 def _f(v) -> Optional[float]:
     if v is None or v == "":
         return None
@@ -432,15 +406,28 @@ def _f(v) -> Optional[float]:
         return None
 
 
+def _recall_row(row) -> dict:
+    """Shape a recall row: base decision fields + nested outcome + similarity."""
+    d = _row_to_dict(row)
+    outcome = None
+    if d.get("actual_mlr") is not None or d.get("retained") is not None or d.get("actual_margin") is not None:
+        outcome = {
+            "actual_mlr": d.get("actual_mlr"),
+            "actual_margin": d.get("actual_margin"),
+            "retained": d.get("retained"),
+        }
+    for k in ("actual_mlr", "actual_margin", "retained"):
+        d.pop(k, None)
+    d["outcome"] = outcome
+    sim = d.get("similarity")
+    d["similarity"] = round(float(sim), 4) if sim is not None else None
+    return d
+
+
 def _row_to_dict(row) -> dict:
+    """RowMapping -> plain JSON-safe dict (psycopg already returns jsonb as dict/list)."""
     d = dict(row)
     for k, v in list(d.items()):
-        if k in _JSON_COLS and isinstance(v, str) and v:
-            try:
-                d[k] = json.loads(v)
-                continue
-            except (ValueError, TypeError):
-                pass
         if isinstance(v, datetime):
             d[k] = v.isoformat()
         elif isinstance(v, uuid.UUID):

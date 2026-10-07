@@ -53,21 +53,37 @@ async def lifespan(app: FastAPI):
         db.ensure_tables((Path(__file__).parent / "backend" / "lakehouse_schema.sql").read_text())
         db.start_refresh()
         print("[main] Lakehouse app-state initialized")
-        # Seed the digital twin's default actuary-owned guardrails (idempotent).
-        try:
-            from backend.twin_memory import seed_default_guardrails
-            async with db.session() as _s:
-                added = await seed_default_guardrails(_s)
-            if added:
-                print(f"[main] Seeded {added} default org guardrails")
-        except Exception as e:
-            print(f"[main] WARNING: guardrail seed skipped: {e}")
     except Exception as e:
         print(f"[main] WARNING: Lakehouse app-state init failed (simulations will still work, "
               f"but save/load requires the app-state schema): {e}")
         traceback.print_exc()
+
+    # Digital Twin memory lives in Lakebase (Postgres + pgvector), separate from the
+    # Delta app-state store (hybrid architecture). Initialize the connection, start
+    # the OAuth token-refresh loop, and seed the default actuary-owned guardrails.
+    # If Lakebase is unavailable the twin features disable gracefully; the rest of
+    # the app (Delta-backed) is unaffected.
+    try:
+        from backend.twin_db import twin_db
+        from backend.twin_memory import seed_default_guardrails
+
+        twin_db.initialize()
+        twin_db.start_refresh()
+        async with twin_db.session() as _s:
+            added = await seed_default_guardrails(_s)
+        print(f"[main] Twin Lakebase memory ready (seeded {added} default guardrails)")
+    except Exception as e:
+        print(f"[main] WARNING: Twin Lakebase init failed — digital twin disabled: {e}")
+        traceback.print_exc()
+
     yield
+
     await db.close()
+    try:
+        from backend.twin_db import twin_db
+        await twin_db.close()
+    except Exception:
+        pass
 
 
 app = FastAPI(

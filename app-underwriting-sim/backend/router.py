@@ -82,6 +82,7 @@ from .intake import extract_submission, parse_intake
 from .negotiation import rerate_quote
 from .ops_analytics import operational_analytics, reconciliation
 from .preflight import preflight_check
+from .twin_db import twin_db
 from .twin_memory import (
     list_guardrails,
     create_guardrail,
@@ -807,28 +808,29 @@ async def ops_reconciliation():
 @api.post("/policy/preflight-check")
 async def policy_preflight_check(body: PreflightIn, request: Request):
     """Advisory pre-implementation check: recall precedent, simulate impact, evaluate
-    guardrails, critique (grounded), return a GREEN/AMBER/RED verdict, write candidate."""
-    if not db._initialized:
-        raise HTTPException(503, "Database not initialized")
+    guardrails, critique (grounded), return a GREEN/AMBER/RED verdict, write candidate.
+    Backed by the twin's Lakebase memory."""
+    if not twin_db.is_healthy:
+        raise HTTPException(503, "Twin memory (Lakebase) not available")
     policy = body.model_dump()
     policy["analyst_id"] = policy.get("analyst_id") or _actor(request)
-    async with db.session() as session:
+    async with twin_db.session() as session:
         return await preflight_check(session, data_cache, policy)
 
 
 @api.get("/twin/guardrails")
 async def twin_guardrails_list(active_only: bool = True):
-    if not db._initialized:
+    if not twin_db.is_healthy:
         return []
-    async with db.session() as session:
+    async with twin_db.session() as session:
         return await list_guardrails(session, active_only=active_only)
 
 
 @api.post("/twin/guardrails")
 async def twin_guardrails_create(body: GuardrailIn, request: Request):
-    if not db._initialized:
-        raise HTTPException(503, "Database not initialized")
-    async with db.session() as session:
+    if not twin_db.is_healthy:
+        raise HTTPException(503, "Twin memory (Lakebase) not available")
+    async with twin_db.session() as session:
         return await create_guardrail(
             session,
             rule_type=body.rule_type,
@@ -841,17 +843,17 @@ async def twin_guardrails_create(body: GuardrailIn, request: Request):
 
 @api.get("/twin/memory")
 async def twin_memory_recent(limit: int = 25):
-    if not db._initialized:
+    if not twin_db.is_healthy:
         return []
-    async with db.session() as session:
+    async with twin_db.session() as session:
         return await recent_memory(session, limit=limit)
 
 
 @api.post("/twin/outcome")
 async def twin_outcome(body: OutcomeIn):
-    if not db._initialized:
-        raise HTTPException(503, "Database not initialized")
-    async with db.session() as session:
+    if not twin_db.is_healthy:
+        raise HTTPException(503, "Twin memory (Lakebase) not available")
+    async with twin_db.session() as session:
         return await record_outcome(
             session,
             decision_id=body.decision_id,
@@ -864,9 +866,9 @@ async def twin_outcome(body: OutcomeIn):
 
 @api.get("/twin/profile/{analyst_id}")
 async def twin_profile(analyst_id: str):
-    if not db._initialized:
+    if not twin_db.is_healthy:
         return None
-    async with db.session() as session:
+    async with twin_db.session() as session:
         return await get_profile(session, analyst_id)
 
 

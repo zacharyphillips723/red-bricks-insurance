@@ -2,6 +2,10 @@ fastapi>=0.100.0
 uvicorn>=0.23.0
 databricks-sdk>=0.81.0
 pydantic>=2.0
+# Lakebase (Postgres + pgvector) connection for the Phase 4 Digital Twin memory
+# (async SQLAlchemy + psycopg). Delta app-state needs no driver.
+sqlalchemy[asyncio]>=2.0
+psycopg[binary]>=3.1
 # mlflow>=3.14 for the UnityCatalog trace_location API (agent + simulation
 # traces streamed into UC OTel tables).
 mlflow>=3.14.0

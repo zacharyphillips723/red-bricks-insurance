@@ -13,6 +13,15 @@ resources:
         env:
           - name: APP_STATE_SCHEMA
             value: app_state
+          # Lakebase (Postgres + pgvector) — Phase 4 Digital Twin hot memory only.
+          # Delta remains system-of-record for all other app state. SP security
+          # label on this database is granted by bootstrap_workspace.py.
+          - name: LAKEBASE_PROJECT_ID
+            value: ${var.lakebase_project_id}
+          - name: LAKEBASE_DATABASE_NAME
+            value: uw_sim
+          - name: LAKEBASE_BRANCH
+            value: production
           - name: GENIE_SPACE_ID
             value: auto
           - name: SQL_WAREHOUSE_ID

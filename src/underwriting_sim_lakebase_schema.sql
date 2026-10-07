@@ -157,3 +157,96 @@ SELECT
     c.created_at
 FROM comparison_sets c
 ORDER BY c.created_at DESC;
+
+-- ============================================================================
+-- Phase 4 — Agentic memory / Underwriting Digital Twin
+--
+-- Lakebase is the twin's HOT MEMORY layer (Delta remains system-of-record for
+-- simulations/approvals/funding/factors). pgvector powers semantic recall of
+-- past decisions. Every pgvector-dependent statement is wrapped in an exception-
+-- catching DO block so that if the `vector` extension is unavailable on this
+-- Lakebase, provisioning still succeeds and the twin degrades to cohort+recency
+-- recall rather than failing.
+-- ============================================================================
+
+-- Enable pgvector (owner privilege; defensive so a missing extension never
+-- aborts the rest of this schema).
+DO $$ BEGIN
+    CREATE EXTENSION IF NOT EXISTS vector;
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'pgvector extension unavailable (semantic recall will fall back to recency/cohort): %', SQLERRM;
+END $$;
+
+-- One row per committed (or candidate) underwriting decision.
+CREATE TABLE IF NOT EXISTS decision_memory (
+    decision_id         TEXT PRIMARY KEY,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    analyst_id          TEXT NOT NULL,
+    funding_arrangement TEXT,
+    lob                 TEXT,
+    group_id            TEXT,
+    group_size          INT,
+    group_size_band     TEXT,                 -- <100 / 100-999 / 1000-4999 / 5000+
+    industry            TEXT,
+    scenario_chosen     TEXT,                 -- standard / competitive / retention / custom
+    parameters          JSONB NOT NULL DEFAULT '{}',
+    projected           JSONB NOT NULL DEFAULT '{}',
+    projected_margin    DOUBLE PRECISION,
+    projected_mlr       DOUBLE PRECISION,
+    dollar_impact       DOUBLE PRECISION,
+    rationale           TEXT,
+    twin_verdict        TEXT,                 -- GREEN / AMBER / RED at decision time
+    analyst_response    TEXT,                 -- accepted / overrode / adjusted
+    status              TEXT NOT NULL DEFAULT 'candidate'  -- candidate / committed / sold / implemented
+);
+CREATE INDEX IF NOT EXISTS idx_dm_analyst ON decision_memory (analyst_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dm_cohort  ON decision_memory (funding_arrangement, lob, group_size_band);
+
+-- Learned per-analyst profile (the "twin" personalization).
+CREATE TABLE IF NOT EXISTS analyst_profile (
+    analyst_id          TEXT PRIMARY KEY,
+    risk_appetite       TEXT,                 -- conservative / balanced / aggressive (learned)
+    typical_margin      DOUBLE PRECISION,
+    typical_overrides   JSONB DEFAULT '{}',
+    decision_count      INT DEFAULT 0,
+    updated_at          TIMESTAMPTZ DEFAULT now()
+);
+
+-- Organizational conscience — actuary-OWNED and VERSIONED (not learned).
+CREATE TABLE IF NOT EXISTS org_guardrails (
+    guardrail_id        TEXT PRIMARY KEY,
+    version             INT NOT NULL,
+    rule_type           TEXT NOT NULL,        -- margin_floor / mlr_ceiling / authority_limit / prohibited
+    scope               JSONB DEFAULT '{}',
+    threshold           DOUBLE PRECISION,
+    severity            TEXT,                 -- block / warn
+    active              BOOLEAN DEFAULT TRUE,
+    approved_by         TEXT,
+    approved_at         TIMESTAMPTZ DEFAULT now()
+);
+
+-- Closes the loop: quoted vs actual at renewal.
+CREATE TABLE IF NOT EXISTS outcome_feedback (
+    feedback_id         TEXT PRIMARY KEY,
+    decision_id         TEXT NOT NULL REFERENCES decision_memory(decision_id) ON DELETE CASCADE,
+    actual_mlr          DOUBLE PRECISION,
+    actual_margin       DOUBLE PRECISION,
+    retained            BOOLEAN,
+    note                TEXT,
+    observed_at         TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_of_decision ON outcome_feedback (decision_id, observed_at);
+
+-- Vectorized context for semantic recall (1:1 with decision_memory). Created
+-- only if pgvector is available; the twin tolerates its absence.
+DO $$ BEGIN
+    EXECUTE 'CREATE TABLE IF NOT EXISTS decision_embeddings (
+        decision_id  TEXT PRIMARY KEY REFERENCES decision_memory(decision_id) ON DELETE CASCADE,
+        embedding    vector(1024) NOT NULL,
+        embed_text   TEXT,
+        created_at   TIMESTAMPTZ DEFAULT now()
+    )';
+    EXECUTE 'CREATE INDEX IF NOT EXISTS idx_de_vec ON decision_embeddings USING hnsw (embedding vector_cosine_ops)';
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'decision_embeddings (pgvector) skipped — semantic recall disabled: %', SQLERRM;
+END $$;
