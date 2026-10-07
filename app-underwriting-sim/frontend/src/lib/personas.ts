@@ -5,13 +5,19 @@
 
 export type Page =
   | "dashboard"
+  | "intake"
   | "builder"
   | "scenarios"
+  | "funding"
+  | "approvals"
+  | "pipeline"
   | "comparison"
   | "history"
   | "agent"
   | "rate-buildup"
   | "risk-pool"
+  | "factors"
+  | "twin"
   | "governance"
   | "observability"
   | "genie";
@@ -36,20 +42,28 @@ export const PERSONAS: Persona[] = [
   {
     id: "cfo",
     label: "CFO / Chief Actuary",
-    blurb: "Portfolio margin, recommendations, and model governance.",
-    pages: ["dashboard", "scenarios", "comparison", "governance", "observability"],
+    blurb: "Portfolio margin, pipeline, approvals, and model governance.",
+    pages: [
+      "dashboard", "scenarios", "pipeline", "comparison",
+      "approvals", "factors", "twin", "governance", "observability",
+    ],
   },
   {
     id: "underwriter",
     label: "Underwriter",
-    blurb: "Quote, package renewal scenarios, and decide.",
+    blurb: "Intake, quote, package scenarios, route funding, and decide.",
     pages: [
       "dashboard",
+      "intake",
       "scenarios",
+      "funding",
+      "pipeline",
       "builder",
       "rate-buildup",
       "risk-pool",
       "comparison",
+      "approvals",
+      "twin",
       "history",
       "agent",
       "genie",
@@ -58,14 +72,14 @@ export const PERSONAS: Persona[] = [
   {
     id: "ae",
     label: "AE / Broker",
-    blurb: "Client-ready scenarios and plain-language answers.",
-    pages: ["dashboard", "scenarios", "agent", "genie"],
+    blurb: "Intake, client-ready scenarios, funding options, and answers.",
+    pages: ["dashboard", "intake", "scenarios", "funding", "agent", "genie"],
   },
   {
     id: "actuary",
     label: "Actuarial Team",
-    blurb: "Rate build-up, risk pools, factors, and model governance.",
-    pages: ["dashboard", "builder", "rate-buildup", "risk-pool", "governance", "observability"],
+    blurb: "Rate build-up, risk pools, factor governance, and model oversight.",
+    pages: ["dashboard", "builder", "rate-buildup", "risk-pool", "factors", "governance", "observability"],
   },
 ];
 

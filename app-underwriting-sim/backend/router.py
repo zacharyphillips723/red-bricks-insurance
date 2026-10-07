@@ -40,6 +40,20 @@ from .models import (
     AuditLogEntry,
     ScenarioPackageIn,
     ScenarioPackageOut,
+    FundingArrangementInfo,
+    FundingQuoteIn,
+    AuthorityTier,
+    ApprovalIn,
+    ApprovalDecisionIn,
+    ApprovalOut,
+    FactorVersionCreateIn,
+    FactorVersionOut,
+    IntakeExtractIn,
+    IntakeParseIn,
+    RerateIn,
+    PreflightIn,
+    GuardrailIn,
+    OutcomeIn,
 )
 from .scenarios import (
     create_comparison,
@@ -55,6 +69,41 @@ from .scenarios import (
 from .pricing_engine import compute_rate_buildup, compute_risk_pool, get_book_of_business_summary, get_factor_tables
 from .simulation_engine import run_simulation
 from .scenario_packager import package_scenarios
+from .funding_arrangements import FUNDING_ARRANGEMENTS, price_funding_arrangement
+from .funding_store import (
+    save_funding_quote,
+    list_funding_quotes,
+    get_funding_quote,
+    update_funding_quote_status,
+    save_quote_revision,
+    list_quote_revisions,
+)
+from .intake import extract_submission, parse_intake
+from .negotiation import rerate_quote
+from .ops_analytics import operational_analytics, reconciliation
+from .preflight import preflight_check
+from .twin_memory import (
+    list_guardrails,
+    create_guardrail,
+    recent_memory,
+    record_outcome,
+    get_profile,
+)
+from .approvals import (
+    AUTHORITY_MATRIX,
+    create_approval,
+    list_approvals,
+    get_approval,
+    decide_approval,
+    get_approval_audit,
+)
+from .factor_governance import (
+    create_factor_version,
+    list_factor_versions,
+    get_factor_version,
+    approve_factor_version,
+    publish_factor_version,
+)
 
 api = APIRouter(prefix="/api")
 
@@ -456,6 +505,369 @@ async def observability_costs():
     except Exception as e:
         print(f"[observability] Cost query error: {e}")
         return {"costs": [], "error": str(e)}
+
+
+# ===================================================================
+# Phase 2 — Funding arrangements
+# ===================================================================
+
+@api.get("/funding/arrangements", response_model=list[FundingArrangementInfo])
+async def funding_arrangements():
+    """List the supported funding arrangements and who bears the risk."""
+    return [FundingArrangementInfo(**a) for a in FUNDING_ARRANGEMENTS]
+
+
+@api.post("/funding/quote")
+async def funding_quote(body: FundingQuoteIn, request: Request):
+    """Price a quote under a funding arrangement; optionally persist it."""
+    try:
+        result = await asyncio.to_thread(
+            price_funding_arrangement, data_cache, body.arrangement, body.parameters
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    quote_id = None
+    if body.save:
+        if not db._initialized:
+            raise HTTPException(503, "Database not initialized — cannot save quote")
+        params = body.parameters or {}
+        group_name = body.group_name or params.get("group_name") or params.get("group_id") or "Unnamed group"
+        async with db.session() as session:
+            saved = await save_funding_quote(
+                session,
+                group_name=group_name,
+                funding_arrangement=body.arrangement,
+                inputs=params,
+                result=result,
+                created_by=_actor(request),
+                lob=params.get("lob"),
+                scope_group_id=params.get("group_id"),
+            )
+            quote_id = saved["quote_id"]
+    return {**result, "quote_id": quote_id}
+
+
+@api.get("/funding/quotes")
+async def funding_quotes(status: Optional[str] = None, limit: int = 50, offset: int = 0):
+    if not db._initialized:
+        return []
+    async with db.session() as session:
+        return await list_funding_quotes(session, status=status, limit=limit, offset=offset)
+
+
+@api.get("/funding/quotes/{quote_id}")
+async def funding_quote_detail(quote_id: str):
+    if not db._initialized:
+        raise HTTPException(503, "Database not initialized")
+    async with db.session() as session:
+        row = await get_funding_quote(session, quote_id)
+        if not row:
+            raise HTTPException(404, "Quote not found")
+        return row
+
+
+@api.patch("/funding/quotes/{quote_id}/status")
+async def funding_quote_status(quote_id: str, status: str):
+    if not db._initialized:
+        raise HTTPException(503, "Database not initialized")
+    async with db.session() as session:
+        try:
+            row = await update_funding_quote_status(session, quote_id, status=status)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        if not row:
+            raise HTTPException(404, "Quote not found")
+        return row
+
+
+# ===================================================================
+# Phase 2 — Approval routing
+# ===================================================================
+
+@api.get("/approvals/authority-matrix", response_model=list[AuthorityTier])
+async def approvals_authority_matrix():
+    """Return the deterministic approval authority matrix (tiers + limits)."""
+    return [AuthorityTier(**t) for t in AUTHORITY_MATRIX]
+
+
+@api.post("/approvals", response_model=ApprovalOut)
+async def approvals_create(body: ApprovalIn, request: Request):
+    if not db._initialized:
+        raise HTTPException(503, "Database not initialized")
+    async with db.session() as session:
+        row = await create_approval(
+            session,
+            subject=body.subject,
+            decision_type=body.decision_type,
+            dollar_impact=body.dollar_impact,
+            rate_change_pct=body.rate_change_pct,
+            requested_by=_actor(request),
+            group_id=body.group_id,
+            lob=body.lob,
+            context=body.context,
+        )
+        return ApprovalOut(**row)
+
+
+@api.get("/approvals", response_model=list[ApprovalOut])
+async def approvals_list(status: Optional[str] = None, limit: int = 50, offset: int = 0):
+    if not db._initialized:
+        return []
+    async with db.session() as session:
+        rows = await list_approvals(session, status=status, limit=limit, offset=offset)
+        return [ApprovalOut(**r) for r in rows]
+
+
+@api.get("/approvals/{approval_id}", response_model=ApprovalOut)
+async def approvals_get(approval_id: str):
+    if not db._initialized:
+        raise HTTPException(503, "Database not initialized")
+    async with db.session() as session:
+        row = await get_approval(session, approval_id)
+        if not row:
+            raise HTTPException(404, "Approval not found")
+        return ApprovalOut(**row)
+
+
+@api.post("/approvals/{approval_id}/decide", response_model=ApprovalOut)
+async def approvals_decide(approval_id: str, body: ApprovalDecisionIn, request: Request):
+    if not db._initialized:
+        raise HTTPException(503, "Database not initialized")
+    async with db.session() as session:
+        try:
+            row = await decide_approval(
+                session, approval_id, decision=body.decision,
+                decided_by=_actor(request), notes=body.notes,
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        if not row:
+            raise HTTPException(404, "Approval not found")
+        return ApprovalOut(**row)
+
+
+@api.get("/approvals/{approval_id}/audit")
+async def approvals_audit(approval_id: str):
+    if not db._initialized:
+        return []
+    async with db.session() as session:
+        return await get_approval_audit(session, approval_id)
+
+
+# ===================================================================
+# Phase 2 — Factor governance
+# ===================================================================
+
+@api.get("/factors/versions", response_model=list[FactorVersionOut])
+async def factor_versions_list(limit: int = 50):
+    if not db._initialized:
+        return []
+    async with db.session() as session:
+        rows = await list_factor_versions(session, limit=limit)
+        return [FactorVersionOut(**r) for r in rows]
+
+
+@api.post("/factors/versions", response_model=FactorVersionOut)
+async def factor_versions_create(body: FactorVersionCreateIn, request: Request):
+    if not db._initialized:
+        raise HTTPException(503, "Database not initialized")
+    factors = [f.model_dump() for f in body.factors] if body.factors is not None else None
+    async with db.session() as session:
+        try:
+            row = await create_factor_version(
+                session, created_by=_actor(request),
+                factors=factors, notes=body.notes, source=body.source,
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return FactorVersionOut(**row)
+
+
+@api.get("/factors/versions/{version_id}", response_model=FactorVersionOut)
+async def factor_versions_get(version_id: str):
+    if not db._initialized:
+        raise HTTPException(503, "Database not initialized")
+    async with db.session() as session:
+        row = await get_factor_version(session, version_id)
+        if not row:
+            raise HTTPException(404, "Factor version not found")
+        return FactorVersionOut(**row)
+
+
+@api.post("/factors/versions/{version_id}/approve", response_model=FactorVersionOut)
+async def factor_versions_approve(version_id: str, request: Request):
+    if not db._initialized:
+        raise HTTPException(503, "Database not initialized")
+    async with db.session() as session:
+        try:
+            row = await approve_factor_version(session, version_id, approved_by=_actor(request))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        if not row:
+            raise HTTPException(404, "Factor version not found")
+        return FactorVersionOut(**row)
+
+
+@api.post("/factors/versions/{version_id}/publish")
+async def factor_versions_publish(version_id: str, request: Request):
+    if not db._initialized:
+        raise HTTPException(503, "Database not initialized")
+    async with db.session() as session:
+        try:
+            return await publish_factor_version(session, version_id, published_by=_actor(request))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+
+# ===================================================================
+# Phase 3 — Intake & document intelligence
+# ===================================================================
+
+@api.post("/intake/extract")
+async def intake_extract(body: IntakeExtractIn):
+    """Extract a structured submission from pasted census/SBC/competitor text."""
+    return await asyncio.to_thread(extract_submission, body.text, body.doc_type)
+
+
+@api.post("/intake/parse")
+async def intake_parse(body: IntakeParseIn):
+    """Parse a free-text submission into structured fields + a completeness gate + memo."""
+    return await asyncio.to_thread(parse_intake, body.text, body.strategy_memo)
+
+
+# ===================================================================
+# Phase 3 — Negotiation / re-rate loop
+# ===================================================================
+
+@api.post("/funding/quotes/{quote_id}/rerate")
+async def funding_quote_rerate(quote_id: str, body: RerateIn, request: Request):
+    """Apply a natural-language change to a saved quote, re-price, and record the revision."""
+    if not db._initialized:
+        raise HTTPException(503, "Database not initialized")
+    async with db.session() as session:
+        quote = await get_funding_quote(session, quote_id)
+        if not quote:
+            raise HTTPException(404, "Quote not found")
+        try:
+            rerate = await asyncio.to_thread(rerate_quote, data_cache, quote, body.instruction)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        await save_quote_revision(
+            session,
+            quote_id=quote_id,
+            instruction=body.instruction,
+            param_changes=rerate["param_changes"],
+            result=rerate["result"],
+            created_by=_actor(request),
+        )
+        revisions = await list_quote_revisions(session, quote_id)
+    return {
+        "quote_id": quote_id,
+        "param_changes": rerate["param_changes"],
+        "result": rerate["result"],
+        "revisions": revisions,
+    }
+
+
+@api.get("/funding/quotes/{quote_id}/revisions")
+async def funding_quote_revisions(quote_id: str):
+    if not db._initialized:
+        return []
+    async with db.session() as session:
+        return await list_quote_revisions(session, quote_id)
+
+
+# ===================================================================
+# Phase 3 — Operational analytics & reconciliation
+# ===================================================================
+
+@api.get("/ops/analytics")
+async def ops_analytics():
+    """Funnel conversion, approval velocity, factor drift, and cycle time."""
+    if not db._initialized:
+        return {}
+    async with db.session() as session:
+        return await operational_analytics(session)
+
+
+@api.get("/ops/reconciliation")
+async def ops_reconciliation():
+    """Rated → Sold → Implemented lineage with per-stage totals."""
+    if not db._initialized:
+        return {"stage_summary": {}, "quotes": []}
+    async with db.session() as session:
+        return await reconciliation(session)
+
+
+# ===================================================================
+# Phase 4 (optional) — Underwriting Digital Twin
+# ===================================================================
+
+@api.post("/policy/preflight-check")
+async def policy_preflight_check(body: PreflightIn, request: Request):
+    """Advisory pre-implementation check: recall precedent, simulate impact, evaluate
+    guardrails, critique (grounded), return a GREEN/AMBER/RED verdict, write candidate."""
+    if not db._initialized:
+        raise HTTPException(503, "Database not initialized")
+    policy = body.model_dump()
+    policy["analyst_id"] = policy.get("analyst_id") or _actor(request)
+    async with db.session() as session:
+        return await preflight_check(session, data_cache, policy)
+
+
+@api.get("/twin/guardrails")
+async def twin_guardrails_list(active_only: bool = True):
+    if not db._initialized:
+        return []
+    async with db.session() as session:
+        return await list_guardrails(session, active_only=active_only)
+
+
+@api.post("/twin/guardrails")
+async def twin_guardrails_create(body: GuardrailIn, request: Request):
+    if not db._initialized:
+        raise HTTPException(503, "Database not initialized")
+    async with db.session() as session:
+        return await create_guardrail(
+            session,
+            rule_type=body.rule_type,
+            threshold=body.threshold,
+            severity=body.severity,
+            scope=body.scope,
+            approved_by=_actor(request),
+        )
+
+
+@api.get("/twin/memory")
+async def twin_memory_recent(limit: int = 25):
+    if not db._initialized:
+        return []
+    async with db.session() as session:
+        return await recent_memory(session, limit=limit)
+
+
+@api.post("/twin/outcome")
+async def twin_outcome(body: OutcomeIn):
+    if not db._initialized:
+        raise HTTPException(503, "Database not initialized")
+    async with db.session() as session:
+        return await record_outcome(
+            session,
+            decision_id=body.decision_id,
+            actual_mlr=body.actual_mlr,
+            actual_margin=body.actual_margin,
+            retained=body.retained,
+            note=body.note,
+        )
+
+
+@api.get("/twin/profile/{analyst_id}")
+async def twin_profile(analyst_id: str):
+    if not db._initialized:
+        return None
+    async with db.session() as session:
+        return await get_profile(session, analyst_id)
 
 
 # ===================================================================

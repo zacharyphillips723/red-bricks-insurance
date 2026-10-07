@@ -318,3 +318,168 @@ class ScenarioPackageOut(BaseModel):
     scenarios: list[ScenarioLeg]
     recommended_scenario: str
     recommendation_narrative: str
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — Funding arrangements
+# ---------------------------------------------------------------------------
+
+class FundingArrangementInfo(BaseModel):
+    """Catalog entry describing a funding arrangement."""
+    key: str
+    label: str
+    risk_bearer: str
+    description: str
+
+
+class FundingQuoteIn(BaseModel):
+    """Price a quote under a specific funding arrangement."""
+    arrangement: str = Field(..., description="One of the FUNDING_ARRANGEMENTS keys")
+    group_name: Optional[str] = Field(None, description="Group/employer name for the saved quote")
+    save: bool = Field(False, description="Persist the quote to app-state after pricing")
+    parameters: dict = Field(
+        default_factory=dict,
+        description="Arrangement inputs (group_id, lob, member_count, and arrangement-specific knobs)",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — Approval routing
+# ---------------------------------------------------------------------------
+
+class AuthorityTier(BaseModel):
+    """One tier of the approval authority matrix."""
+    tier: int
+    role: str
+    max_dollar_impact: Optional[float] = None
+    max_rate_change_pct: Optional[float] = None
+    description: str
+
+
+class ApprovalIn(BaseModel):
+    """Create and route an approval request."""
+    subject: str
+    decision_type: str = Field("rate_action", description="e.g. rate_action, funding_quote")
+    dollar_impact: float = 0.0
+    rate_change_pct: float = 0.0
+    group_id: Optional[str] = None
+    lob: Optional[str] = None
+    context: Optional[dict] = None
+
+
+class ApprovalDecisionIn(BaseModel):
+    """Record an approver's decision."""
+    decision: str = Field(..., description="approved | rejected | needs_info")
+    notes: Optional[str] = None
+
+
+class ApprovalOut(BaseModel):
+    """An approval request with its routing + decision state."""
+    approval_id: str
+    subject: str
+    decision_type: str
+    group_id: Optional[str] = None
+    lob: Optional[str] = None
+    dollar_impact: Optional[float] = None
+    rate_change_pct: Optional[float] = None
+    required_tier: Optional[int] = None
+    required_role: Optional[str] = None
+    status: str
+    requested_by: str
+    decided_by: Optional[str] = None
+    decision_notes: Optional[str] = None
+    context: Optional[dict] = None
+    created_at: Optional[str] = None
+    decided_at: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — Factor governance
+# ---------------------------------------------------------------------------
+
+class FactorRow(BaseModel):
+    """A single governed rating factor."""
+    factor_type: str
+    factor_key: str
+    factor_value: float
+
+
+class FactorVersionCreateIn(BaseModel):
+    """Create a draft factor version (defaults to a snapshot of current factors)."""
+    factors: Optional[list[FactorRow]] = None
+    notes: Optional[str] = None
+    source: str = "manual"
+
+
+class FactorVersionOut(BaseModel):
+    """A versioned factor set in the governance workflow."""
+    version_id: str
+    version: int
+    status: str
+    factors: list[FactorRow] = Field(default_factory=list)
+    source: Optional[str] = None
+    notes: Optional[str] = None
+    created_by: str
+    approved_by: Optional[str] = None
+    published_by: Optional[str] = None
+    created_at: Optional[str] = None
+    approved_at: Optional[str] = None
+    published_at: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — intake, document intelligence, negotiation
+# ---------------------------------------------------------------------------
+
+class IntakeExtractIn(BaseModel):
+    """Extract a structured submission from pasted document text."""
+    text: str
+    doc_type: str = Field("submission", description="e.g. census, sbc, competitor_quote, submission")
+
+
+class IntakeParseIn(BaseModel):
+    """Parse a free-text NL submission into a structured, completeness-gated memo."""
+    text: str
+    strategy_memo: bool = True
+
+
+class RerateIn(BaseModel):
+    """Re-rate a saved quote with a natural-language change."""
+    instruction: str
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 (optional) — Agentic memory / Underwriting Digital Twin
+# ---------------------------------------------------------------------------
+
+class PreflightIn(BaseModel):
+    """Run the advisory pre-implementation check on a proposed policy/decision."""
+    analyst_id: Optional[str] = None
+    funding_arrangement: Optional[str] = None
+    lob: Optional[str] = None
+    group_id: Optional[str] = None
+    group_size: Optional[int] = None
+    industry: Optional[str] = None
+    scenario_chosen: Optional[str] = None
+    rationale: Optional[str] = None
+    parameters: dict = Field(default_factory=dict)
+    projected_margin: Optional[float] = None
+    projected_mlr: Optional[float] = None
+    dollar_impact: Optional[float] = None
+
+
+class GuardrailIn(BaseModel):
+    """Create a new actuary-owned guardrail version."""
+    rule_type: str = Field(..., description="margin_floor | mlr_ceiling | authority_limit | prohibited")
+    threshold: float
+    severity: str = Field("warn", description="block | warn")
+    scope: Optional[dict] = None
+
+
+class OutcomeIn(BaseModel):
+    """Record the observed outcome of a past decision (closes the loop)."""
+    decision_id: str
+    actual_mlr: Optional[float] = None
+    actual_margin: Optional[float] = None
+    retained: Optional[bool] = None
+    note: Optional[str] = None

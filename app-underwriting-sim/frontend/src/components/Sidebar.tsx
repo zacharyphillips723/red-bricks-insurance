@@ -11,6 +11,12 @@ import {
   Sparkles,
   Layers,
   ShieldCheck,
+  Landmark,
+  GitBranch,
+  Gavel,
+  Inbox,
+  Workflow,
+  Brain,
 } from "lucide-react";
 import { Page } from "@/lib/personas";
 
@@ -23,15 +29,21 @@ interface SidebarProps {
 
 const NAV_ITEMS: { page: Page; label: string; icon: React.ElementType; section?: string }[] = [
   { page: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { page: "intake", label: "Quote Intake", icon: Inbox },
   { page: "scenarios", label: "Packaged Scenarios", icon: Layers },
+  { page: "funding", label: "Funding Quote", icon: Landmark },
   { page: "builder", label: "Simulation Builder", icon: Calculator },
   { page: "rate-buildup", label: "Rate Build-Up", icon: DollarSign, section: "Actuarial" },
   { page: "risk-pool", label: "Risk Pool Analysis", icon: BarChart3 },
+  { page: "factors", label: "Factor Governance", icon: GitBranch },
   { page: "comparison", label: "Compare Scenarios", icon: GitCompareArrows, section: "Management" },
+  { page: "pipeline", label: "Quote Pipeline", icon: Workflow },
+  { page: "approvals", label: "Approvals", icon: Gavel },
   { page: "history", label: "Simulation History", icon: History },
   { page: "agent", label: "Underwriting Agent", icon: Bot },
   { page: "genie", label: "Genie Search", icon: Sparkles },
-  { page: "governance", label: "Governance", icon: ShieldCheck, section: "Trust" },
+  { page: "twin", label: "Digital Twin", icon: Brain, section: "Trust" },
+  { page: "governance", label: "Governance", icon: ShieldCheck },
   { page: "observability", label: "Observability", icon: Activity },
 ];
 

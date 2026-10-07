@@ -5,6 +5,12 @@ import PersonaBar from "./components/PersonaBar";
 import Dashboard from "./pages/Dashboard";
 import SimulationBuilder from "./pages/SimulationBuilder";
 import Scenarios from "./pages/Scenarios";
+import Intake from "./pages/Intake";
+import FundingQuote from "./pages/FundingQuote";
+import Approvals from "./pages/Approvals";
+import Pipeline from "./pages/Pipeline";
+import FactorGovernance from "./pages/FactorGovernance";
+import DigitalTwin from "./pages/DigitalTwin";
 import ScenarioComparison from "./pages/ScenarioComparison";
 import SimulationHistory from "./pages/SimulationHistory";
 import Agent from "./pages/Agent";
@@ -25,13 +31,19 @@ import {
 
 const ALL_PAGES: Page[] = [
   "dashboard",
+  "intake",
   "builder",
   "scenarios",
+  "funding",
+  "approvals",
+  "pipeline",
   "comparison",
   "history",
   "agent",
   "rate-buildup",
   "risk-pool",
+  "factors",
+  "twin",
   "governance",
   "observability",
   "genie",
@@ -84,7 +96,13 @@ export default function App() {
           {page === "builder" && (
             <SimulationBuilder onSaved={refreshSavedCount} />
           )}
+          {page === "intake" && <Intake />}
           {page === "scenarios" && <Scenarios />}
+          {page === "funding" && <FundingQuote />}
+          {page === "approvals" && <Approvals />}
+          {page === "pipeline" && <Pipeline />}
+          {page === "factors" && <FactorGovernance />}
+          {page === "twin" && <DigitalTwin />}
           {page === "rate-buildup" && <RateBuildup />}
           {page === "risk-pool" && <RiskPool />}
           {page === "comparison" && <ScenarioComparison />}

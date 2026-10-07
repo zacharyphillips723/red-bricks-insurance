@@ -217,6 +217,264 @@ export interface ScenarioPackage {
   recommendation_narrative: string;
 }
 
+// --- Phase 2: Funding arrangements ---
+
+export interface FundingArrangementInfo {
+  key: string;
+  label: string;
+  risk_bearer: string;
+  description: string;
+}
+
+export interface FundingLineItem {
+  label: string;
+  pmpm: number;
+  annual: number;
+  note?: string;
+}
+
+export interface FundingQuoteResult {
+  arrangement: string;
+  basis: string;
+  member_count: number;
+  expected_annual_claims: number;
+  risk_bearer: string;
+  line_items: FundingLineItem[];
+  total_annual_cost: number;
+  total_pmpm: number;
+  employer_max_liability?: number | null;
+  fi_premium_baseline: number;
+  dollar_impact_vs_fi: number;
+  narrative: string;
+  warnings: string[];
+  quote_id?: string | null;
+  [key: string]: unknown; // arrangement-specific extras
+}
+
+export interface FundingQuote {
+  quote_id: string;
+  group_name: string;
+  funding_arrangement: string;
+  lob?: string;
+  scope_group_id?: string;
+  inputs: Record<string, unknown>;
+  result: FundingQuoteResult;
+  total_annual_cost?: number;
+  dollar_impact?: number;
+  status: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// --- Phase 2: Approval routing ---
+
+export interface AuthorityTier {
+  tier: number;
+  role: string;
+  max_dollar_impact?: number | null;
+  max_rate_change_pct?: number | null;
+  description: string;
+}
+
+export interface Approval {
+  approval_id: string;
+  subject: string;
+  decision_type: string;
+  group_id?: string;
+  lob?: string;
+  dollar_impact?: number;
+  rate_change_pct?: number;
+  required_tier?: number;
+  required_role?: string;
+  status: string;
+  requested_by: string;
+  decided_by?: string;
+  decision_notes?: string;
+  context?: Record<string, unknown>;
+  created_at?: string;
+  decided_at?: string;
+}
+
+// --- Phase 2: Factor governance ---
+
+export interface FactorRow {
+  factor_type: string;
+  factor_key: string;
+  factor_value: number;
+}
+
+export interface FactorVersion {
+  version_id: string;
+  version: number;
+  status: string;
+  factors: FactorRow[];
+  source?: string;
+  notes?: string;
+  created_by: string;
+  approved_by?: string;
+  published_by?: string;
+  created_at?: string;
+  approved_at?: string;
+  published_at?: string;
+}
+
+export interface FactorPublishResult {
+  published: boolean;
+  rows_written?: number;
+  error?: string | null;
+  version?: FactorVersion;
+}
+
+// --- Phase 3: Intake, negotiation, ops ---
+
+export interface SubmissionCompleteness {
+  percent_complete: number;
+  present_fields: string[];
+  missing_fields: string[];
+  quote_ready: boolean;
+}
+
+export interface SubmissionExtract {
+  doc_type: string;
+  fields: Record<string, unknown>;
+  completeness: SubmissionCompleteness;
+}
+
+export interface IntakeParseResult {
+  fields: Record<string, unknown>;
+  completeness: SubmissionCompleteness;
+  strategy_memo?: string | null;
+}
+
+export interface QuoteRevision {
+  revision_id: string;
+  quote_id: string;
+  instruction?: string;
+  param_changes: Record<string, unknown>;
+  result: FundingQuoteResult;
+  total_annual_cost?: number;
+  created_by: string;
+  created_at: string;
+}
+
+export interface RerateResult {
+  quote_id: string;
+  param_changes: Record<string, unknown>;
+  result: FundingQuoteResult;
+  revisions: QuoteRevision[];
+}
+
+export interface OpsAnalytics {
+  funnel: {
+    total_quotes: number;
+    by_status: Record<string, number>;
+    quote_to_sold_pct: number;
+    sold_to_implemented_pct: number;
+  };
+  cycle_time: { avg_hours_to_advance: number | null; sample: number };
+  approvals: {
+    total: number;
+    pending: number;
+    decided: number;
+    approval_rate_pct: number;
+    avg_decision_hours: number | null;
+  };
+  factor_governance: {
+    published_versions: number;
+    total_versions: number;
+    changed_factors: number;
+    max_abs_pct_change: number;
+    compared_versions?: number[];
+  };
+}
+
+export interface ReconciliationStage {
+  count: number;
+  total_annual_cost: number;
+}
+
+export interface ReconciliationQuote {
+  quote_id: string;
+  group_name: string;
+  funding_arrangement: string;
+  status: string;
+  total_annual_cost: number;
+  dollar_impact: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface Reconciliation {
+  stage_summary: Record<string, ReconciliationStage>;
+  quotes: ReconciliationQuote[];
+}
+
+// --- Phase 4: Digital twin ---
+
+export interface GuardrailResult {
+  rule_type: string;
+  threshold: number;
+  severity: string;
+  tripped: boolean;
+  note?: string | null;
+}
+
+export interface Guardrail {
+  guardrail_id: string;
+  version: number;
+  rule_type: string;
+  scope?: Record<string, unknown>;
+  threshold?: number;
+  severity: string;
+  active: boolean;
+  approved_by?: string;
+  approved_at?: string;
+}
+
+export interface PrecedentDecision {
+  decision_id: string;
+  funding_arrangement?: string;
+  lob?: string;
+  group_size_band?: string;
+  scenario_chosen?: string;
+  projected_margin?: number;
+  projected_mlr?: number;
+  dollar_impact?: number;
+  rationale?: string;
+  twin_verdict?: string;
+  status?: string;
+  created_at?: string;
+  similarity?: number | null;
+  outcome?: { actual_mlr?: number; actual_margin?: number; retained?: boolean } | null;
+  [key: string]: unknown;
+}
+
+export interface AnalystProfile {
+  analyst_id: string;
+  risk_appetite?: string;
+  typical_margin?: number;
+  decision_count?: number;
+  updated_at?: string;
+}
+
+export interface PreflightResult {
+  decision_id: string;
+  verdict: "GREEN" | "AMBER" | "RED";
+  dollar_impact: number;
+  rate_change_pct: number;
+  projected_margin?: number | null;
+  projected_mlr?: number | null;
+  guardrail_results: GuardrailResult[];
+  critique?: string;
+  concern_level?: string;
+  cited_decision_ids: string[];
+  cited_precedents: PrecedentDecision[];
+  analyst_history_count: number;
+  analyst_profile?: AnalystProfile | null;
+  required_approval_tier: AuthorityTier;
+}
+
 // --- Risk Pool Types ---
 
 export interface DistributionBucket {
@@ -417,4 +675,127 @@ export const api = {
 
   getBookOfBusinessSummary: () =>
     fetchApi<BookOfBusinessSummary>("/book-of-business/risk-summary"),
+
+  // Phase 2: Funding arrangements
+  listFundingArrangements: () =>
+    fetchApi<FundingArrangementInfo[]>("/funding/arrangements"),
+
+  priceFundingQuote: (body: {
+    arrangement: string;
+    group_name?: string;
+    save?: boolean;
+    parameters: Record<string, unknown>;
+  }) =>
+    fetchApi<FundingQuoteResult>("/funding/quote", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  listFundingQuotes: (status?: string) =>
+    fetchApi<FundingQuote[]>(`/funding/quotes${status ? `?status=${encodeURIComponent(status)}` : ""}`),
+
+  getFundingQuote: (id: string) => fetchApi<FundingQuote>(`/funding/quotes/${id}`),
+
+  updateFundingQuoteStatus: (id: string, status: string) =>
+    fetchApi<FundingQuote>(`/funding/quotes/${id}/status?status=${encodeURIComponent(status)}`, {
+      method: "PATCH",
+    }),
+
+  // Phase 2: Approval routing
+  getAuthorityMatrix: () => fetchApi<AuthorityTier[]>("/approvals/authority-matrix"),
+
+  createApproval: (body: {
+    subject: string;
+    decision_type?: string;
+    dollar_impact?: number;
+    rate_change_pct?: number;
+    group_id?: string;
+    lob?: string;
+    context?: Record<string, unknown>;
+  }) => fetchApi<Approval>("/approvals", { method: "POST", body: JSON.stringify(body) }),
+
+  listApprovals: (status?: string) =>
+    fetchApi<Approval[]>(`/approvals${status ? `?status=${encodeURIComponent(status)}` : ""}`),
+
+  decideApproval: (id: string, decision: string, notes?: string) =>
+    fetchApi<Approval>(`/approvals/${id}/decide`, {
+      method: "POST",
+      body: JSON.stringify({ decision, notes }),
+    }),
+
+  // Phase 2: Factor governance
+  listFactorVersions: () => fetchApi<FactorVersion[]>("/factors/versions"),
+
+  createFactorVersion: (body: { notes?: string; source?: string; factors?: FactorRow[] }) =>
+    fetchApi<FactorVersion>("/factors/versions", { method: "POST", body: JSON.stringify(body) }),
+
+  approveFactorVersion: (id: string) =>
+    fetchApi<FactorVersion>(`/factors/versions/${id}/approve`, { method: "POST" }),
+
+  publishFactorVersion: (id: string) =>
+    fetchApi<FactorPublishResult>(`/factors/versions/${id}/publish`, { method: "POST" }),
+
+  // Phase 3: Intake & document intelligence
+  extractSubmission: (text: string, docType = "submission") =>
+    fetchApi<SubmissionExtract>("/intake/extract", {
+      method: "POST",
+      body: JSON.stringify({ text, doc_type: docType }),
+    }),
+
+  parseIntake: (text: string, strategyMemo = true) =>
+    fetchApi<IntakeParseResult>("/intake/parse", {
+      method: "POST",
+      body: JSON.stringify({ text, strategy_memo: strategyMemo }),
+    }),
+
+  // Phase 3: Negotiation
+  rerateQuote: (quoteId: string, instruction: string) =>
+    fetchApi<RerateResult>(`/funding/quotes/${quoteId}/rerate`, {
+      method: "POST",
+      body: JSON.stringify({ instruction }),
+    }),
+
+  listQuoteRevisions: (quoteId: string) =>
+    fetchApi<QuoteRevision[]>(`/funding/quotes/${quoteId}/revisions`),
+
+  // Phase 3: Operational analytics
+  getOpsAnalytics: () => fetchApi<OpsAnalytics>("/ops/analytics"),
+  getReconciliation: () => fetchApi<Reconciliation>("/ops/reconciliation"),
+
+  // Phase 4: Digital twin
+  preflightCheck: (body: {
+    funding_arrangement?: string;
+    lob?: string;
+    group_id?: string;
+    group_size?: number;
+    industry?: string;
+    scenario_chosen?: string;
+    rationale?: string;
+    parameters?: Record<string, unknown>;
+    projected_margin?: number;
+    projected_mlr?: number;
+    dollar_impact?: number;
+  }) => fetchApi<PreflightResult>("/policy/preflight-check", { method: "POST", body: JSON.stringify(body) }),
+
+  listGuardrails: () => fetchApi<Guardrail[]>("/twin/guardrails"),
+
+  createGuardrail: (body: {
+    rule_type: string;
+    threshold: number;
+    severity: string;
+    scope?: Record<string, unknown>;
+  }) => fetchApi<Guardrail>("/twin/guardrails", { method: "POST", body: JSON.stringify(body) }),
+
+  getTwinMemory: (limit = 25) => fetchApi<PrecedentDecision[]>(`/twin/memory?limit=${limit}`),
+
+  recordOutcome: (body: {
+    decision_id: string;
+    actual_mlr?: number;
+    actual_margin?: number;
+    retained?: boolean;
+    note?: string;
+  }) => fetchApi<{ feedback_id: string; decision_id: string }>("/twin/outcome", {
+    method: "POST",
+    body: JSON.stringify(body),
+  }),
 };

@@ -53,6 +53,15 @@ async def lifespan(app: FastAPI):
         db.ensure_tables((Path(__file__).parent / "backend" / "lakehouse_schema.sql").read_text())
         db.start_refresh()
         print("[main] Lakehouse app-state initialized")
+        # Seed the digital twin's default actuary-owned guardrails (idempotent).
+        try:
+            from backend.twin_memory import seed_default_guardrails
+            async with db.session() as _s:
+                added = await seed_default_guardrails(_s)
+            if added:
+                print(f"[main] Seeded {added} default org guardrails")
+        except Exception as e:
+            print(f"[main] WARNING: guardrail seed skipped: {e}")
     except Exception as e:
         print(f"[main] WARNING: Lakehouse app-state init failed (simulations will still work, "
               f"but save/load requires the app-state schema): {e}")
