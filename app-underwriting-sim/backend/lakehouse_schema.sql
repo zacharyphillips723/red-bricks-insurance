@@ -148,7 +148,7 @@ TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported');
 
 -- ===================================================================
 -- Phase 4 (optional) — Agentic memory / Underwriting Digital Twin
--- Delta-backed fallback for the Lakebase + pgvector memory layer; the
+-- Delta-backed fallback for the Lakebase + pgvector memory layer. The
 -- recall interface (twin_memory.py) is abstracted so a Lakebase/pgvector
 -- backend can be swapped in without touching the preflight loop.
 -- ===================================================================

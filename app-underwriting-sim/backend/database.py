@@ -358,12 +358,31 @@ class LakehouseStore:
             self.initialize()
         # Create the schema first (fully qualified), then create objects inside it.
         self._run(f"CREATE SCHEMA IF NOT EXISTS `{self._catalog}`.`{self._schema}`", None)
-        body = ddl.format(catalog=f"`{self._catalog}`", schema=f"`{self._schema}`")
+        # Targeted replacement (not str.format): the DDL contains literal `{}` in
+        # column defaults (e.g. `DEFAULT '{}'`), which str.format would misread as a
+        # positional field and raise IndexError before any table is created.
+        body = (ddl.replace("{catalog}", f"`{self._catalog}`")
+                   .replace("{schema}", f"`{self._schema}`"))
         self._learn_id_cols(body)
+        # Run each statement independently: every statement is idempotent
+        # (CREATE TABLE IF NOT EXISTS / CREATE OR REPLACE VIEW), so one failing
+        # statement must not abort the loop and leave later tables uncreated.
+        failures: list[str] = []
         for stmt in _split_statements(body):
-            if stmt.strip():
+            if not stmt.strip():
+                continue
+            try:
                 self._run(stmt, None)
-        logger.info("Lakehouse app-state tables ensured in %s.%s", self._catalog, self._schema)
+            except Exception as e:  # keep going so independent tables still get created
+                failures.append(f"{stmt.strip()[:120]}... -> {e}")
+                logger.error("app-state DDL statement failed (continuing): %s", failures[-1])
+        if failures:
+            logger.warning(
+                "Lakehouse app-state ensured with %d failed statement(s) in %s.%s",
+                len(failures), self._catalog, self._schema,
+            )
+        else:
+            logger.info("Lakehouse app-state tables ensured in %s.%s", self._catalog, self._schema)
 
     def _learn_id_cols(self, ddl_body: str) -> None:
         """Record each table's surrogate id column (first `*_id STRING` column)."""
@@ -487,8 +506,13 @@ def _coerce_value(type_name: str, raw: Any) -> Any:
 
 
 def _split_statements(sql: str) -> list:
-    """Split a DDL script on semicolons (DDL has no semicolons inside literals)."""
-    return [s for s in sql.split(";") if s.strip()]
+    """Split a DDL script on semicolons.
+
+    Strips `--` line comments first so a stray `;` inside a comment can't split a
+    statement (the DDL has no semicolons inside string literals).
+    """
+    no_comments = "\n".join(re.sub(r"--.*$", "", line) for line in sql.splitlines())
+    return [s for s in no_comments.split(";") if s.strip()]
 
 
 db = LakehouseStore()

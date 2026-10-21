@@ -726,6 +726,48 @@ if app_sps:
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ### App-State Schema for the Underwriting Sim
+# MAGIC
+# MAGIC The underwriting-sim app persists its Delta app-state (simulations, funding
+# MAGIC quotes, approvals, factor versions, twin memory) in `{catalog}.app_state`. The
+# MAGIC app self-creates these tables on startup, but only if its SP already has the
+# MAGIC schema plus CREATE_TABLE/MODIFY. Pre-create the schema and grant the SP here so a
+# MAGIC fresh deploy never silently fails (the app can't grant itself CREATE SCHEMA).
+# MAGIC Also grant MODIFY on the governed factor table that Factor Governance publishes to.
+
+# COMMAND ----------
+
+APP_STATE_SCHEMA = "app_state"
+uw_sps = [sp for sp in app_sps if "uw-sim" in sp["app_name"]] if app_sps else []
+if uw_sps:
+    print("Provisioning app-state schema for underwriting-sim...\n")
+    try:
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog_sql}.{APP_STATE_SCHEMA}")
+        print(f"  Schema ready: {catalog}.{APP_STATE_SCHEMA}")
+    except Exception as e:
+        print(f"  WARNING: app_state schema creation failed: {e}")
+    for sp_info in uw_sps:
+        sp_name = sp_info["sp_name"]
+        # Schema-level DML + table creation so the app can self-heal its own tables.
+        for priv in ["USE SCHEMA", "SELECT", "MODIFY", "CREATE"]:
+            try:
+                spark.sql(f"GRANT {priv} ON SCHEMA {catalog_sql}.{APP_STATE_SCHEMA} TO `{sp_name}`")
+            except Exception as e:
+                print(f"    {priv} on {APP_STATE_SCHEMA}: {e}")
+        print(f"    USE SCHEMA + SELECT + MODIFY + CREATE on {catalog}.{APP_STATE_SCHEMA} ({sp_info['app_name']})")
+        # Factor Governance publishes approved factors into this governed gold table.
+        try:
+            spark.sql(
+                f"GRANT SELECT, MODIFY ON TABLE {catalog_sql}.analytics.gold_pricing_factors TO `{sp_name}`"
+            )
+            print(f"    SELECT + MODIFY on {catalog}.analytics.gold_pricing_factors")
+        except Exception as e:
+            print(f"    gold_pricing_factors: {e}")
+    print()
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ### Create PA Document Upload Volume & Grant App SPs
 # MAGIC
 # MAGIC The PA Review Portal lets users upload medical records that are parsed with
