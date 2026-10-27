@@ -85,6 +85,64 @@ resources:
             pipeline_id: ${resources.pipelines.risk_adjustment_pipeline.id}
             full_refresh: true
 
+        # --- Risk Adjustment / HCC app (#7) backing data + memory + grants ---
+        # Deterministic CMS-HCC V28 grouper (demo subset) the suspecting agent + evidence layer use.
+        - task_key: setup_hcc_grouper
+          depends_on:
+            - task_key: data_generation
+          notebook_task:
+            notebook_path: ../src/notebooks/setup_hcc_grouper.py
+            base_parameters:
+              catalog: ${var.catalog}
+
+        # Org priority context (read-only policy table the agent reads).
+        - task_key: setup_agent_policy
+          depends_on:
+            - task_key: data_generation
+          notebook_task:
+            notebook_path: ../src/notebooks/setup_agent_policy.py
+            base_parameters:
+              catalog: ${var.catalog}
+
+        # HCC evidence layer (suspected/weak/documented/noise) from case-note chunks — needs the
+        # grouper + the documents chunks + the coded RA set.
+        - task_key: setup_ra_coherent_data
+          depends_on:
+            - task_key: setup_hcc_grouper
+            - task_key: documents_pipeline
+            - task_key: risk_adjustment_pipeline
+          notebook_task:
+            notebook_path: ../src/notebooks/setup_ra_coherent_data.py
+            base_parameters:
+              catalog: ${var.catalog}
+
+        # Agent self-authored memory tiers on the dedicated Lakebase instance (instance must exist;
+        # the notebook %pip-installs psycopg2-binary itself).
+        - task_key: setup_lakebase_ra_memory
+          depends_on:
+            - task_key: data_generation
+          notebook_task:
+            notebook_path: ../src/notebooks/setup_lakebase_ra_memory.py
+            base_parameters:
+              instance_name: red-bricks-ra-memory
+              database: databricks_postgres
+
+        # RA app service-principal grants: Vector Search endpoint CAN_USE + a Lakebase role on the
+        # RA memory instance. Best-effort/idempotent (re-asserts grants on redeploy).
+        - task_key: setup_ra_grants
+          depends_on:
+            - task_key: setup_lakebase_ra_memory
+            - task_key: setup_vector_search
+            - task_key: setup_agent_policy
+            - task_key: setup_ra_coherent_data
+          notebook_task:
+            notebook_path: ../src/notebooks/setup_ra_grants.py
+            base_parameters:
+              catalog: ${var.catalog}
+              app_name: red-bricks-ra-workbench
+              instance_name: red-bricks-ra-memory
+              vs_endpoint_name: red-bricks-vs-endpoint
+
         - task_key: benefits_pipeline
           depends_on:
             - task_key: data_generation
@@ -705,6 +763,8 @@ resources:
         - task_key: deploy_app_source
           depends_on:
             - task_key: bootstrap_workspace
+            - task_key: setup_ra_coherent_data
+            - task_key: setup_ra_grants
           notebook_task:
             notebook_path: ../src/notebooks/deploy_app_source.py
             base_parameters:

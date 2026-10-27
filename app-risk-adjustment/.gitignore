@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Node
+frontend/node_modules/
+npm-debug.log*
+
+# Keep the built frontend for deployment
+# frontend/dist/  <- DO NOT ignore; it is what gets served in production
+
+# Databricks
+.databricks/
+
+# OS
+.DS_Store

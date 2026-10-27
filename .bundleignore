@@ -65,3 +65,14 @@ app-provider-scrub/frontend/*.json
 app-provider-scrub/frontend/*.ts
 app-provider-scrub/frontend/*.js
 app-provider-scrub/frontend/*.html
+
+# Risk Adjustment app: FastAPI serves frontend/dist (KEEP dist), so exclude only the heavy
+# non-runtime bits — the local Python venv (~523MB), the node_modules, the TS source, and docs.
+app-risk-adjustment/.venv/
+app-risk-adjustment/frontend/node_modules/
+app-risk-adjustment/frontend/src/
+app-risk-adjustment/frontend/*.json
+app-risk-adjustment/frontend/*.ts
+app-risk-adjustment/frontend/*.config.*
+app-risk-adjustment/frontend/index.html
+app-risk-adjustment/docs/

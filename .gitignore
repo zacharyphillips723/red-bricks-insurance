@@ -31,3 +31,7 @@ resources/app.yml.bak
 # Local MLflow test artifacts (app dev loop)
 app-prior-auth/mlflow.db
 app-prior-auth/mlruns/
+
+# Local MLflow test artifacts (RA app dev loop)
+app-risk-adjustment/mlflow.db
+app-risk-adjustment/mlruns/

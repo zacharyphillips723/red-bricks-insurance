@@ -1,0 +1,43 @@
+resources:
+  apps:
+    red_bricks_ra_workbench:
+      name: "red-bricks-ra-workbench"
+      description: "Red Bricks Insurance — Risk Adjustment / HCC Coder Workbench"
+      source_code_path: ../app-risk-adjustment
+      config:
+        command:
+          - uvicorn
+          - main:app
+          - --host=0.0.0.0
+          - --port=8000
+        env:
+          - name: AGENT_MODE
+            value: local                 # in-process agent (full span tree); 'endpoint' once ra-agent is served
+          - name: UC_CATALOG
+            value: ${var.catalog}
+          - name: UC_SCHEMA
+            value: risk_adjustment
+          - name: SQL_WAREHOUSE_ID
+            value: ${var.warehouse_id}
+          - name: VS_INDEX_NAME
+            value: ${var.catalog}.documents.case_notes_vs_index
+          - name: RA_LAKEBASE_INSTANCE
+            value: red-bricks-ra-memory
+          - name: RA_SUSPECTING_ENDPOINT
+            value: databricks-claude-sonnet-5
+          - name: RA_ALLOWED_MODELS
+            value: databricks-claude-sonnet-5,databricks-claude-opus-5,databricks-claude-haiku-5-5,databricks-gpt-5-5,databricks-gemini-3-8-flash
+          - name: MLFLOW_UC_EXPERIMENT
+            value: /Shared/red-bricks-ra-agent-traces-uc
+          - name: UC_TRACE_SCHEMA
+            value: analytics
+          - name: UC_TRACE_TABLE_PREFIX
+            value: ra_agent
+      resources:
+        - name: suspecting-model
+          serving_endpoint:
+            name: databricks-claude-sonnet-5
+            permission: CAN_QUERY
+# NOTE: AGENT_MODE=local needs the agent code vendored into the app dir (app-risk-adjustment/risk_adjustment_agent.py).
+# The app SP also needs: SELECT on the catalog, CAN_USE on the warehouse, CAN_USE on the Vector Search endpoint,
+# and a Lakebase role on red-bricks-ra-memory (for adjudication writes). See PHASE6_NOTES.md.

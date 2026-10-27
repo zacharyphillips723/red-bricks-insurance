@@ -1,0 +1,35 @@
+command:
+  - uvicorn
+  - main:app
+  - --host=0.0.0.0
+  - --port=8000
+
+env:
+  - name: AGENT_MODE
+    value: local                 # local = in-process agent (full span tree); endpoint = served ra-agent
+  - name: UC_CATALOG
+    value: red_bricks_insurance_catalog
+  - name: UC_SCHEMA
+    value: risk_adjustment
+  - name: SQL_WAREHOUSE_ID
+    value: 68c76c6b9594a610
+  - name: VS_INDEX_NAME
+    value: red_bricks_insurance_catalog.documents.case_notes_vs_index
+  - name: RA_LAKEBASE_INSTANCE
+    value: red-bricks-ra-memory
+  - name: RA_SUSPECTING_ENDPOINT
+    value: databricks-claude-sonnet-5
+  - name: RA_ALLOWED_MODELS
+    value: databricks-claude-sonnet-5,databricks-claude-opus-5,databricks-claude-haiku-5-5,databricks-gpt-5-5,databricks-gemini-3-8-flash
+  - name: MLFLOW_UC_EXPERIMENT
+    value: /Shared/red-bricks-ra-agent-traces-uc
+  - name: UC_TRACE_SCHEMA
+    value: analytics
+  - name: UC_TRACE_TABLE_PREFIX
+    value: ra_agent
+
+resources:
+  - name: suspecting-model
+    serving_endpoint:
+      name: databricks-claude-sonnet-5
+      permission: CAN_QUERY

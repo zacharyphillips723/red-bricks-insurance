@@ -33,6 +33,7 @@ APP_SOURCE_MAP = {
     "red-bricks-pa-portal-app": "app-prior-auth",
     "red-bricks-denial-scrub-app": "app-provider-scrub",
     "rb-network-adequacy-app": "app-network-adequacy",
+    "red-bricks-ra-workbench": "app-risk-adjustment",
 }
 
 # Apps with target-suffix names — detect dynamically

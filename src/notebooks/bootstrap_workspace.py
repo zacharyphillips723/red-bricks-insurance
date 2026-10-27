@@ -153,6 +153,8 @@ UC_SCHEMAS = [
     "risk_adjustment", "underwriting", "clinical", "benefits",
     "analytics", "fwa", "prior_auth", "network", "care_management",
     "adt", "ai_tools",
+    # reference holds the CMS-HCC V28 grouper the Risk Adjustment agent reads.
+    "reference",
 ]
 
 # COMMAND ----------
