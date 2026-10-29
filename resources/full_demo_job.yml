@@ -760,6 +760,24 @@ resources:
           min_retry_interval_millis: 300000
 
         # Step 9: Deploy app source code and start compute
+        # FWA Supervisor agent (Multi-Agent Supervisor: Genie + Gemini sub-agents) served as
+        # an endpoint. Needs the FWA gold table, the medical-policy Vector Search index, and a
+        # Genie space (auto-detected) — hence the bootstrap_workspace dependency.
+        - task_key: deploy_fwa_supervisor_agent
+          depends_on:
+            - task_key: gold_analytics_pipeline
+            - task_key: fwa_pipeline
+            - task_key: setup_medical_policy_vs
+            - task_key: bootstrap_workspace
+          notebook_task:
+            notebook_path: ../src/notebooks/deploy_fwa_supervisor_agent.py
+            base_parameters:
+              catalog: ${var.catalog}
+              warehouse_id: ${var.warehouse_id}
+              lakebase_project_id: ${var.lakebase_project_id}
+              genie_space_id: "auto"
+          environment_key: agent_env
+
         - task_key: deploy_app_source
           depends_on:
             - task_key: bootstrap_workspace
