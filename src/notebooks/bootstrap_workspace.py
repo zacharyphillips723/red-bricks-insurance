@@ -1092,17 +1092,56 @@ GENIE_SPACE_CONFIGS = [
 ]
 
 
-def create_or_get_genie_space(title: str, description: str, tables: list[str]) -> str | None:
-    """Create a Genie space if one with the same title doesn't already exist. Returns space_id."""
-    # Check if a space with this title already exists
+# Genie spaces created via the API default to the creator's personal home folder, where
+# they are NOT discoverable in the workspace Genie Agents browse/search (only via direct
+# link / recents). Re-home them into a shared folder so they list for the whole workspace.
+GENIE_SHARED_FOLDER = "/Shared/red-bricks-insurance"
+
+
+def _home_genie_space(space_id: str) -> None:
+    """Move a Genie space into the shared folder (idempotent, best-effort)."""
     try:
-        existing = _requests.get(
+        w.workspace.mkdirs(GENIE_SHARED_FOLDER)
+    except Exception:
+        pass
+    try:
+        _requests.patch(
+            f"https://{_host}/api/2.0/genie/spaces/{space_id}",
+            headers=_genie_headers,
+            json={"parent_path": GENIE_SHARED_FOLDER},
+        )
+    except Exception as e:
+        print(f"  parent_path move skipped: {e}")
+
+
+def _list_all_genie_spaces() -> list[dict]:
+    """List ALL Genie spaces, following pagination. The /genie/spaces list is paged
+    (~25/page); checking only the first page lets the dedup below miss an existing
+    space on a later page and create a DUPLICATE on every re-deploy."""
+    spaces, token = [], None
+    while True:
+        params = {"page_size": 100}
+        if token:
+            params["page_token"] = token
+        resp = _requests.get(
             f"https://{_host}/api/2.0/genie/spaces",
             headers=_genie_headers,
-        ).json().get("spaces", [])
-        for s in existing:
+            params=params,
+        ).json()
+        spaces.extend(resp.get("spaces", []))
+        token = resp.get("next_page_token")
+        if not token:
+            return spaces
+
+
+def create_or_get_genie_space(title: str, description: str, tables: list[str]) -> str | None:
+    """Create a Genie space if one with the same title doesn't already exist. Returns space_id."""
+    # Check if a space with this title already exists (across ALL pages — see _list_all_genie_spaces).
+    try:
+        for s in _list_all_genie_spaces():
             if s.get("title") == title:
                 print(f"  Already exists: {s['space_id']}")
+                _home_genie_space(s["space_id"])
                 return s["space_id"]
     except Exception:
         pass
@@ -1143,6 +1182,7 @@ def create_or_get_genie_space(title: str, description: str, tables: list[str]) -
         if resp.status_code == 200:
             space_id = resp.json().get("space_id")
             print(f"  Created: {space_id}")
+            _home_genie_space(space_id)
             return space_id
         else:
             print(f"  Creation failed ({resp.status_code}): {resp.text[:300]}")
@@ -1159,7 +1199,13 @@ def grant_genie_permissions(space_id: str, sp_names: list[str]) -> None:
     2. Workspace-objects level (/permissions/workspace-objects/{obj_id}) — controls
        workspace ACL traversal required by serving endpoint runtime SPs
     """
-    acl = [{"user_name": _current_user, "permission_level": "CAN_MANAGE"}]
+    # Grant the workspace `users` group CAN_RUN so the space is discoverable in the Genie
+    # Agents browse/search for everyone — not just the deploy user. Without this (and the
+    # shared-folder move below) API-created spaces only surface via direct link / recents.
+    acl = [
+        {"user_name": _current_user, "permission_level": "CAN_MANAGE"},
+        {"group_name": "users", "permission_level": "CAN_RUN"},
+    ]
     for sp_name in sp_names:
         acl.append({"service_principal_name": sp_name, "permission_level": "CAN_RUN"})
 
