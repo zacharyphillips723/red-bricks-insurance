@@ -59,7 +59,7 @@ if genie_space_id.strip().lower() in ("auto", ""):
         genie_space_id = ""
 
 LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT", "databricks-llama-4-maverick")
-GEMINI_ENDPOINT = os.environ.get("GEMINI_ENDPOINT", "databricks-gemini-2-5-pro")
+GEMINI_ENDPOINT = os.environ.get("GEMINI_ENDPOINT", "databricks-gemini-3-8-flash")
 VS_INDEX_NAME = f"{catalog}.prior_auth.medical_policy_vs_index"
 MODEL_NAME = f"{catalog}.analytics.fwa_supervisor_agent"
 ENDPOINT_NAME = "fwa-supervisor-agent"
