@@ -11,11 +11,9 @@ resources:
           - --host=0.0.0.0
           - --port=8000
         env:
-          - name: APP_STATE_SCHEMA
-            value: app_state
-          # Lakebase (Postgres + pgvector) — Phase 4 Digital Twin hot memory only.
-          # Delta remains system-of-record for all other app state. SP security
-          # label on this database is granted by bootstrap_workspace.py.
+          # Lakebase (Postgres + pgvector) — full app-state writeback + the Phase 4
+          # Digital Twin hot memory, all on the uw_sim database. SP access to this
+          # database is granted by bootstrap_workspace.py.
           - name: LAKEBASE_PROJECT_ID
             value: ${var.lakebase_project_id}
           - name: LAKEBASE_DATABASE_NAME

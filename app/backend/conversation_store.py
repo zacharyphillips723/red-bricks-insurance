@@ -1,4 +1,4 @@
-"""Lightweight conversation persistence using the Lakehouse (Delta) app-state store.
+"""Lightweight conversation persistence using Lakebase.
 
 Replaces langgraph-checkpoint-postgres (which fails to install on Databricks
 Apps) with direct SQL operations on the conversations / conversation_messages
@@ -12,30 +12,11 @@ import json
 import uuid
 from typing import Optional
 
-from .database import text
+from sqlalchemy import text
 
 from .database import db
 
 RETENTION_DAYS = 30
-
-
-def _iso(value):
-    """Normalize a timestamp column (datetime or ISO string) to an ISO string."""
-    if value is None:
-        return None
-    return value.isoformat() if hasattr(value, "isoformat") else str(value)
-
-
-def _as_dict(value):
-    """Normalize a JSON column (dict or JSON string) to a dict."""
-    if not value:
-        return {}
-    if isinstance(value, str):
-        try:
-            return json.loads(value)
-        except (ValueError, TypeError):
-            return {}
-    return value
 
 
 async def get_or_create_conversation(
@@ -123,8 +104,8 @@ async def load_history(
         {
             "role": r["role"],
             "content": r["content"],
-            "metadata": _as_dict(r["metadata"]),
-            "created_at": _iso(r["created_at"]),
+            "metadata": r["metadata"] or {},
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
         }
         for r in reversed(rows)
     ]
@@ -162,8 +143,8 @@ async def list_conversations(
             "member_id": r["member_id"],
             "title": r["title"],
             "message_count": r["message_count"],
-            "created_at": _iso(r["created_at"]),
-            "updated_at": _iso(r["updated_at"]),
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
         }
         for r in rows
     ]
@@ -207,23 +188,15 @@ async def cleanup_expired_conversations() -> int:
     Returns the number of conversations deleted.
     """
     async with db.session() as session:
-        # No enforced CASCADE in Unity Catalog — delete children explicitly.
         result = await session.execute(
             text("""
-                SELECT conversation_id::string AS cid
-                FROM conversations
-                WHERE datediff(current_timestamp(), updated_at) > :days
+                DELETE FROM conversations
+                WHERE updated_at < now() - make_interval(days => :days)
+                RETURNING conversation_id
             """),
             {"days": RETENTION_DAYS},
         )
-        ids = [str(r["cid"]) for r in result.mappings().all()]
-        deleted = len(ids)
-        if ids:
-            safe = ",".join("'" + i.replace("'", "") + "'" for i in ids)
-            for tbl in ("conversation_messages", "conversations"):
-                await session.execute(
-                    text(f"DELETE FROM {tbl} WHERE conversation_id IN ({safe})")
-                )
+        deleted = result.rowcount
         await session.commit()
     if deleted:
         print(f"[cleanup] Purged {deleted} conversations older than {RETENTION_DAYS} days")

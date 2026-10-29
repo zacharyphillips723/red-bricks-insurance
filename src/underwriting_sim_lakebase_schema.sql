@@ -250,3 +250,82 @@ DO $$ BEGIN
 EXCEPTION WHEN OTHERS THEN
     RAISE NOTICE 'decision_embeddings (pgvector) skipped — semantic recall disabled: %', SQLERRM;
 END $$;
+
+-- ============================================================================
+-- Phase 2–4 roadmap tables (approvals, funding arrangements, factor governance).
+-- Ported from the Delta lakehouse_schema.sql when the app moved back to Lakebase
+-- writeback. JSONB columns match the app's CAST(:x AS jsonb) inserts; ids are
+-- supplied by the app (uuid4), so no gen_random_uuid() default is needed.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS funding_quotes (
+    quote_id            TEXT PRIMARY KEY,
+    group_name          TEXT,
+    funding_arrangement TEXT NOT NULL,
+    lob                 TEXT,
+    scope_group_id      TEXT,
+    inputs              JSONB,
+    result              JSONB,
+    total_annual_cost   DOUBLE PRECISION,
+    dollar_impact       DOUBLE PRECISION,
+    status              TEXT NOT NULL DEFAULT 'draft',
+    created_by          TEXT NOT NULL,
+    created_at          TIMESTAMPTZ DEFAULT now(),
+    updated_at          TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS quote_revisions (
+    revision_id       TEXT PRIMARY KEY,
+    quote_id          TEXT NOT NULL,
+    instruction       TEXT,
+    param_changes     JSONB,
+    result            JSONB,
+    total_annual_cost DOUBLE PRECISION,
+    created_by        TEXT NOT NULL,
+    created_at        TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_qr_quote ON quote_revisions (quote_id, created_at);
+
+CREATE TABLE IF NOT EXISTS approval_requests (
+    approval_id     TEXT PRIMARY KEY,
+    subject         TEXT NOT NULL,
+    decision_type   TEXT NOT NULL,
+    group_id        TEXT,
+    lob             TEXT,
+    dollar_impact   DOUBLE PRECISION,
+    rate_change_pct DOUBLE PRECISION,
+    required_tier   INTEGER,
+    required_role   TEXT,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    requested_by    TEXT NOT NULL,
+    decided_by      TEXT,
+    decision_notes  TEXT,
+    context         JSONB,
+    created_at      TIMESTAMPTZ DEFAULT now(),
+    decided_at      TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS approval_audit_log (
+    audit_id     TEXT PRIMARY KEY,
+    approval_id  TEXT NOT NULL,
+    action       TEXT NOT NULL,
+    actor        TEXT NOT NULL,
+    details      JSONB,
+    created_at   TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_aal_approval ON approval_audit_log (approval_id, created_at);
+
+CREATE TABLE IF NOT EXISTS factor_versions (
+    version_id   TEXT PRIMARY KEY,
+    version      INTEGER NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'draft',
+    factors      JSONB NOT NULL,
+    source       TEXT,
+    notes        TEXT,
+    created_by   TEXT NOT NULL,
+    approved_by  TEXT,
+    published_by TEXT,
+    created_at   TIMESTAMPTZ DEFAULT now(),
+    approved_at  TIMESTAMPTZ,
+    published_at TIMESTAMPTZ
+);
