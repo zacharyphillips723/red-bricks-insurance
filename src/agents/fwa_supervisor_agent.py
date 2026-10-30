@@ -175,7 +175,7 @@ class FWASupervisorAgent(ChatModel):
         _genie_env = os.environ.get("GENIE_SPACE_ID", "")
         self.genie_space_id = _genie_env if _genie_env not in ("", "auto") else self._auto_detect_genie_space()
         self.llm_endpoint = os.environ.get("LLM_ENDPOINT", "databricks-llama-4-maverick")
-        self.gemini_endpoint = os.environ.get("GEMINI_ENDPOINT", "databricks-gemini-2-5-pro")
+        self.gemini_endpoint = os.environ.get("GEMINI_ENDPOINT", "databricks-gemini-3-8-flash")
         self.vs_index_name = os.environ.get("VS_INDEX_NAME", f"{self.catalog}.prior_auth.medical_policy_vs_index")
 
         # Lakebase config
@@ -472,6 +472,16 @@ class FWASupervisorAgent(ChatModel):
     def _sdk_request(self, method: str, path: str, body: dict | None = None) -> dict:
         return self.w.api_client.do(method, path, body=body) if body else self.w.api_client.do(method, path)
 
+    @staticmethod
+    def _content_text(content) -> str:
+        """Extract text from an FMAPI message `content`. Newer models (Gemini 3.x, Claude 5)
+        return content as a list of typed blocks (e.g. [{'type':'text','text':...}]) rather
+        than a plain string; older models return a string. Normalize to a string either way."""
+        if isinstance(content, list):
+            parts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+            return "".join(parts) if parts else ""
+        return content if isinstance(content, str) else ("" if content is None else str(content))
+
     def _execute_sql(self, sql: str, params: list | None = None) -> list[dict]:
         from databricks.sdk.service.sql import StatementParameterListItem
 
@@ -602,9 +612,8 @@ class FWASupervisorAgent(ChatModel):
                 resp = self._sdk_request("POST", f"/serving-endpoints/{self.gemini_endpoint}/invocations", {
                     "messages": [{"role": "user", "content": classification_prompt}],
                     "max_tokens": 500,
-                    "temperature": 0.0,
                 })
-                content = resp.get("choices", [{}])[0].get("message", {}).get("content", "{}")
+                content = self._content_text(resp.get("choices", [{}])[0].get("message", {}).get("content", "{}")) or "{}"
                 try:
                     clean = content.strip().removeprefix("```json").removesuffix("```").strip()
                     result = json.loads(clean)
@@ -837,6 +846,7 @@ class FWASupervisorAgent(ChatModel):
         tables_queried = 0
         tools_used = []
         policy_chunks = []
+        gathered = []  # tool results, for a clean final synthesis
 
         for _ in range(MAX_TOOL_ROUNDS):
             t0 = time.time()
@@ -846,7 +856,6 @@ class FWASupervisorAgent(ChatModel):
                     "messages": messages,
                     "tools": self._gemini_tools,
                     "max_tokens": 4000,
-                    "temperature": 0.05,
                 })
                 usage = data.get("usage", {})
                 llm_span.set_outputs({
@@ -862,15 +871,17 @@ class FWASupervisorAgent(ChatModel):
             )
 
             if not tool_calls:
-                answer = data.get("choices", [{}])[0].get("message", {}).get("content", "No response.")
-                return {
-                    "agent": "gemini_analyst",
-                    "model": self.gemini_endpoint,
-                    "answer": answer,
-                    "tables_queried": tables_queried,
-                    "tools_used": tools_used,
-                    "policy_chunks": policy_chunks,
-                }
+                answer = self._content_text(data.get("choices", [{}])[0].get("message", {}).get("content", ""))
+                if answer.strip():
+                    return {
+                        "agent": "gemini_analyst",
+                        "model": self.gemini_endpoint,
+                        "answer": answer,
+                        "tables_queried": tables_queried,
+                        "tools_used": tools_used,
+                        "policy_chunks": policy_chunks,
+                    }
+                break  # thinking model returned no text this turn — fall through to a clean synthesis
 
             messages.append(data["choices"][0]["message"])
 
@@ -903,6 +914,7 @@ class FWASupervisorAgent(ChatModel):
 
                 tables_queried += 1
                 tools_used.append(tool_name)
+                gathered.append(f"[{tool_name}] {result[:2500]}")
 
                 messages.append({
                     "role": "tool",
@@ -910,14 +922,22 @@ class FWASupervisorAgent(ChatModel):
                     "content": result,
                 })
 
-        # Exhausted rounds — force final answer
-        messages.append({"role": "user", "content": "Provide your final analysis now based on all data gathered."})
+        # Synthesize from a CLEAN message set (system + gathered data) rather than the tool-call
+        # conversation. gemini-3.x is a thinking model whose multi-turn tool-call echo can yield an
+        # empty text turn; a clean synthesis call reliably returns the final analysis.
+        synth_messages = [
+            {"role": "system", "content": GEMINI_SUBAGENT_PROMPT},
+            {"role": "user", "content": (
+                context_hint
+                + "\n\nData gathered from tools:\n" + "\n\n".join(gathered)
+                + "\n\nProvide your final FWA analysis now, citing the specific medical policies above."
+            )},
+        ]
         data = self._sdk_request("POST", f"/serving-endpoints/{self.gemini_endpoint}/invocations", {
-            "messages": messages,
+            "messages": synth_messages,
             "max_tokens": 3000,
-            "temperature": 0.05,
         })
-        answer = data.get("choices", [{}])[0].get("message", {}).get("content", "No response.")
+        answer = self._content_text(data.get("choices", [{}])[0].get("message", {}).get("content", "")) or "No response."
         return {
             "agent": "gemini_analyst",
             "model": self.gemini_endpoint,

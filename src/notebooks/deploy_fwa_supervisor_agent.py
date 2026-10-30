@@ -131,11 +131,12 @@ for endpoint_name in [LLM_ENDPOINT, GEMINI_ENDPOINT]:
                 {"role": "user", "content": "Say 'validation ok' in exactly those words."},
             ],
             "max_tokens": 20,
-            "temperature": 0.0,
         },
     )
     resp.raise_for_status()
-    text = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+    _c = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+    # Newer models (Gemini 3.x) return content as a list of typed blocks, not a string.
+    text = "".join(b.get("text", "") for b in _c if isinstance(b, dict)) if isinstance(_c, list) else _c
     print(f"PASS: {endpoint_name} → {text}")
 
 # COMMAND ----------
