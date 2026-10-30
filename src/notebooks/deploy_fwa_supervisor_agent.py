@@ -356,13 +356,16 @@ try:
     _endpoint_created = True
 except Exception as e:
     if "not found" in str(e).lower() or "does not exist" in str(e).lower():
-        print(f"\nEndpoint '{ENDPOINT_NAME}' does not exist.")
-        print(f"  Model {MODEL_NAME} v{registered_model.version} is registered in UC.")
-        print(f"  CREATE VIA UI (required for inference tables):")
-        print(f"    1. Go to UC Model page > 'Serve this model'")
-        print(f"    2. Enable inference tables (catalog: {catalog}, schema: analytics, prefix: fwa_supervisor)")
-        print(f"    3. Add env vars: UC_CATALOG, SQL_WAREHOUSE_ID, GENIE_SPACE_ID, LLM_ENDPOINT, etc.")
-        print(f"  The SDK-only path does NOT provision the DLT pipeline for inference tables.")
+        # First-time creation via SDK. Inference tables are enabled below via the modern
+        # AI-Gateway `/ai-gateway` API (no DLT pipeline / manual UI step required).
+        print(f"\nEndpoint '{ENDPOINT_NAME}' does not exist — creating via SDK "
+              f"(model {MODEL_NAME} v{registered_model.version})...")
+        w.serving_endpoints.create(
+            name=ENDPOINT_NAME,
+            config=EndpointCoreConfigInput(name=ENDPOINT_NAME, served_entities=_served_entities),
+        )
+        print(f"  Endpoint '{ENDPOINT_NAME}' creation initiated.")
+        _endpoint_created = True
     else:
         print(f"\nWARNING: Could not update endpoint: {e}")
 
